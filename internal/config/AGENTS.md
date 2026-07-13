@@ -18,6 +18,7 @@ Env var loading. All config via `.env` file + environment.
 - `HTTP_TIMEOUT_SECS` — REST client per-request timeout
 - `RATE_LIMIT_RPS` — REST client max requests per second
 - `SCHEDULER_POLL_SECS` — scheduler DB poll interval
+- `METRICS_PORT` — pprof + runtime metrics HTTP server port (0 = disabled, default 6060)
 
 ## Gotchas
 

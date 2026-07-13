@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -78,6 +81,33 @@ func main() {
 
 	// errgroup for top-level goroutines
 	g, ctx := errgroup.WithContext(ctx)
+
+	// pprof + runtime metrics server
+	if cfg.MetricsPort > 0 {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/metrics", metricsHandler)
+		mux.Handle("/debug/pprof/", http.DefaultServeMux)
+		metricsSrv := &http.Server{
+			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),
+			Handler:      mux,
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 5 * time.Second,
+		}
+		g.Go(func() error {
+			log.Info("metrics server listening", "addr", metricsSrv.Addr)
+			err := metricsSrv.ListenAndServe()
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return err
+			}
+			return nil
+		})
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			metricsSrv.Shutdown(shutdownCtx)
+		}()
+	}
 
 	// 1. Tick writer (single SQLite writer)
 	g.Go(func() error {

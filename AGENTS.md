@@ -18,6 +18,18 @@ cp .env.example .env
 go run ./cmd/ghost-trader
 ```
 
+## Monitoring
+
+```bash
+# Runtime metrics + pprof (built into app, port 6060)
+curl http://127.0.0.1:6060/metrics
+go tool pprof http://127.0.0.1:6060/debug/pprof/heap
+go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+
+# External resource monitor (CPU, RSS, network IO, Go runtime)
+./scripts/monitor.sh $(pgrep -f ghost-trader) 2 metrics.csv
+```
+
 ## Architecture
 
 Each package has its own `AGENTS.md` with package-specific gotchas.

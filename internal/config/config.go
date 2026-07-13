@@ -49,6 +49,9 @@ type Config struct {
 
 	// Scheduler poll interval (seconds)
 	SchedulerPollSecs int
+
+	// pprof/metrics HTTP server port (0 = disabled)
+	MetricsPort int
 }
 
 // Load reads config from environment variables with sensible defaults.
@@ -70,6 +73,7 @@ func Load() (*Config, error) {
 		HTTPTimeoutSecs:   envIntOr("HTTP_TIMEOUT_SECS", 30, log),
 		RateLimitRPS:      envIntOr("RATE_LIMIT_RPS", 15, log),
 		SchedulerPollSecs: envIntOr("SCHEDULER_POLL_SECS", 30, log),
+		MetricsPort:       envIntOr("METRICS_PORT", 6060, log),
 	}
 
 	// Core series: 8 tennis match-winner series

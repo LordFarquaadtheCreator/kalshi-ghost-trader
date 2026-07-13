@@ -13,7 +13,7 @@ Entrypoint. Wires all components via errgroup.
 7. Create tracker
 8. Create scanner
 9. Create scheduler
-10. Launch goroutines via errgroup
+10. Launch goroutines via errgroup (metrics server, tick writer, WS, scanner, scheduler)
 
 ## Shutdown
 
@@ -25,3 +25,5 @@ SIGINT/SIGTERM cancels root ctx. errgroup cancels all. Then:
 
 - Don't move `db.Close()` before errgroup `Wait()`. Tick writer may still flush.
 - Don't add goroutines outside errgroup. Won't get cancelled on signal.
+- Metrics server binds 127.0.0.1 only. Not exposed externally.
+- `METRICS_PORT=0` disables metrics server.
