@@ -1,0 +1,24 @@
+# Database
+*.db
+*.db-wal
+*.db-shm
+kalshi_tennis.db
+
+# Private keys
+*.pem
+*.key
+private_key.pem
+id_rsa
+id_rsa.pub
+*kalshi*
+*kalshi_key*
+
+# Env
+.env
+
+# Binary
+/bin/
+/ghost-trader
+
+# OS
+.DS_Store
