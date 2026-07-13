@@ -17,6 +17,9 @@ kalshi*.pem
 # Env
 .env
 
+# Config
+config.yaml
+
 # Binary
 /bin/
 /ghost-trader

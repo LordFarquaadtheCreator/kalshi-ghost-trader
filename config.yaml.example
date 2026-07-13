@@ -1,0 +1,46 @@
+# Kalshi API credentials (required)
+api_key_id: your-key-id-here
+private_key_path: /path/to/private_key.pem
+
+# Environment: "demo" or "prod"
+environment: demo
+
+# SQLite database path (relative to working dir)
+db_path: kalshi_tennis.db
+
+# Tennis series tickers to scan (defaults to all 8 core series if omitted)
+series_tickers:
+  - KXATPMATCH
+  - KXWTAMATCH
+  - KXITFMATCH
+  - KXITFWMATCH
+  - KXATPCHALLENGERMATCH
+  - KXWTACHALLENGERMATCH
+  - KXTENNISEXHIBITION
+  - KXCHALLENGERMATCH
+
+# Scanner interval (hours between daily scans)
+scan_interval_hours: 24
+
+# How early before occurrence_datetime to start WS tracking (minutes)
+track_lead_minutes: 5
+
+# WebSocket reconnection backoff (seconds)
+ws_min_backoff_secs: 1
+ws_max_backoff_secs: 30
+
+# SQLite batch insert settings
+batch_size: 500
+flush_timeout_ms: 250
+
+# REST client per-request timeout (seconds)
+http_timeout_secs: 30
+
+# REST client max requests per second
+rate_limit_rps: 15
+
+# Scheduler DB poll interval (seconds)
+scheduler_poll_secs: 30
+
+# pprof + runtime metrics HTTP server port (0 = disabled)
+metrics_port: 6060

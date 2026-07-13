@@ -4,89 +4,75 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 
-	"github.com/joho/godotenv"
+	"gopkg.in/yaml.v3"
 )
 
-// Config holds all runtime configuration loaded from env vars.
+// Config holds all runtime configuration loaded from config.yaml.
 type Config struct {
 	// Kalshi API credentials
-	APIKeyID       string
-	PrivateKeyPath string
+	APIKeyID       string `yaml:"api_key_id"`
+	PrivateKeyPath string `yaml:"private_key_path"`
 
 	// Environment: "demo" or "prod"
-	Environment string
+	Environment string `yaml:"environment"`
 
 	// REST base URL (derived from Environment)
-	RESTBaseURL string
+	RESTBaseURL string `yaml:"-"`
 	// WebSocket URL (derived from Environment)
-	WSURL string
+	WSURL string `yaml:"-"`
 
 	// SQLite database path
-	DBPath string
+	DBPath string `yaml:"db_path"`
 
 	// Tennis series to scan
-	SeriesTickers []string
+	SeriesTickers []string `yaml:"series_tickers"`
 
 	// Scanner interval for daily scan (hours)
-	ScanIntervalHours int
+	ScanIntervalHours int `yaml:"scan_interval_hours"`
 
 	// How early before occurrence_datetime to start tracking (minutes)
-	TrackLeadMinutes int
+	TrackLeadMinutes int `yaml:"track_lead_minutes"`
 
 	// WebSocket reconnection backoff
-	WSMinBackoffSecs int
-	WSMaxBackoffSecs int
+	WSMinBackoffSecs int `yaml:"ws_min_backoff_secs"`
+	WSMaxBackoffSecs int `yaml:"ws_max_backoff_secs"`
 
 	// SQLite batch settings
-	BatchSize    int
-	FlushTimeoutMS int
+	BatchSize     int `yaml:"batch_size"`
+	FlushTimeoutMS int `yaml:"flush_timeout_ms"`
 
 	// REST client timeout (seconds)
-	HTTPTimeoutSecs int
+	HTTPTimeoutSecs int `yaml:"http_timeout_secs"`
 
 	// REST client max requests per second (0 = use client default)
-	RateLimitRPS int
+	RateLimitRPS int `yaml:"rate_limit_rps"`
 
 	// Scheduler poll interval (seconds)
-	SchedulerPollSecs int
+	SchedulerPollSecs int `yaml:"scheduler_poll_secs"`
 
 	// pprof/metrics HTTP server port (0 = disabled)
-	MetricsPort int
+	MetricsPort int `yaml:"metrics_port"`
 }
 
-// Load reads config from environment variables with sensible defaults.
-// Logs warnings for malformed integer env vars instead of silently falling back.
+// Load reads config from config.yaml in the working directory.
+// Path can be overridden via CONFIG_PATH env var.
 func Load() (*Config, error) {
 	log := slog.Default()
 
-	// .env optional; real env vars take precedence (godotenv does not override)
-	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("load .env: %w", err)
+	path := envOr("CONFIG_PATH", "config.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 
-	cfg := &Config{
-		APIKeyID:          os.Getenv("KALSHI_API_KEY_ID"),
-		PrivateKeyPath:    os.Getenv("KALSHI_PRIVATE_KEY_PATH"),
-		Environment:       envOr("KALSHI_ENV", "demo"),
-		DBPath:            envOr("DB_PATH", "kalshi_tennis.db"),
-		ScanIntervalHours: envIntOr("SCAN_INTERVAL_HOURS", 24, log),
-		TrackLeadMinutes:  envIntOr("TRACK_LEAD_MINUTES", 5, log),
-		WSMinBackoffSecs:  envIntOr("WS_MIN_BACKOFF_SECS", 1, log),
-		WSMaxBackoffSecs:  envIntOr("WS_MAX_BACKOFF_SECS", 30, log),
-		BatchSize:         envIntOr("BATCH_SIZE", 500, log),
-		FlushTimeoutMS:    envIntOr("FLUSH_TIMEOUT_MS", 250, log),
-		HTTPTimeoutSecs:   envIntOr("HTTP_TIMEOUT_SECS", 30, log),
-		RateLimitRPS:      envIntOr("RATE_LIMIT_RPS", 15, log),
-		SchedulerPollSecs: envIntOr("SCHEDULER_POLL_SECS", 30, log),
-		MetricsPort:       envIntOr("METRICS_PORT", 6060, log),
+	cfg := &Config{}
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 
-	// Core series: 8 tennis match-winner series
-	cfg.SeriesTickers = strings.Split(envOr("SERIES_TICKERS",
-		"KXATPMATCH,KXWTAMATCH,KXITFMATCH,KXITFWMATCH,KXATPCHALLENGERMATCH,KXWTACHALLENGERMATCH,KXTENNISEXHIBITION,KXCHALLENGERMATCH"),
-		",")
+	// Apply defaults for unset fields
+	cfg.applyDefaults(log)
 
 	switch cfg.Environment {
 	case "demo":
@@ -96,17 +82,65 @@ func Load() (*Config, error) {
 		cfg.RESTBaseURL = "https://external-api.kalshi.com/trade-api/v2"
 		cfg.WSURL = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
 	default:
-		return nil, fmt.Errorf("KALSHI_ENV must be 'demo' or 'prod', got: %s", cfg.Environment)
+		return nil, fmt.Errorf("environment must be 'demo' or 'prod', got: %s", cfg.Environment)
 	}
 
 	if cfg.APIKeyID == "" {
-		return nil, fmt.Errorf("KALSHI_API_KEY_ID is required")
+		return nil, fmt.Errorf("api_key_id is required")
 	}
 	if cfg.PrivateKeyPath == "" {
-		return nil, fmt.Errorf("KALSHI_PRIVATE_KEY_PATH is required")
+		return nil, fmt.Errorf("private_key_path is required")
 	}
 
 	return cfg, nil
+}
+
+// applyDefaults fills zero-valued fields with sensible defaults.
+func (c *Config) applyDefaults(log *slog.Logger) {
+	if c.Environment == "" {
+		c.Environment = "demo"
+	}
+	if c.DBPath == "" {
+		c.DBPath = "kalshi_tennis.db"
+	}
+	if len(c.SeriesTickers) == 0 {
+		c.SeriesTickers = []string{
+			"KXATPMATCH", "KXWTAMATCH",
+			"KXITFMATCH", "KXITFWMATCH",
+			"KXATPCHALLENGERMATCH", "KXWTACHALLENGERMATCH",
+			"KXTENNISEXHIBITION", "KXCHALLENGERMATCH",
+		}
+	}
+	if c.ScanIntervalHours == 0 {
+		c.ScanIntervalHours = 24
+	}
+	if c.TrackLeadMinutes == 0 {
+		c.TrackLeadMinutes = 5
+	}
+	if c.WSMinBackoffSecs == 0 {
+		c.WSMinBackoffSecs = 1
+	}
+	if c.WSMaxBackoffSecs == 0 {
+		c.WSMaxBackoffSecs = 30
+	}
+	if c.BatchSize == 0 {
+		c.BatchSize = 500
+	}
+	if c.FlushTimeoutMS == 0 {
+		c.FlushTimeoutMS = 250
+	}
+	if c.HTTPTimeoutSecs == 0 {
+		c.HTTPTimeoutSecs = 30
+	}
+	if c.RateLimitRPS == 0 {
+		c.RateLimitRPS = 15
+	}
+	if c.SchedulerPollSecs == 0 {
+		c.SchedulerPollSecs = 30
+	}
+	if c.MetricsPort == 0 {
+		c.MetricsPort = 6060
+	}
 }
 
 func envOr(key, def string) string {
@@ -114,17 +148,4 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
-}
-
-func envIntOr(key string, def int, log *slog.Logger) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	var n int
-	if _, err := fmt.Sscanf(v, "%d", &n); err != nil {
-		log.Warn("invalid integer env var, using default", "key", key, "value", v, "default", def)
-		return def
-	}
-	return n
 }
