@@ -31,16 +31,24 @@ func (m *Manager) readLoop(ctx context.Context, conn *websocket.Conn) error {
 func (m *Manager) handleMessage(data []byte) {
 	var env wsEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
-		return // skip malformed
+		m.log.Warn("ws parse error", "err", err, "raw", string(data))
+		return
+	}
+
+	// Debug: log every non-ticker/non-trade message
+	if env.Type != "ticker" && env.Type != "trade" {
+		m.log.Info("ws msg", "type", env.Type, "id", env.ID, "sid", env.SID, "msg", string(env.Msg))
 	}
 
 	switch env.Type {
 	case "subscribed":
 		m.handleSubscribed(env.ID, env.Msg)
+	case "ok":
+		// Server returns ok instead of subscribed when markets are auto-merged
+		// into an existing subscription (same channels). Treat as ack.
+		m.handleOk(env.ID, env.Msg)
 	case "unsubscribed":
 		// Ack — nothing to do, sub already removed from map
-	case "ok":
-		// Response to update_subscription — nothing to do
 	case "error":
 		m.handleWsError(env)
 	case "ticker":
@@ -81,6 +89,28 @@ func (m *Manager) handleWsError(env wsEnvelope) {
 		case <-info.acked:
 		default:
 			info.ackErr = fmt.Errorf("server error %d: %s", errMsg.Code, errMsg.Msg)
+			close(info.acked)
+		}
+	}
+	m.mu.Unlock()
+}
+
+// handleOk handles ok responses. Server returns ok instead of subscribed
+// when a subscribe command's channels already have an active subscription —
+// the new markets are auto-merged into the existing sids. We treat this as
+// a successful ack for the pending Subscribe caller.
+func (m *Manager) handleOk(cmdID int64, msg json.RawMessage) {
+	m.cmdMu.Lock()
+	market, ok := m.cmdToMarket[cmdID]
+	m.cmdMu.Unlock()
+	if !ok {
+		return // not a per-market subscribe
+	}
+	m.mu.Lock()
+	if info, exists := m.subs[market]; exists {
+		select {
+		case <-info.acked:
+		default:
 			close(info.acked)
 		}
 	}
