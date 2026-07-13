@@ -1,0 +1,24 @@
+[Unit]
+Description=Kalshi Ghost Trader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/data
+EnvironmentFile=/data/.env
+ExecStart=/data/ghost-trader
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
