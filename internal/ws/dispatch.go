@@ -31,13 +31,7 @@ func (m *Manager) readLoop(ctx context.Context, conn *websocket.Conn) error {
 func (m *Manager) handleMessage(data []byte) {
 	var env wsEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
-		m.log.Warn("ws parse error", "err", err, "raw", string(data))
-		return
-	}
-
-	// Debug: log every non-ticker/non-trade message
-	if env.Type != "ticker" && env.Type != "trade" {
-		m.log.Info("ws msg", "type", env.Type, "id", env.ID, "sid", env.SID, "msg", string(env.Msg))
+		return // skip malformed
 	}
 
 	switch env.Type {
@@ -55,6 +49,10 @@ func (m *Manager) handleMessage(data []byte) {
 		m.handleTicker(env.SID, env.Msg, data)
 	case "trade":
 		m.handleTrade(env.SID, env.Msg, data)
+	case "orderbook_snapshot":
+		m.handleOrderbookSnapshot(env.SID, env.Seq, env.Msg, data)
+	case "orderbook_delta":
+		m.handleOrderbookDelta(env.SID, env.Seq, env.Msg, data)
 	case "market_lifecycle_v2":
 		m.handleLifecycle(env.Msg, data)
 	case "event_lifecycle":

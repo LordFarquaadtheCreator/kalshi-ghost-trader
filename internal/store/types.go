@@ -78,3 +78,19 @@ type EventLifecycleEvent struct {
 	Subtitle     string
 	Payload      string
 }
+
+// OrderbookEvent maps an orderbook_snapshot or orderbook_delta WS message.
+// Snapshot: price/delta/side are zero — full levels in payload.
+// Delta: price/delta/side extracted as hot fields.
+type OrderbookEvent struct {
+	TS           int64
+	RecvTS       int64
+	MarketTicker string
+	MsgType      string // "orderbook_snapshot" or "orderbook_delta"
+	SID          int64
+	Seq          int64
+	Price        float64
+	Delta        float64
+	Side         string
+	Payload      string
+}

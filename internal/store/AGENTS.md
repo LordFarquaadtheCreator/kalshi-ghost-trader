@@ -6,10 +6,11 @@ SQLite layer. Single-writer architecture via TickWriter.
 
 - `store.go` — DB struct, New, Close, migrate
 - `schema.go` — schemaDDL constant (full DDL)
-- `types.go` — Event, Market, Tick, LifecycleEvent, EventLifecycleEvent
+- `types.go` — Event, Market, Tick, LifecycleEvent, EventLifecycleEvent, OrderbookEvent
 - `events.go` — UpsertEvent, UpsertEventCheckNew
 - `markets.go` — UpsertMarket, UpsertMarketCheckNew, GetActiveMarkets, GetMarketsByEvent, scanMarket helper
 - `ticks.go` — InsertTickBatch
+- `orderbook.go` — InsertOrderbookBatch
 - `lifecycle.go` — InsertLifecycleEvent, InsertEventLifecycleEvent, ApplyLifecycleEvent
 - `scan.go` — RecordScanRun
 - `tickwriter.go` — TickWriter goroutine (batched writes)
@@ -29,17 +30,18 @@ MaxOpenConns=1, MaxIdleConns=1. Single writer. SQLite serializes writes anyway.
 - `events` — tennis match events. PK: event_ticker.
 - `markets` — 2 per event (one per player). PK: market_ticker. FK: event_ticker.
 - `ticks` — every WS message (ticker, trade). No FK to markets. Log table — never reject. Extracted hot fields + raw JSON payload.
+- `orderbook_events` — orderbook snapshots + deltas. No FK. Same reason. Delta: price/delta/side extracted. Snapshot: full levels in payload.
 - `lifecycle_events` — market_lifecycle_v2 WS events. No FK. Same reason.
 - `event_lifecycle_events` — event_lifecycle WS messages (event creation). No FK.
 - `scan_runs` — scan audit log.
 
-## Why no FK on ticks/lifecycle_events/event_lifecycle_events
+## Why no FK on ticks/orderbook_events/lifecycle_events/event_lifecycle_events
 
 WS messages can arrive before scanner stores the market. FK would reject the tick. Data loss. Log tables must never reject.
 
 ## TickWriter
 
-Single goroutine. Batches tick inserts. Three channels: `in` (ticks, 8192 buffer), `lifecycleIn` (lifecycle, 1024 buffer), `eventLifecycleIn` (event lifecycle, 1024 buffer). Non-blocking ingest — drops on full buffer with warning.
+Single goroutine. Batches inserts. Four channels: `in` (ticks, 8192 buffer), `orderbookIn` (orderbook events, 8192 buffer), `lifecycleIn` (lifecycle, 1024 buffer), `eventLifecycleIn` (event lifecycle, 1024 buffer). Non-blocking ingest — drops on full buffer with warning.
 
 Flush triggers: batch full, timer fires, lifecycle event arrives, ctx cancelled.
 

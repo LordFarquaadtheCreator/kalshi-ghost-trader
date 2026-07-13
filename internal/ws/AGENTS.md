@@ -14,12 +14,13 @@ WebSocket manager. Single multiplexed connection, auto-reconnect, per-market sub
 
 - `ticker` — market price updates. Filtered by market_tickers.
 - `trade` — public trades. Filtered by market_tickers.
+- `orderbook_delta` — orderbook depth changes. Filtered by market_tickers. Server sends `orderbook_snapshot` first, then incremental `orderbook_delta` updates.
 - `market_lifecycle_v2` — market status changes. NOT filterable. Gets ALL markets. Client-side filter by checking `m.subs`. Also delivers `event_lifecycle` and `event_fee_update` messages.
 
 ## Subscribe command
 
 Two separate commands:
-1. `{cmd: subscribe, channels: [ticker, trade], market_tickers: [...]}` — filtered
+1. `{cmd: subscribe, channels: [ticker, trade, orderbook_delta], market_tickers: [...]}` — filtered
 2. `{cmd: subscribe, channels: [market_lifecycle_v2]}` — unfiltered
 
 Don't combine. `market_lifecycle_v2` doesn't support `market_ticker` params.
@@ -34,10 +35,12 @@ Replay subscribes per-market (not batched) so each market gets its own sids for 
 
 - `subscribed` — subscribe ack. Carries `msg.channel` + `msg.sid`. Maps sid to market via `cmdToMarket` command id tracking. First ack unblocks pending Subscribe.
 - `unsubscribed` — unsubscribe ack. Ignore.
-- `ok` — update_subscription ack. Ignore.
+- `ok` — subscribe ack for auto-merged markets (same channels already subscribed). Treated as successful ack.
 - `error` — `{msg: {code, msg}}`. Log + propagate to pending Subscribe if cmd id matches.
 - `ticker` — price update. Stored via tickWriter.
 - `trade` — trade fill. Stored via tickWriter.
+- `orderbook_snapshot` — full orderbook state. Sent first on subscribe. Stored via `tickWriter.IngestOrderbook`.
+- `orderbook_delta` — incremental orderbook change. Stored via `tickWriter.IngestOrderbook` with extracted price/delta/side.
 - `market_lifecycle_v2` — lifecycle event. Filtered by `m.subs` before storing.
 - `event_lifecycle` — event creation notification. Filtered by `seriesFilter` (configured tennis series). Stored via `tickWriter.IngestEventLifecycle`.
 - `event_fee_update` — fee override. Part of lifecycle channel. Skip.

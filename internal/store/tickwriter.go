@@ -13,6 +13,9 @@ const (
 	lifecycleChanBuffer = 1024
 	// eventLifecycleChanBuffer sizes the event lifecycle ingest channel.
 	eventLifecycleChanBuffer = 1024
+	// orderbookChanBuffer sizes the orderbook event ingest channel.
+	// Deltas can be high-frequency during active trading.
+	orderbookChanBuffer = 8192
 )
 
 // TickWriter is the single writer goroutine that batches tick inserts.
@@ -22,6 +25,7 @@ type TickWriter struct {
 	in                chan Tick
 	lifecycleIn       chan LifecycleEvent
 	eventLifecycleIn  chan EventLifecycleEvent
+	orderbookIn       chan OrderbookEvent
 	batchSize         int
 	flushTimeout      time.Duration
 	log               *slog.Logger
@@ -34,6 +38,7 @@ func (d *DB) NewTickWriter(batchSize, flushTimeoutMS int, log *slog.Logger) *Tic
 		in:               make(chan Tick, tickChanBuffer),
 		lifecycleIn:      make(chan LifecycleEvent, lifecycleChanBuffer),
 		eventLifecycleIn: make(chan EventLifecycleEvent, eventLifecycleChanBuffer),
+		orderbookIn:      make(chan OrderbookEvent, orderbookChanBuffer),
 		batchSize:        batchSize,
 		flushTimeout:     time.Duration(flushTimeoutMS) * time.Millisecond,
 		log:              log,
@@ -67,9 +72,19 @@ func (w *TickWriter) IngestEventLifecycle(el EventLifecycleEvent) {
 	}
 }
 
+// IngestOrderbook enqueues an orderbook event for batched write.
+func (w *TickWriter) IngestOrderbook(oe OrderbookEvent) {
+	select {
+	case w.orderbookIn <- oe:
+	default:
+		w.log.Warn("orderbook buffer full, dropping", "market", oe.MarketTicker)
+	}
+}
+
 // Run is the writer goroutine. Cancel ctx to stop; flushes remainder.
 func (w *TickWriter) Run(ctx context.Context) error {
 	batch := make([]Tick, 0, w.batchSize)
+	obBatch := make([]OrderbookEvent, 0, w.batchSize)
 	timer := time.NewTimer(w.flushTimeout)
 	defer timer.Stop()
 
@@ -81,6 +96,16 @@ func (w *TickWriter) Run(ctx context.Context) error {
 			w.log.Error("write tick batch failed", "err", err, "n", len(batch))
 		}
 		batch = batch[:0]
+	}
+
+	flushOrderbook := func() {
+		if len(obBatch) == 0 {
+			return
+		}
+		if err := w.db.InsertOrderbookBatch(ctx, obBatch); err != nil {
+			w.log.Error("write orderbook batch failed", "err", err, "n", len(obBatch))
+		}
+		obBatch = obBatch[:0]
 	}
 
 	flushLifecycle := func() {
@@ -122,8 +147,11 @@ func (w *TickWriter) Run(ctx context.Context) error {
 				select {
 				case t := <-w.in:
 					batch = append(batch, t)
+				case oe := <-w.orderbookIn:
+					obBatch = append(obBatch, oe)
 				default:
 					flush()
+					flushOrderbook()
 					flushLifecycle()
 					flushEventLifecycle()
 					return ctx.Err()
@@ -134,6 +162,16 @@ func (w *TickWriter) Run(ctx context.Context) error {
 			batch = append(batch, t)
 			if len(batch) >= w.batchSize {
 				flush()
+				if !timer.Stop() {
+					<-timer.C
+				}
+				timer.Reset(w.flushTimeout)
+			}
+
+		case oe := <-w.orderbookIn:
+			obBatch = append(obBatch, oe)
+			if len(obBatch) >= w.batchSize {
+				flushOrderbook()
 				if !timer.Stop() {
 					<-timer.C
 				}
@@ -164,6 +202,7 @@ func (w *TickWriter) Run(ctx context.Context) error {
 
 		case <-timer.C:
 			flush()
+			flushOrderbook()
 			flushLifecycle()
 			flushEventLifecycle()
 			timer.Reset(w.flushTimeout)

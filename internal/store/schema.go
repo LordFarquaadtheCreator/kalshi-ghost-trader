@@ -99,6 +99,24 @@ CREATE TABLE IF NOT EXISTS event_lifecycle_events (
 );
 CREATE INDEX IF NOT EXISTS idx_event_lifecycle_ticker ON event_lifecycle_events(event_ticker, ts);
 
+-- Orderbook snapshots + deltas from WS orderbook_delta channel
+-- No FK: same rationale as ticks — log table, never reject
+CREATE TABLE IF NOT EXISTS orderbook_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              INTEGER NOT NULL,   -- server ts_ms (delta) or recv_ts (snapshot)
+    recv_ts         INTEGER NOT NULL,
+    market_ticker   TEXT NOT NULL,
+    msg_type        TEXT NOT NULL,      -- "orderbook_snapshot" or "orderbook_delta"
+    sid             INTEGER,
+    seq             INTEGER,
+    price           REAL,              -- delta only: price level changed
+    delta           REAL,              -- delta only: contract delta (signed)
+    side            TEXT,              -- delta only: "yes" or "no"
+    payload         TEXT NOT NULL       -- full raw JSON
+);
+CREATE INDEX IF NOT EXISTS idx_orderbook_market_ts ON orderbook_events(market_ticker, ts);
+CREATE INDEX IF NOT EXISTS idx_orderbook_type ON orderbook_events(msg_type);
+
 -- Scan runs log
 CREATE TABLE IF NOT EXISTS scan_runs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

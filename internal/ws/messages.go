@@ -166,3 +166,63 @@ func (m *Manager) handleEventLifecycle(msg json.RawMessage, raw []byte) {
 		Payload:      string(raw),
 	})
 }
+
+// orderbookSnapshotMsg maps the Kalshi WS orderbook_snapshot message.
+// No ts_ms field — use recv_ts as primary timestamp.
+type orderbookSnapshotMsg struct {
+	MarketTicker string `json:"market_ticker"`
+	MarketID     string `json:"market_id"`
+}
+
+// orderbookDeltaMsg maps the Kalshi WS orderbook_delta message.
+type orderbookDeltaMsg struct {
+	MarketTicker string `json:"market_ticker"`
+	MarketID     string `json:"market_id"`
+	PriceDollars string `json:"price_dollars"`
+	DeltaFP      string `json:"delta_fp"`
+	Side         string `json:"side"`
+	TsMs         int64  `json:"ts_ms"`
+}
+
+func (m *Manager) handleOrderbookSnapshot(sid, seq int64, msg json.RawMessage, raw []byte) {
+	var s orderbookSnapshotMsg
+	if err := json.Unmarshal(msg, &s); err != nil {
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	m.tickWriter.IngestOrderbook(store.OrderbookEvent{
+		TS:           now,
+		RecvTS:       now,
+		MarketTicker: s.MarketTicker,
+		MsgType:      "orderbook_snapshot",
+		SID:          sid,
+		Seq:          seq,
+		Payload:      string(raw),
+	})
+}
+
+func (m *Manager) handleOrderbookDelta(sid, seq int64, msg json.RawMessage, raw []byte) {
+	var d orderbookDeltaMsg
+	if err := json.Unmarshal(msg, &d); err != nil {
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	ts := d.TsMs
+	if ts == 0 {
+		ts = now
+	}
+	m.tickWriter.IngestOrderbook(store.OrderbookEvent{
+		TS:           ts,
+		RecvTS:       now,
+		MarketTicker: d.MarketTicker,
+		MsgType:      "orderbook_delta",
+		SID:          sid,
+		Seq:          seq,
+		Price:        kalshiclient.ParseFP(d.PriceDollars),
+		Delta:        kalshiclient.ParseFP(d.DeltaFP),
+		Side:         d.Side,
+		Payload:      string(raw),
+	})
+}

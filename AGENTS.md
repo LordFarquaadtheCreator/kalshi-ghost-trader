@@ -44,7 +44,8 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 
 - `events` — tennis match events (1 per match)
 - `markets` — 2 markets per event (one per player)
-- `ticks` — every WS message (ticker, trade, orderbook) with raw JSON
+- `ticks` — every WS message (ticker, trade) with raw JSON
+- `orderbook_events` — orderbook snapshots + deltas with raw JSON
 - `lifecycle_events` — market_lifecycle_v2 WS events
 - `scan_runs` — scan audit log
 

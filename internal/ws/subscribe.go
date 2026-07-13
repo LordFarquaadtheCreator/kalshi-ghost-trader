@@ -138,7 +138,7 @@ func (m *Manager) sendSubscribeConn(ctx context.Context, conn *websocket.Conn, m
 		"id":  id,
 		"cmd": "subscribe",
 		"params": map[string]any{
-			"channels":       []string{"ticker", "trade"},
+			"channels":       []string{"ticker", "trade", "orderbook_delta"},
 			"market_tickers": markets,
 		},
 	}
@@ -146,7 +146,6 @@ func (m *Manager) sendSubscribeConn(ctx context.Context, conn *websocket.Conn, m
 	if err != nil {
 		return err
 	}
-	m.log.Info("sending subscribe", "cmd_id", id, "markets", markets)
 	return conn.Write(ctx, websocket.MessageText, data)
 }
 
