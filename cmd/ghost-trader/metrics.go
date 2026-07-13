@@ -6,10 +6,20 @@ import (
 	"runtime"
 )
 
+// corsMiddleware adds CORS headers for dashboard cross-origin requests.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // metricsHandler returns Go runtime stats as JSON.
 // GET /metrics — goroutines, heap, GC, threads.
 // pprof endpoints available at /debug/pprof/*.
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 

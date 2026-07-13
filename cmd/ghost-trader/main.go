@@ -89,7 +89,7 @@ func main() {
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{
 			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),
-			Handler:      mux,
+			Handler:      corsMiddleware(mux),
 			ReadTimeout:  5 * time.Second,
 			WriteTimeout: 5 * time.Second,
 		}
