@@ -1,0 +1,172 @@
+package store
+
+import (
+	"context"
+	"log/slog"
+	"time"
+)
+
+const (
+	// tickChanBuffer sizes the tick ingest channel. Large to absorb WS bursts.
+	tickChanBuffer = 8192
+	// lifecycleChanBuffer sizes the lifecycle event ingest channel.
+	lifecycleChanBuffer = 1024
+	// eventLifecycleChanBuffer sizes the event lifecycle ingest channel.
+	eventLifecycleChanBuffer = 1024
+)
+
+// TickWriter is the single writer goroutine that batches tick inserts.
+// All ingest calls go through a channel; the writer drains in batches.
+type TickWriter struct {
+	db                *DB
+	in                chan Tick
+	lifecycleIn       chan LifecycleEvent
+	eventLifecycleIn  chan EventLifecycleEvent
+	batchSize         int
+	flushTimeout      time.Duration
+	log               *slog.Logger
+}
+
+// NewTickWriter creates a batched tick writer.
+func (d *DB) NewTickWriter(batchSize, flushTimeoutMS int, log *slog.Logger) *TickWriter {
+	return &TickWriter{
+		db:               d,
+		in:               make(chan Tick, tickChanBuffer),
+		lifecycleIn:      make(chan LifecycleEvent, lifecycleChanBuffer),
+		eventLifecycleIn: make(chan EventLifecycleEvent, eventLifecycleChanBuffer),
+		batchSize:        batchSize,
+		flushTimeout:     time.Duration(flushTimeoutMS) * time.Millisecond,
+		log:              log,
+	}
+}
+
+// Ingest enqueues a tick for batched write. Non-blocking; drops on full buffer.
+func (w *TickWriter) Ingest(t Tick) {
+	select {
+	case w.in <- t:
+	default:
+		w.log.Warn("tick buffer full, dropping", "market", t.MarketTicker)
+	}
+}
+
+// IngestLifecycle enqueues a lifecycle event for write.
+func (w *TickWriter) IngestLifecycle(le LifecycleEvent) {
+	select {
+	case w.lifecycleIn <- le:
+	default:
+		w.log.Warn("lifecycle buffer full, dropping", "market", le.MarketTicker)
+	}
+}
+
+// IngestEventLifecycle enqueues an event_lifecycle message for write.
+func (w *TickWriter) IngestEventLifecycle(el EventLifecycleEvent) {
+	select {
+	case w.eventLifecycleIn <- el:
+	default:
+		w.log.Warn("event lifecycle buffer full, dropping", "event", el.EventTicker)
+	}
+}
+
+// Run is the writer goroutine. Cancel ctx to stop; flushes remainder.
+func (w *TickWriter) Run(ctx context.Context) error {
+	batch := make([]Tick, 0, w.batchSize)
+	timer := time.NewTimer(w.flushTimeout)
+	defer timer.Stop()
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		if err := w.db.InsertTickBatch(ctx, batch); err != nil {
+			w.log.Error("write tick batch failed", "err", err, "n", len(batch))
+		}
+		batch = batch[:0]
+	}
+
+	flushLifecycle := func() {
+		for {
+			select {
+			case le := <-w.lifecycleIn:
+				if err := w.db.InsertLifecycleEvent(ctx, le); err != nil {
+					w.log.Error("write lifecycle failed", "err", err, "market", le.MarketTicker)
+					continue
+				}
+				if err := w.db.ApplyLifecycleEvent(ctx, le); err != nil {
+					w.log.Error("apply lifecycle failed", "err", err, "market", le.MarketTicker, "type", le.EventType)
+				}
+			default:
+				return
+			}
+		}
+	}
+
+	flushEventLifecycle := func() {
+		for {
+			select {
+			case el := <-w.eventLifecycleIn:
+				if err := w.db.InsertEventLifecycleEvent(ctx, el); err != nil {
+					w.log.Error("write event lifecycle failed", "err", err, "event", el.EventTicker)
+				}
+			default:
+				return
+			}
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Drain in-flight ticks before flushing — buffered channel may
+			// hold up to tickChanBuffer messages not yet in `batch`.
+			for {
+				select {
+				case t := <-w.in:
+					batch = append(batch, t)
+				default:
+					flush()
+					flushLifecycle()
+					flushEventLifecycle()
+					return ctx.Err()
+				}
+			}
+
+		case t := <-w.in:
+			batch = append(batch, t)
+			if len(batch) >= w.batchSize {
+				flush()
+				if !timer.Stop() {
+					<-timer.C
+				}
+				timer.Reset(w.flushTimeout)
+			}
+
+		case le := <-w.lifecycleIn:
+			flush()
+			if err := w.db.InsertLifecycleEvent(ctx, le); err != nil {
+				w.log.Error("write lifecycle failed", "err", err, "market", le.MarketTicker)
+			} else if err := w.db.ApplyLifecycleEvent(ctx, le); err != nil {
+				w.log.Error("apply lifecycle failed", "err", err, "market", le.MarketTicker, "type", le.EventType)
+			}
+			if !timer.Stop() {
+				<-timer.C
+			}
+			timer.Reset(w.flushTimeout)
+
+		case el := <-w.eventLifecycleIn:
+			flush()
+			if err := w.db.InsertEventLifecycleEvent(ctx, el); err != nil {
+				w.log.Error("write event lifecycle failed", "err", err, "event", el.EventTicker)
+			}
+			if !timer.Stop() {
+				<-timer.C
+			}
+			timer.Reset(w.flushTimeout)
+
+		case <-timer.C:
+			flush()
+			flushLifecycle()
+			flushEventLifecycle()
+			timer.Reset(w.flushTimeout)
+		}
+	}
+}
