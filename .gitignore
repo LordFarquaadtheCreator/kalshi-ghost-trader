@@ -20,6 +20,8 @@ kalshi*.pem
 # Binary
 /bin/
 /ghost-trader
+/validate
+/ws-debug
 
 # OS
 .DS_Store
