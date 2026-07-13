@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 // Config holds all runtime configuration loaded from env vars.
@@ -58,6 +60,11 @@ type Config struct {
 // Logs warnings for malformed integer env vars instead of silently falling back.
 func Load() (*Config, error) {
 	log := slog.Default()
+
+	// .env optional; real env vars take precedence (godotenv does not override)
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("load .env: %w", err)
+	}
 
 	cfg := &Config{
 		APIKeyID:          os.Getenv("KALSHI_API_KEY_ID"),
