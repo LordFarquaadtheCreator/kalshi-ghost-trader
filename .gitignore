@@ -25,3 +25,13 @@ kalshi*.pem
 
 # OS
 .DS_Store
+
+# Monitor output
+monitor_*.csv
+
+# Dashboard
+dashboard/node_modules/
+dashboard/.svelte-kit/
+dashboard/build/
+dashboard/.env
+
