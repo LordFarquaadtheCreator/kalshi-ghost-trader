@@ -11,7 +11,7 @@ REST client for Kalshi market data.
 
 ## NewClient
 
-`NewClient(baseURL, signer, httpTimeout, log)`. `httpTimeout=0` uses `defaultHTTPTimeout` (30s). Pass from config (`HTTPTimeoutSecs`).
+`NewClient(baseURL, signer, httpTimeout, rps, log)`. `httpTimeout=0` uses `defaultHTTPTimeout` (30s). `rps=0` uses `defaultRateLimitRPS` (15). Pass both from config (`HTTPTimeoutSecs`, `RateLimitRPS`).
 
 ## Endpoints
 

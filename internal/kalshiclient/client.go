@@ -27,33 +27,43 @@ const (
 
 	// initialRetryBackoff is the starting backoff for 429 retries. Doubles each attempt.
 	initialRetryBackoff = time.Second
+
+	// defaultRateLimitRPS is the default max requests/sec.
+	// Basic tier: 200 tokens/sec ÷ 10 tokens/request = 20 req/sec.
+	// Conservative default leaves headroom.
+	defaultRateLimitRPS = 15
 )
 
 // Client is the Kalshi REST API client. Market data endpoints are public
 // (no auth needed), but we sign all requests anyway for uniformity.
+// Includes a token-bucket rate limiter to avoid 429s.
 type Client struct {
-	baseURL string
-	signer  *kalshiauth.Signer
-	http    *http.Client
-	log     *slog.Logger
+	baseURL   string
+	signer    *kalshiauth.Signer
+	http      *http.Client
+	log       *slog.Logger
+	rateLimiter *rateLimiter
 }
 
 // NewClient creates a REST client. signer may be nil for public endpoints.
-// httpTimeout of 0 uses defaultHTTPTimeout.
-func NewClient(baseURL string, signer *kalshiauth.Signer, httpTimeout time.Duration, log *slog.Logger) *Client {
+// httpTimeout of 0 uses defaultHTTPTimeout. rps sets the max requests/sec
+// (0 uses defaultRateLimitRPS).
+func NewClient(baseURL string, signer *kalshiauth.Signer, httpTimeout time.Duration, rps int, log *slog.Logger) *Client {
 	if log == nil {
 		log = slog.Default()
 	}
 	if httpTimeout <= 0 {
 		httpTimeout = defaultHTTPTimeout
 	}
+	if rps <= 0 {
+		rps = defaultRateLimitRPS
+	}
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		signer:  signer,
-		http: &http.Client{
-			Timeout: httpTimeout,
-		},
-		log: log,
+		baseURL:     strings.TrimRight(baseURL, "/"),
+		signer:      signer,
+		http:        &http.Client{Timeout: httpTimeout},
+		log:         log,
+		rateLimiter: newRateLimiter(rps),
 	}
 }
 
@@ -69,6 +79,11 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		// Throttle before each request attempt (including retries)
+		if err := c.rateLimiter.wait(ctx); err != nil {
 			return err
 		}
 

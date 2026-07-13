@@ -44,6 +44,9 @@ type Config struct {
 	// REST client timeout (seconds)
 	HTTPTimeoutSecs int
 
+	// REST client max requests per second (0 = use client default)
+	RateLimitRPS int
+
 	// Scheduler poll interval (seconds)
 	SchedulerPollSecs int
 }
@@ -65,6 +68,7 @@ func Load() (*Config, error) {
 		BatchSize:         envIntOr("BATCH_SIZE", 500, log),
 		FlushTimeoutMS:    envIntOr("FLUSH_TIMEOUT_MS", 250, log),
 		HTTPTimeoutSecs:   envIntOr("HTTP_TIMEOUT_SECS", 30, log),
+		RateLimitRPS:      envIntOr("RATE_LIMIT_RPS", 15, log),
 		SchedulerPollSecs: envIntOr("SCHEDULER_POLL_SECS", 30, log),
 	}
 

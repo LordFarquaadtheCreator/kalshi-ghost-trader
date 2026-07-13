@@ -59,7 +59,7 @@ func main() {
 
 	// REST client
 	restClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
-		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, log)
+		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
 
 	// WebSocket manager
 	wsMgr := wsclient.NewManager(cfg.WSURL, signer, tickWriter, cfg.SeriesTickers,

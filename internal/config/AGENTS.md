@@ -16,6 +16,7 @@ Env var loading. All config via `.env` file + environment.
 - `WS_MAX_BACKOFF_SECS` — reconnect max backoff
 - `SERIES_TICKERS` — comma-separated tennis series
 - `HTTP_TIMEOUT_SECS` — REST client per-request timeout
+- `RATE_LIMIT_RPS` — REST client max requests per second
 - `SCHEDULER_POLL_SECS` — scheduler DB poll interval
 
 ## Gotchas
