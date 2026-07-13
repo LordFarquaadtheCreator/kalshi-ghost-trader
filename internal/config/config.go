@@ -53,6 +53,12 @@ type Config struct {
 
 	// pprof/metrics HTTP server port (0 = disabled)
 	MetricsPort int `yaml:"metrics_port"`
+
+	// FlashScore scraper settings
+	FlashScoreEnabled      bool `yaml:"flashscore_enabled"`
+	FlashScoreScanInterval int  `yaml:"flashscore_scan_interval_secs"` // feed scan interval
+	FlashScorePollInterval int  `yaml:"flashscore_poll_interval_secs"` // point poll interval
+	FlashScoreLookaheadDays int `yaml:"flashscore_lookahead_days"`     // days to look ahead in feed
 }
 
 // Load reads config from config.yaml in the working directory.
@@ -140,6 +146,15 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	}
 	if c.MetricsPort == 0 {
 		c.MetricsPort = 6060
+	}
+	if c.FlashScoreScanInterval == 0 {
+		c.FlashScoreScanInterval = 300 // 5 min
+	}
+	if c.FlashScorePollInterval == 0 {
+		c.FlashScorePollInterval = 10 // 10 sec
+	}
+	if c.FlashScoreLookaheadDays == 0 {
+		c.FlashScoreLookaheadDays = 1
 	}
 }
 

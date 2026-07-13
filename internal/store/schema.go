@@ -127,4 +127,53 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     new_events      INTEGER NOT NULL,
     new_markets     INTEGER NOT NULL
 );
+
+-- FlashScore match mapping: Kalshi event_ticker -> FlashScore match ID
+-- One row per mapped match. Updated when match status changes.
+CREATE TABLE IF NOT EXISTS flashscore_matches (
+    fs_match_id     TEXT PRIMARY KEY,       -- FlashScore internal match ID (AA field)
+    event_ticker    TEXT,                   -- Kalshi event_ticker (nullable until mapped)
+    home_player     TEXT NOT NULL,
+    away_player     TEXT NOT NULL,
+    tournament      TEXT,
+    surface         TEXT,
+    category        TEXT,                   -- ATP, WTA, ITF, Challenger, etc.
+    start_ts        INTEGER,                -- match start unix seconds (AD field)
+    fs_status       INTEGER,                -- FlashScore stage type (AB field)
+    last_polled_ts  INTEGER,
+    first_seen_ts   INTEGER NOT NULL,
+    last_updated_ts INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fs_matches_event ON flashscore_matches(event_ticker);
+CREATE INDEX IF NOT EXISTS idx_fs_matches_status ON flashscore_matches(fs_status);
+CREATE INDEX IF NOT EXISTS idx_fs_matches_start ON flashscore_matches(start_ts);
+
+-- Point-by-point tennis score data from FlashScore
+-- No FK to events: points can arrive before event is mapped. Log table.
+-- ts_ms is NULL for historical backfill (FlashScore doesn't provide per-point
+-- timestamps). For live polling, ts_ms = recv_ts (when we detected the point).
+CREATE TABLE IF NOT EXISTS points (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_ticker    TEXT NOT NULL,          -- Kalshi event_ticker
+    fs_match_id     TEXT NOT NULL,          -- FlashScore match ID
+    ts_ms           INTEGER,                -- unix ms of point (NULL if historical)
+    recv_ts         INTEGER NOT NULL,       -- when we stored it
+    set_number      INTEGER NOT NULL,       -- which set (1-based)
+    game_number     INTEGER NOT NULL,       -- which game within set (1-based)
+    point_number    INTEGER NOT NULL,       -- which point within game (1-based)
+    server          INTEGER NOT NULL,       -- 1 = home serves, 2 = away serves
+    scorer          INTEGER NOT NULL,       -- 1 = home won point, 2 = away won point
+    home_points     TEXT NOT NULL,          -- "0", "15", "30", "40", "A"
+    away_points     TEXT NOT NULL,
+    home_games      INTEGER NOT NULL,       -- games won by home in this set at this point
+    away_games      INTEGER NOT NULL,
+    home_set_games  INTEGER,                -- final games in completed sets before this one
+    away_set_games  INTEGER,
+    is_tiebreak     INTEGER NOT NULL DEFAULT 0,
+    is_break_point  INTEGER NOT NULL DEFAULT 0,
+    payload         TEXT                    -- raw HL field for debugging
+);
+CREATE INDEX IF NOT EXISTS idx_points_match_ts ON points(match_ticker, ts_ms);
+CREATE INDEX IF NOT EXISTS idx_points_match_set ON points(match_ticker, set_number, game_number, point_number);
+CREATE INDEX IF NOT EXISTS idx_points_fs_match ON points(fs_match_id);
 `

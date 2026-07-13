@@ -16,6 +16,9 @@ const (
 	// orderbookChanBuffer sizes the orderbook event ingest channel.
 	// Deltas can be high-frequency during active trading.
 	orderbookChanBuffer = 8192
+	// pointsChanBuffer sizes the FlashScore point ingest channel.
+	// Lower frequency — tennis points are slower than market ticks.
+	pointsChanBuffer = 1024
 )
 
 // TickWriter is the single writer goroutine that batches tick inserts.
@@ -26,6 +29,7 @@ type TickWriter struct {
 	lifecycleIn       chan LifecycleEvent
 	eventLifecycleIn  chan EventLifecycleEvent
 	orderbookIn       chan OrderbookEvent
+	pointsIn          chan Point
 	batchSize         int
 	flushTimeout      time.Duration
 	log               *slog.Logger
@@ -39,6 +43,7 @@ func (d *DB) NewTickWriter(batchSize, flushTimeoutMS int, log *slog.Logger) *Tic
 		lifecycleIn:      make(chan LifecycleEvent, lifecycleChanBuffer),
 		eventLifecycleIn: make(chan EventLifecycleEvent, eventLifecycleChanBuffer),
 		orderbookIn:      make(chan OrderbookEvent, orderbookChanBuffer),
+		pointsIn:         make(chan Point, pointsChanBuffer),
 		batchSize:        batchSize,
 		flushTimeout:     time.Duration(flushTimeoutMS) * time.Millisecond,
 		log:              log,
@@ -81,10 +86,24 @@ func (w *TickWriter) IngestOrderbook(oe OrderbookEvent) {
 	}
 }
 
+// IngestPoints enqueues a batch of FlashScore points for write.
+// Non-blocking; drops on full buffer.
+func (w *TickWriter) IngestPoints(pts []Point) {
+	for _, p := range pts {
+		select {
+		case w.pointsIn <- p:
+		default:
+			w.log.Warn("points buffer full, dropping", "match", p.MatchTicker)
+			return
+		}
+	}
+}
+
 // Run is the writer goroutine. Cancel ctx to stop; flushes remainder.
 func (w *TickWriter) Run(ctx context.Context) error {
 	batch := make([]Tick, 0, w.batchSize)
 	obBatch := make([]OrderbookEvent, 0, w.batchSize)
+	ptBatch := make([]Point, 0, w.batchSize)
 	timer := time.NewTimer(w.flushTimeout)
 	defer timer.Stop()
 
@@ -106,6 +125,16 @@ func (w *TickWriter) Run(ctx context.Context) error {
 			w.log.Error("write orderbook batch failed", "err", err, "n", len(obBatch))
 		}
 		obBatch = obBatch[:0]
+	}
+
+	flushPoints := func() {
+		if len(ptBatch) == 0 {
+			return
+		}
+		if err := w.db.InsertPointsBatch(ctx, ptBatch); err != nil {
+			w.log.Error("write points batch failed", "err", err, "n", len(ptBatch))
+		}
+		ptBatch = ptBatch[:0]
 	}
 
 	flushLifecycle := func() {
@@ -149,9 +178,12 @@ func (w *TickWriter) Run(ctx context.Context) error {
 					batch = append(batch, t)
 				case oe := <-w.orderbookIn:
 					obBatch = append(obBatch, oe)
+				case p := <-w.pointsIn:
+					ptBatch = append(ptBatch, p)
 				default:
 					flush()
 					flushOrderbook()
+					flushPoints()
 					flushLifecycle()
 					flushEventLifecycle()
 					return ctx.Err()
@@ -172,6 +204,16 @@ func (w *TickWriter) Run(ctx context.Context) error {
 			obBatch = append(obBatch, oe)
 			if len(obBatch) >= w.batchSize {
 				flushOrderbook()
+				if !timer.Stop() {
+					<-timer.C
+				}
+				timer.Reset(w.flushTimeout)
+			}
+
+		case p := <-w.pointsIn:
+			ptBatch = append(ptBatch, p)
+			if len(ptBatch) >= w.batchSize {
+				flushPoints()
 				if !timer.Stop() {
 					<-timer.C
 				}
@@ -203,6 +245,7 @@ func (w *TickWriter) Run(ctx context.Context) error {
 		case <-timer.C:
 			flush()
 			flushOrderbook()
+			flushPoints()
 			flushLifecycle()
 			flushEventLifecycle()
 			timer.Reset(w.flushTimeout)

@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
+	"github.com/farquaad/kalshi-ghost-trader/internal/flashscore"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
@@ -130,6 +131,19 @@ func main() {
 	g.Go(func() error {
 		return sched.Run(ctx, schedPoll)
 	})
+
+	// 5. FlashScore scraper (optional — polls tennis point-by-point data)
+	if cfg.FlashScoreEnabled {
+		fsScan := time.Duration(cfg.FlashScoreScanInterval) * time.Second
+		fsPoll := time.Duration(cfg.FlashScorePollInterval) * time.Second
+		fsScraper := flashscore.New(db, tickWriter, fsScan, fsPoll,
+			cfg.FlashScoreLookaheadDays, log)
+		g.Go(func() error {
+			return fsScraper.Run(ctx)
+		})
+		log.Info("flashscore scraper enabled",
+			"scan_interval", fsScan, "poll_interval", fsPoll)
+	}
 
 	log.Info("ghost trader running", "scan_interval", scanInterval, "lead_minutes", cfg.TrackLeadMinutes)
 
