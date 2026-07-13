@@ -10,8 +10,9 @@ kalshi_tennis.db
 private_key.pem
 id_rsa
 id_rsa.pub
-*kalshi*
-*kalshi_key*
+kalshi
+kalshi_key*
+kalshi*.pem
 
 # Env
 .env
