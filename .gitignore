@@ -30,6 +30,10 @@ config.yaml
 # OS
 .DS_Store
 
+# Python
+__pycache__/
+*.pyc
+
 # Monitor output
 monitor_*.csv
 
