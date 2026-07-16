@@ -59,24 +59,24 @@ type tickPrice struct {
 }
 
 type order struct {
-	match       string
-	market      string
-	context     string
-	setNum      int
-	gameNum     int
-	pointNum    int
-	server      int
-	scorer      int
-	homeGames   int
-	awayGames   int
-	homePts     string
-	awayPts     string
-	price       float64
-	edgeCents   int
-	size        float64
-	won         bool
-	pnl         float64
-	result      string
+	match     string
+	market    string
+	context   string
+	setNum    int
+	gameNum   int
+	pointNum  int
+	server    int
+	scorer    int
+	homeGames int
+	awayGames int
+	homePts   string
+	awayPts   string
+	price     float64
+	edgeCents int
+	size      float64
+	won       bool
+	pnl       float64
+	result    string
 }
 
 func main() {
@@ -87,7 +87,7 @@ func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	ctx := context.Background()
 
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", *dbPath)
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", *dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		log.Error("open db", "err", err)
