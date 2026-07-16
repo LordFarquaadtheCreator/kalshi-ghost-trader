@@ -51,6 +51,10 @@ func (m *Manager) handleTicker(sid int64, msg json.RawMessage, raw []byte) {
 	}
 
 	m.tickWriter.Ingest(tick)
+
+	if m.priceUpd != nil && tick.Price > 0 {
+		m.priceUpd.UpdatePrice(t.MarketTicker, tick.Price)
+	}
 }
 
 // tradeMsg maps the Kalshi WS trade message.

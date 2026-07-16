@@ -1,3 +1,24 @@
+// Package ws implements a WebSocket manager for the Kalshi real-time market data feed.
+//
+// The Manager maintains a single multiplexed connection to Kalshi's WebSocket API,
+// with automatic reconnection using exponential backoff with jitter. On reconnect,
+// all active subscriptions are replayed per-market so each retains its own
+// server-assigned subscription IDs (sids) for clean unsubscribe.
+//
+// Subscribed channels:
+//   - ticker — market price updates (filtered by market_tickers)
+//   - trade — public trade fills (filtered by market_tickers)
+//   - orderbook_delta — orderbook depth changes (filtered by market_tickers;
+//     server sends orderbook_snapshot first, then incremental deltas)
+//   - market_lifecycle_v2 — market status changes (NOT filterable; client-side
+//     filter via subs map; also delivers event_lifecycle and event_fee_update)
+//
+// Incoming messages are parsed in the read loop and dispatched to handlers that
+// ingest data into store.TickWriter. Lifecycle timestamps from the WS feed are
+// in seconds and are converted to milliseconds before storage.
+//
+// The coder/websocket library auto-responds to ping frames during Read, so no
+// manual pong handling is needed. Kalshi sends a ping every 10 seconds.
 package ws
 
 import (
@@ -19,9 +40,15 @@ import (
 // subInfo tracks a per-market subscription: server-assigned subscription
 // IDs (sids) for unsubscribe, and ack coordination for Subscribe.
 type subInfo struct {
-	sids    []int64 // set when "subscribed" acks arrive
-	acked   chan struct{}
-	ackErr  error
+	sids   []int64 // set when "subscribed" acks arrive
+	acked  chan struct{}
+	ackErr error
+}
+
+// PriceUpdater receives market price updates from WS ticker messages.
+// Implemented by signal.Generator to track live prices for edge calculation.
+type PriceUpdater interface {
+	UpdatePrice(marketTicker string, price float64)
 }
 
 // Manager owns the single multiplexed Kalshi WebSocket connection.
@@ -46,6 +73,7 @@ type Manager struct {
 	msgID       atomic.Int64
 
 	tickWriter *store.TickWriter
+	priceUpd   PriceUpdater // nil if no signal generator
 }
 
 // NewManager creates a WebSocket manager. series filters which event_lifecycle
@@ -66,6 +94,12 @@ func NewManager(wsURL string, signer *kalshiauth.Signer, tw *store.TickWriter, s
 		cmdToMarket:  make(map[int64]string),
 		tickWriter:   tw,
 	}
+}
+
+// SetPriceUpdater wires a price tracker (signal.Generator) to receive
+// market price updates from WS ticker messages.
+func (m *Manager) SetPriceUpdater(pu PriceUpdater) {
+	m.priceUpd = pu
 }
 
 // Run maintains the connection until ctx is cancelled.
