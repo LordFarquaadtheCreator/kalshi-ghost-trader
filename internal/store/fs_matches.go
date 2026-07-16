@@ -112,26 +112,6 @@ func (d *DB) GetUnmappedFSMatches(ctx context.Context) ([]FSMatch, error) {
 	return matches, rows.Err()
 }
 
-// GetActiveFSMatches returns matches with live status (fs_status > 1).
-// FlashScore AB field: 1=finished, 2=in-progress, 3=upcoming, etc.
-func (d *DB) GetActiveFSMatches(ctx context.Context) ([]FSMatch, error) {
-	rows, err := d.db.QueryContext(ctx,
-		fsMatchSelectColumns+` WHERE fs_status > 1 AND event_ticker IS NOT NULL ORDER BY start_ts`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var matches []FSMatch
-	for rows.Next() {
-		m, err := scanFSMatch(rows)
-		if err != nil {
-			return nil, err
-		}
-		matches = append(matches, m)
-	}
-	return matches, rows.Err()
-}
-
 // GetFSMatchesByEvent returns all FlashScore matches mapped to a Kalshi event.
 func (d *DB) GetFSMatchesByEvent(ctx context.Context, eventTicker string) ([]FSMatch, error) {
 	rows, err := d.db.QueryContext(ctx,

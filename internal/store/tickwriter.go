@@ -19,20 +19,24 @@ const (
 	// pointsChanBuffer sizes the FlashScore point ingest channel.
 	// Lower frequency — tennis points are slower than market ticks.
 	pointsChanBuffer = 1024
+	// ordersChanBuffer sizes the signal order ingest channel.
+	// Low frequency — only fires on match points.
+	ordersChanBuffer = 256
 )
 
 // TickWriter is the single writer goroutine that batches tick inserts.
 // All ingest calls go through a channel; the writer drains in batches.
 type TickWriter struct {
-	db                *DB
-	in                chan Tick
-	lifecycleIn       chan LifecycleEvent
-	eventLifecycleIn  chan EventLifecycleEvent
-	orderbookIn       chan OrderbookEvent
-	pointsIn          chan Point
-	batchSize         int
-	flushTimeout      time.Duration
-	log               *slog.Logger
+	db               *DB
+	in               chan Tick
+	lifecycleIn      chan LifecycleEvent
+	eventLifecycleIn chan EventLifecycleEvent
+	orderbookIn      chan OrderbookEvent
+	pointsIn         chan Point
+	ordersIn         chan Order
+	batchSize        int
+	flushTimeout     time.Duration
+	log              *slog.Logger
 }
 
 // NewTickWriter creates a batched tick writer.
@@ -44,6 +48,7 @@ func (d *DB) NewTickWriter(batchSize, flushTimeoutMS int, log *slog.Logger) *Tic
 		eventLifecycleIn: make(chan EventLifecycleEvent, eventLifecycleChanBuffer),
 		orderbookIn:      make(chan OrderbookEvent, orderbookChanBuffer),
 		pointsIn:         make(chan Point, pointsChanBuffer),
+		ordersIn:         make(chan Order, ordersChanBuffer),
 		batchSize:        batchSize,
 		flushTimeout:     time.Duration(flushTimeoutMS) * time.Millisecond,
 		log:              log,
@@ -99,11 +104,24 @@ func (w *TickWriter) IngestPoints(pts []Point) {
 	}
 }
 
+// IngestOrder enqueues a simulated order for batched write.
+// Non-blocking; drops on full buffer. Returns false if dropped.
+func (w *TickWriter) IngestOrder(o Order) bool {
+	select {
+	case w.ordersIn <- o:
+		return true
+	default:
+		w.log.Warn("orders buffer full, dropping", "match", o.MatchTicker)
+		return false
+	}
+}
+
 // Run is the writer goroutine. Cancel ctx to stop; flushes remainder.
 func (w *TickWriter) Run(ctx context.Context) error {
 	batch := make([]Tick, 0, w.batchSize)
 	obBatch := make([]OrderbookEvent, 0, w.batchSize)
 	ptBatch := make([]Point, 0, w.batchSize)
+	ordBatch := make([]Order, 0, 16)
 	timer := time.NewTimer(w.flushTimeout)
 	defer timer.Stop()
 
@@ -135,6 +153,16 @@ func (w *TickWriter) Run(ctx context.Context) error {
 			w.log.Error("write points batch failed", "err", err, "n", len(ptBatch))
 		}
 		ptBatch = ptBatch[:0]
+	}
+
+	flushOrders := func() {
+		if len(ordBatch) == 0 {
+			return
+		}
+		if err := w.db.InsertOrdersBatch(ctx, ordBatch); err != nil {
+			w.log.Error("write orders batch failed", "err", err, "n", len(ordBatch))
+		}
+		ordBatch = ordBatch[:0]
 	}
 
 	flushLifecycle := func() {
@@ -180,10 +208,13 @@ func (w *TickWriter) Run(ctx context.Context) error {
 					obBatch = append(obBatch, oe)
 				case p := <-w.pointsIn:
 					ptBatch = append(ptBatch, p)
+				case o := <-w.ordersIn:
+					ordBatch = append(ordBatch, o)
 				default:
 					flush()
 					flushOrderbook()
 					flushPoints()
+					flushOrders()
 					flushLifecycle()
 					flushEventLifecycle()
 					return ctx.Err()
@@ -220,6 +251,16 @@ func (w *TickWriter) Run(ctx context.Context) error {
 				timer.Reset(w.flushTimeout)
 			}
 
+		case o := <-w.ordersIn:
+			ordBatch = append(ordBatch, o)
+			if len(ordBatch) >= 16 {
+				flushOrders()
+				if !timer.Stop() {
+					<-timer.C
+				}
+				timer.Reset(w.flushTimeout)
+			}
+
 		case le := <-w.lifecycleIn:
 			flush()
 			if err := w.db.InsertLifecycleEvent(ctx, le); err != nil {
@@ -246,6 +287,7 @@ func (w *TickWriter) Run(ctx context.Context) error {
 			flush()
 			flushOrderbook()
 			flushPoints()
+			flushOrders()
 			flushLifecycle()
 			flushEventLifecycle()
 			timer.Reset(w.flushTimeout)

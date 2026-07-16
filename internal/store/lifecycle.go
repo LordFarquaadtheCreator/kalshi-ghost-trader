@@ -34,7 +34,6 @@ func (d *DB) ApplyLifecycleEvent(ctx context.Context, le LifecycleEvent) error {
 
 	switch le.EventType {
 	case "activated":
-		// status -> active; update open_ts if present; preserve close_ts/settlement_ts
 		_, err := d.db.ExecContext(ctx, `
 UPDATE markets SET status='active',
     open_ts=CASE WHEN ?!=0 THEN ? ELSE open_ts END,
@@ -51,7 +50,6 @@ WHERE market_ticker=?`,
 		return err
 
 	case "determined":
-		// status -> determined; update result + settlement_ts + settlement_value; preserve close_ts
 		_, err := d.db.ExecContext(ctx, `
 UPDATE markets SET status='determined', result=?, settlement_ts=?, settlement_value=?, last_updated_ts=?
 WHERE market_ticker=?`,
@@ -59,22 +57,55 @@ WHERE market_ticker=?`,
 		return err
 
 	case "settled":
-		// status -> finalized; update result + settlement_ts + settlement_value; preserve close_ts
+		// P6: Prune the event if it has zero ticks AND zero points after settlement.
+		// P5: Classify coverage for events that survive.
 		_, err := d.db.ExecContext(ctx, `
 UPDATE markets SET status='finalized', result=?, settlement_ts=?, settlement_value=?, last_updated_ts=?
 WHERE market_ticker=?`,
 			le.Result, le.SettledTS, le.SettlementValue, now, le.MarketTicker)
-		return err
+		if err != nil {
+			return err
+		}
+
+		// Get the event_ticker for this market
+		var eventTicker string
+		err = d.db.QueryRowContext(ctx, "SELECT event_ticker FROM markets WHERE market_ticker = ?", le.MarketTicker).Scan(&eventTicker)
+		if err != nil || eventTicker == "" {
+			return err
+		}
+
+		// Check if the other market is also settled (both sides done)
+		var pending int
+		err = d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM markets WHERE event_ticker = ? AND status != 'finalized'", eventTicker).Scan(&pending)
+		if err != nil || pending > 0 {
+			return nil // other market not settled yet — defer cleanup
+		}
+
+		// P5: Classify coverage
+		_ = d.SetCoverage(ctx, eventTicker)
+
+		// P6: Prune if zero ticks and zero points
+		cov, _ := d.GetCoverage(ctx, eventTicker)
+		if cov == "none" {
+			// No data — prune immediately via cascade trigger
+			_, _ = d.db.ExecContext(ctx, "DELETE FROM events WHERE event_ticker = ?", eventTicker)
+			return nil
+		}
+
+		// P7: Drop payloads for non-full events
+		if cov != "full" && cov != "" {
+			_ = d.DropOrphanPayloads(ctx, eventTicker)
+		}
+
+		return nil
 
 	case "close_date_updated":
-		// Only update close_ts, keep existing status
 		_, err := d.db.ExecContext(ctx, `
 UPDATE markets SET close_ts=?, last_updated_ts=? WHERE market_ticker=?`,
 			le.CloseTS, now, le.MarketTicker)
 		return err
 
 	default:
-		// created, price_level_structure_updated, metadata_updated — no status change
 		return nil
 	}
 }

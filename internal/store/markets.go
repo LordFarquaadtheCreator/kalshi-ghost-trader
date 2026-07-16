@@ -73,7 +73,7 @@ WHERE market_ticker=?`,
 // "activated" event maps to "active". Both mean market is live.
 func (d *DB) GetActiveMarkets(ctx context.Context) ([]Market, error) {
 	rows, err := d.db.QueryContext(ctx,
-		marketSelectColumns+` WHERE status IN ('open', 'active') ORDER BY occurrence_ts`)
+		marketSelectColumns+` WHERE status IN ('open', 'active') AND result != 'scalar' ORDER BY occurrence_ts`)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +94,31 @@ func (d *DB) GetActiveMarkets(ctx context.Context) ([]Market, error) {
 func (d *DB) GetMarketsByEvent(ctx context.Context, eventTicker string) ([]Market, error) {
 	rows, err := d.db.QueryContext(ctx,
 		marketSelectColumns+` WHERE event_ticker = ?`, eventTicker)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var markets []Market
+	for rows.Next() {
+		m, err := scanMarket(rows)
+		if err != nil {
+			return nil, err
+		}
+		markets = append(markets, m)
+	}
+	return markets, rows.Err()
+}
+
+// GetMarketsClosingWithin returns active markets whose close_ts falls within
+// [now, now+withinSecs]. Used by the close-timer strategy to find markets
+// approaching their close window.
+func (d *DB) GetMarketsClosingWithin(ctx context.Context, withinSecs int64) ([]Market, error) {
+	now := nowMillis()
+	cutoff := now + withinSecs*1000
+	rows, err := d.db.QueryContext(ctx,
+		marketSelectColumns+` WHERE status IN ('open','active') AND result != 'scalar' AND close_ts > 0 AND close_ts BETWEEN ? AND ? ORDER BY close_ts`,
+		now, cutoff)
 	if err != nil {
 		return nil, err
 	}
