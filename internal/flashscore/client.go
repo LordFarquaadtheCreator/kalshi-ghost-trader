@@ -1,3 +1,26 @@
+// Package flashscore implements a scraper for FlashScore's internal feed API,
+// providing point-by-point tennis score data to complement Kalshi market prices.
+//
+// FlashScore has no public API. The scraper targets the internal feed at
+// 2.flashscore.ninja/2/x/feed/ (region 2 = English locale). Authentication
+// requires only the x-fsign: SW9D1eZo header — no TLS fingerprinting needed.
+//
+// Feed endpoints:
+//   - f_2_<day>_1_en_1 — daily match feed (day: -1=today, 0=tomorrow, etc.)
+//   - df_mh_1_<matchID> — point-by-point score data for a match
+//   - dc_1_<matchID> — match metadata + current score
+//
+// The feed format is NOT JSON. It uses delimited text:
+//   - '~' separates records (tournaments, matches, sets, games)
+//   - '¬' separates fields within a record
+//   - '÷' separates key from value
+//
+// The Scraper runs two concurrent loops: a feed scanner that fetches daily
+// match feeds and maps FlashScore matches to Kalshi events via fuzzy player
+// name matching, and a point poller that fetches point-by-point data for
+// active matches and ingests new points via TickWriter.
+//
+// The scraper is disabled by default. Set flashscore_enabled: true in config.
 package flashscore
 
 import (
@@ -26,11 +49,17 @@ const (
 )
 
 // NewClient creates a FlashScore feed client.
+// Transport sets ResponseHeaderTimeout so stalled connections fail fast
+// instead of eating the full Client.Timeout.
 func NewClient(timeout time.Duration) *Client {
 	return &Client{
 		baseURL: defaultBaseURL,
 		http: &http.Client{
 			Timeout: timeout,
+			Transport: &http.Transport{
+				ResponseHeaderTimeout: 5 * time.Second,
+				IdleConnTimeout:       90 * time.Second,
+			},
 		},
 		sign: defaultSign,
 	}

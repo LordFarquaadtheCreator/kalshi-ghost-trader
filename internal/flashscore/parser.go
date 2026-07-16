@@ -379,6 +379,19 @@ func normalizeScore(s string) string {
 	}
 }
 
+// ParseMatchStatus extracts the stage type from a dc_1 response.
+// dc_1 uses AZ for stage type (1=finished, 2=in-progress, 3=upcoming),
+// unlike the daily feed which uses AB.
+func ParseMatchStatus(feed string) int {
+	for _, row := range strings.Split(feed, rowSep) {
+		fields := parseFields(strings.Split(row, cellSep))
+		if az, ok := fields["AZ"]; ok {
+			return parseInt(az)
+		}
+	}
+	return 0
+}
+
 // parseSetNumber extracts the set number from "Set N".
 func parseSetNumber(ha string) int {
 	ha = strings.TrimSpace(ha)

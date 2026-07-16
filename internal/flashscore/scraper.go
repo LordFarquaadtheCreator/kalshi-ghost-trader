@@ -4,38 +4,122 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/signal"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
+
+// StartPolling adds an event ticker to the active polling set.
+// Called by tracker when the first market for an event is subscribed.
+// Markets are ordered [home, away] by matching FlashScore player names
+// to Kalshi market player_name fields.
+func (s *Scraper) StartPolling(eventTicker string) {
+	s.activeMu.Lock()
+	s.active[eventTicker] = struct{}{}
+	s.activeMu.Unlock()
+	s.log.Info("flashscore polling started", "event", eventTicker)
+
+	if s.signal != nil {
+		markets, err := s.db.GetMarketsByEvent(context.Background(), eventTicker)
+		if err != nil {
+			s.log.Error("signal: get markets for registration", "event", eventTicker, "err", err)
+			return
+		}
+		tickers := orderMarketsByFlashScore(s, eventTicker, markets)
+		s.signal.RegisterMarkets(eventTicker, tickers)
+	}
+}
+
+// orderMarketsByFlashScore returns market tickers ordered [home, away]
+// by matching FlashScore player names to Kalshi market player_name.
+// Falls back to DB order if matching fails.
+func orderMarketsByFlashScore(s *Scraper, eventTicker string, markets []store.Market) []string {
+	if len(markets) < 2 {
+		var tickers []string
+		for _, m := range markets {
+			tickers = append(tickers, m.MarketTicker)
+		}
+		return tickers
+	}
+
+	fsMatches, err := s.db.GetFSMatchesByEvent(context.Background(), eventTicker)
+	if err != nil || len(fsMatches) == 0 {
+		// No FS mapping — use DB order
+		return []string{markets[0].MarketTicker, markets[1].MarketTicker}
+	}
+
+	fsm := fsMatches[0]
+	homeLN := normalizeLastName(extractLastName(fsm.HomePlayer))
+	awayLN := normalizeLastName(extractLastName(fsm.AwayPlayer))
+
+	var homeTicker, awayTicker string
+	for _, m := range markets {
+		mktLN := normalizeLastName(extractLastName(m.PlayerName))
+		if mktLN == homeLN && homeTicker == "" {
+			homeTicker = m.MarketTicker
+		} else if mktLN == awayLN && awayTicker == "" {
+			awayTicker = m.MarketTicker
+		}
+	}
+
+	if homeTicker != "" && awayTicker != "" {
+		return []string{homeTicker, awayTicker}
+	}
+	// Fallback: DB order
+	return []string{markets[0].MarketTicker, markets[1].MarketTicker}
+}
+
+// StopPolling removes an event ticker from the active polling set.
+// Called by tracker when the last market for an event is unsubscribed.
+func (s *Scraper) StopPolling(eventTicker string) {
+	s.activeMu.Lock()
+	delete(s.active, eventTicker)
+	s.activeMu.Unlock()
+
+	if s.signal != nil {
+		s.signal.UnregisterMarkets(eventTicker)
+	}
+
+	s.log.Info("flashscore polling stopped", "event", eventTicker)
+}
 
 // Scraper polls FlashScore for tennis match data and point-by-point scores.
 // Two loops run concurrently:
 //   - Feed scanner: polls daily feed, stores new matches, maps to Kalshi events
 //   - Point poller: polls active matches for point-by-point data, ingests new points
 type Scraper struct {
-	client       *Client
-	db           *store.DB
-	tickWriter   *store.TickWriter
-	log          *slog.Logger
-	scanInterval time.Duration
-	pollInterval time.Duration
+	client        *Client
+	db            *store.DB
+	tickWriter    *store.TickWriter
+	signal        *signal.Generator // nil if signal disabled
+	log           *slog.Logger
+	scanInterval  time.Duration
+	pollInterval  time.Duration
 	lookaheadDays int
+
+	activeMu sync.Mutex
+	active   map[string]struct{} // event tickers currently being polled
 }
 
 // New creates a FlashScore scraper.
-func New(db *store.DB, tw *store.TickWriter, scanInterval, pollInterval time.Duration,
+func New(db *store.DB, tw *store.TickWriter, sig *signal.Generator, scanInterval, pollInterval time.Duration,
 	lookaheadDays int, log *slog.Logger) *Scraper {
 	return &Scraper{
-		client:        NewClient(30 * time.Second),
+		client:        NewClient(15 * time.Second),
 		db:            db,
 		tickWriter:    tw,
+		signal:        sig,
 		log:           log,
 		scanInterval:  scanInterval,
 		pollInterval:  pollInterval,
 		lookaheadDays: lookaheadDays,
+		active:        make(map[string]struct{}),
 	}
 }
+
+const pollConcurrency = 8
 
 // Run starts the scraper. Blocks until ctx cancelled.
 func (s *Scraper) Run(ctx context.Context) error {
@@ -163,30 +247,63 @@ func (s *Scraper) mapToKalshiEvents(ctx context.Context) error {
 	return nil
 }
 
-// pollActiveMatches fetches point-by-point data for in-progress matches.
-// Only polls matches that are mapped to Kalshi events (have event_ticker).
+// pollActiveMatches fetches point-by-point data for events in the active set.
+// Only polls matches for events the tracker is subscribed to via StartPolling.
 // Detects new points by comparing against previously stored point count.
+// Polls concurrently with a bounded worker pool to avoid stalling on
+// slow/throttled responses.
 func (s *Scraper) pollActiveMatches(ctx context.Context) error {
-	active, err := s.db.GetActiveFSMatches(ctx)
-	if err != nil {
-		return fmt.Errorf("get active fs matches: %w", err)
+	// Snapshot active event tickers
+	s.activeMu.Lock()
+	events := make([]string, 0, len(s.active))
+	for ev := range s.active {
+		events = append(events, ev)
+	}
+	s.activeMu.Unlock()
+	if len(events) == 0 {
+		return nil
+	}
+
+	// Gather FS matches for all active events
+	var active []store.FSMatch
+	for _, ev := range events {
+		matches, err := s.db.GetFSMatchesByEvent(ctx, ev)
+		if err != nil {
+			s.log.Error("get fs matches by event", "event", ev, "err", err)
+			continue
+		}
+		active = append(active, matches...)
 	}
 	if len(active) == 0 {
 		return nil
 	}
 
+	sem := make(chan struct{}, pollConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	totalNew := 0
-	for _, fsm := range active {
-		newPts, err := s.pollMatchPoints(ctx, fsm)
-		if err != nil {
-			s.log.Error("poll match points", "fs_id", fsm.FSMatchID, "err", err)
-			continue
-		}
-		totalNew += newPts
 
-		// Update polled timestamp + status
-		_ = s.db.UpdateFSMatchPolled(ctx, fsm.FSMatchID, fsm.FSStatus)
+	for i := range active {
+		fsm := active[i]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			newPts, status, err := s.pollMatchPoints(ctx, fsm)
+			if err != nil {
+				s.log.Error("poll match points", "fs_id", fsm.FSMatchID, "err", err)
+				return
+			}
+			mu.Lock()
+			totalNew += newPts
+			mu.Unlock()
+
+			_ = s.db.UpdateFSMatchPolled(ctx, fsm.FSMatchID, status)
+		}()
 	}
+	wg.Wait()
 
 	if totalNew > 0 {
 		s.log.Info("flashscore poll: new points", "matches", len(active), "points", totalNew)
@@ -195,25 +312,38 @@ func (s *Scraper) pollActiveMatches(ctx context.Context) error {
 }
 
 // pollMatchPoints fetches point-by-point data for one match, diffs against
-// stored points, and ingests new ones. Returns count of new points.
-func (s *Scraper) pollMatchPoints(ctx context.Context, fsm store.FSMatch) (int, error) {
-	feed, err := s.client.FetchPointByPoint(ctx, fsm.FSMatchID)
+// stored points, and ingests new ones. Refreshes fs_status from dc_1.
+// Returns count of new points and the refreshed status.
+func (s *Scraper) pollMatchPoints(ctx context.Context, fsm store.FSMatch) (int, int, error) {
+	// Refresh status from dc_1 — DB status may be stale
+	status := fsm.FSStatus
+	if info, err := s.client.FetchMatchInfo(ctx, fsm.FSMatchID); err == nil && info != "" {
+		if updated := ParseMatchStatus(info); updated > 0 {
+			status = updated
+		}
+	}
+	// Skip point polling for finished matches
+	if status == 1 {
+		return 0, status, nil
+	}
+
+	feed, err := s.fetchPointsWithRetry(ctx, fsm.FSMatchID)
 	if err != nil {
-		return 0, err
+		return 0, status, err
 	}
 	if feed == "" {
-		return 0, nil
+		return 0, status, nil
 	}
 
 	mp := ParsePointByPoint(feed, fsm.FSMatchID)
 	if len(mp.Sets) == 0 {
-		return 0, nil
+		return 0, status, nil
 	}
 
 	// Count total points already stored for this match
 	storedCount, err := s.db.GetPointCount(ctx, fsm.EventTicker)
 	if err != nil {
-		return 0, fmt.Errorf("count stored: %w", err)
+		return 0, status, fmt.Errorf("count stored: %w", err)
 	}
 
 	// Flatten all parsed points
@@ -225,7 +355,7 @@ func (s *Scraper) pollMatchPoints(ctx context.Context, fsm store.FSMatch) (int, 
 	// Diff: only ingest points beyond what's stored
 	newCount := len(allPoints) - storedCount
 	if newCount <= 0 {
-		return 0, nil
+		return 0, status, nil
 	}
 
 	// Take only the new points
@@ -260,5 +390,31 @@ func (s *Scraper) pollMatchPoints(ctx context.Context, fsm store.FSMatch) (int, 
 	}
 
 	s.tickWriter.IngestPoints(pts)
-	return newCount, nil
+
+	if s.signal != nil {
+		s.signal.OnPoints(pts)
+	}
+
+	return newCount, status, nil
+}
+
+// fetchPointsWithRetry fetches df_mh_1 with up to 2 retries on timeout.
+// Backoff: 1s, 2s. Stalled connections fail at ResponseHeaderTimeout (5s).
+func (s *Scraper) fetchPointsWithRetry(ctx context.Context, matchID string) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Duration(attempt) * time.Second):
+			}
+		}
+		feed, err := s.client.FetchPointByPoint(ctx, matchID)
+		if err == nil {
+			return feed, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
 }

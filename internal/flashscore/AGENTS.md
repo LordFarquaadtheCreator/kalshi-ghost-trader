@@ -63,8 +63,10 @@ find Kalshi event where both players' last names match.
   during parsing, not separate points.
 - Feed returns "0" (single char) for empty/invalid requests. Client treats
   this as no data.
-- `fs_status` (AB field): 1=finished, 2=in-progress, 3=upcoming. Only
-  status > 1 matches are polled for live points.
+- `fs_status` (AB field in daily feed, AZ field in dc_1): 1=finished,
+  2=in-progress, 3=upcoming. Polling targets fs_status=2 plus upcoming
+  matches whose start_ts has passed (status may be stale). Status is
+  refreshed from dc_1 (AZ field) on every poll cycle.
 - Scraper is disabled by default. Set `flashscore_enabled: true` in config.
 - Points go through TickWriter's pointsIn channel — same single-writer
   architecture as ticks. No separate writer needed.
