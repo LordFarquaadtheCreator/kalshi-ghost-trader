@@ -93,9 +93,63 @@ func main() {
 	restClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
 		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
 
-	// Match point strategy (detection + simulated buy orders)
-	matchPoint := algorithms.NewMatchPointStrategy(
-		algorithms.NewTickWriterEmitter(tickWriter), log)
+	// Shared emitter — all strategies tag orders and forward here
+	sharedEmitter := algorithms.NewTickWriterEmitter(tickWriter)
+
+	// matchPoint is the primary strategy and also serves as PriceLookup for CloseTimer
+	matchPoint := algorithms.NewMatchPointStrategy(sharedEmitter, log)
+
+	// Multi-strategy runtime: all point-based strategies run simultaneously.
+	// Each strategy's orders are tagged with its name in the orders table.
+	multi := algorithms.NewMultiStrategyFromFactories(sharedEmitter, log, map[string]algorithms.StrategyFactoryFn{
+		"matchpoint": func(e algorithms.OrderEmitter) algorithms.Strategy { return matchPoint },
+		"matchpoint-aggro": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
+				IncludeSetPoints: false,
+				IncludeReturning: true,
+				ServeConvProb:    0.97,
+				ReturnConvProb:   0.89,
+				MinMarketPrice:   0.05,
+				MinEdgeCents:     1,
+				Label:            "matchpoint-aggro",
+			})
+		},
+		"setpoint": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
+				IncludeSetPoints: true,
+				IncludeReturning: true,
+				ServeConvProb:    0.93,
+				ReturnConvProb:   0.89,
+				MinMarketPrice:   0.05,
+				MinEdgeCents:     1,
+				Label:            "setpoint",
+			})
+		},
+		"setpoint-serve": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
+				IncludeSetPoints: true,
+				IncludeReturning: false,
+				ServeConvProb:    0.93,
+				ReturnConvProb:   0.89,
+				MinMarketPrice:   0.05,
+				MinEdgeCents:     1,
+				Label:            "setpoint-serve",
+			})
+		},
+		"setpoint-cheap": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
+				IncludeSetPoints: true,
+				IncludeReturning: true,
+				ServeConvProb:    0.93,
+				ReturnConvProb:   0.89,
+				MaxMarketPrice:   0.50,
+				MinMarketPrice:   0.05,
+				MinEdgeCents:     1,
+				Label:            "setpoint-cheap",
+			})
+		},
+	})
+	log.Info("multi-strategy runtime initialized", "strategies", multi.String())
 
 	// Close timer strategy (buy favorite N min before close)
 	var closeTimer *sigpkg.CloseTimer
@@ -113,14 +167,14 @@ func main() {
 		time.Duration(cfg.WSMinBackoffSecs)*time.Second,
 		time.Duration(cfg.WSMaxBackoffSecs)*time.Second,
 		log)
-	wsMgr.SetPriceUpdater(matchPoint)
+	wsMgr.SetPriceUpdater(multi)
 
 	// FlashScore scraper (optional — created before tracker so tracker can drive polling)
 	var fsScraper *flashscore.Scraper
 	if cfg.FlashScoreEnabled {
 		fsScan := time.Duration(cfg.FlashScoreScanInterval) * time.Second
 		fsPoll := time.Duration(cfg.FlashScorePollInterval) * time.Second
-		fsScraper = flashscore.New(db, tickWriter, matchPoint, fsScan, fsPoll,
+		fsScraper = flashscore.New(db, tickWriter, multi, fsScan, fsPoll,
 			cfg.FlashScoreLookaheadDays, log)
 		log.Info("flashscore scraper enabled",
 			"scan_interval", fsScan, "poll_interval", fsPoll)
@@ -133,7 +187,7 @@ func main() {
 			log.Error("apitennis_enabled but apitennis_api_key is empty")
 			os.Exit(1)
 		}
-		atScraper = apitennis.New(db, tickWriter, matchPoint, cfg.APITennisAPIKey,
+		atScraper = apitennis.New(db, tickWriter, multi, cfg.APITennisAPIKey,
 			cfg.APITennisTimezone, log)
 		log.Info("apitennis scraper enabled", "timezone", cfg.APITennisTimezone)
 	}
@@ -147,7 +201,7 @@ func main() {
 		scorePoller = fsScraper
 	}
 	tr := tracker.New(wsMgr, scorePoller, log)
-	tr.SetPriceCleaner(matchPoint)
+	tr.SetPriceCleaner(multi)
 
 	// Scanner
 	sc := scanner.New(restClient, db, cfg.SeriesTickers, log)
