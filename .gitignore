@@ -2,6 +2,7 @@
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
 kalshi_tennis.db
 
 # Private keys
@@ -43,4 +44,12 @@ dashboard/node_modules/
 dashboard/.svelte-kit/
 dashboard/build/
 dashboard/.env
+
+# Research generated outputs (regenerable from code + live DB)
+research/momentum-alpha/data/extracted/
+research/momentum-alpha/results/
+research/strategy_analysis/out/
+research/finished_games_slice.csv
+research/tumultuous_study.json
+research/Sports_prediction_and_betting_models_in_the_machin.pdf
 
