@@ -1,3 +1,21 @@
+// Package kalshiclient implements a REST API client for Kalshi market data endpoints.
+//
+// The Client signs all requests with RSA-PSS-SHA256 via [kalshiauth.Signer],
+// enforces a token-bucket rate limit, and retries on 429 responses with
+// exponential backoff. Market data endpoints are public (no auth required),
+// but all requests are signed for uniformity.
+//
+// Supported endpoints:
+//   - GET /events — list events by series with cursor pagination
+//   - GET /markets — list markets by series or event with cursor pagination
+//   - GET /markets/{ticker} — fetch a single market by ticker
+//
+// Pagination is cursor-based: an empty cursor in the response signals the end.
+// Maximum page sizes: 200 for events, 1000 for markets.
+//
+// Kalshi returns fixed-point values as strings (e.g. "0.65"); use [ParseFP]
+// to convert. Timestamps are ISO-8601 strings with or without fractional
+// seconds; use [ParseISOTime] to convert to unix milliseconds.
 package kalshiclient
 
 import (
@@ -38,10 +56,10 @@ const (
 // (no auth needed), but we sign all requests anyway for uniformity.
 // Includes a token-bucket rate limiter to avoid 429s.
 type Client struct {
-	baseURL   string
-	signer    *kalshiauth.Signer
-	http      *http.Client
-	log       *slog.Logger
+	baseURL     string
+	signer      *kalshiauth.Signer
+	http        *http.Client
+	log         *slog.Logger
 	rateLimiter *rateLimiter
 }
 

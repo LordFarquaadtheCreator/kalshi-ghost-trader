@@ -1,3 +1,17 @@
+// Package kalshiauth implements RSA-PSS-SHA256 request signing for the Kalshi API.
+//
+// Kalshi requires three headers on every authenticated request:
+//   - KALSHI-ACCESS-KEY: the key ID from the Kalshi dashboard
+//   - KALSHI-ACCESS-SIGNATURE: base64-encoded RSA-PSS signature
+//   - KALSHI-ACCESS-TIMESTAMP: current time in milliseconds
+//
+// The signed message is: timestamp_ms + HTTP_method + request_path.
+// Query parameters are stripped before signing — only the path is signed.
+//
+// For WebSocket connections, the handshake always signs "GET" + "/trade-api/ws/v2".
+//
+// Private keys in both PKCS#8 ("PRIVATE KEY") and PKCS#1 ("RSA PRIVATE KEY")
+// PEM formats are supported. Kalshi dashboard exports PKCS#8 by default.
 package kalshiauth
 
 import (

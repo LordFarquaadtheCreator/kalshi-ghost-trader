@@ -1,3 +1,16 @@
+// Package scheduler schedules per-match WebSocket tracking based on match start times.
+//
+// The Scheduler periodically polls the SQLite database for active markets and
+// starts tracking each market at occurrence_datetime minus a configurable lead
+// time (default: 5 minutes). Markets already tracked or pending are skipped.
+// Markets no longer active in the DB (settled/closed/finalized) are unsubscribed.
+//
+// Each scheduled market gets a lightweight goroutine that waits until the
+// calculated start time, then calls tracker.StartMatch. The pending map is
+// guarded by a mutex to prevent duplicate scheduling.
+//
+// No REST client is needed — the scheduler reads exclusively from the DB
+// populated by the scanner.
 package scheduler
 
 import (
@@ -14,10 +27,10 @@ import (
 // Scheduler starts tracking markets at occurrence_datetime - leadMinutes.
 // Periodically re-scans for new matches and schedules them.
 type Scheduler struct {
-	db        *store.DB
-	tracker   *tracker.Tracker
-	lead      time.Duration
-	log       *slog.Logger
+	db      *store.DB
+	tracker *tracker.Tracker
+	lead    time.Duration
+	log     *slog.Logger
 
 	mu      sync.Mutex
 	pending map[string]time.Time // market_ticker -> scheduled start time
@@ -115,7 +128,7 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 
 		// If occurrence is in the past or within lead window, start now
 		if now.After(startAt) {
-			s.startTracking(ctx, m.MarketTicker)
+			s.startTracking(ctx, m.MarketTicker, m.EventTicker)
 			scheduled++
 		} else {
 			// Schedule a goroutine that waits until startAt
@@ -123,7 +136,7 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 			s.pending[m.MarketTicker] = startAt
 			s.mu.Unlock()
 
-			go s.scheduleOne(ctx, m.MarketTicker, startAt)
+			go s.scheduleOne(ctx, m.MarketTicker, m.EventTicker, startAt)
 			scheduled++
 			s.log.Info("scheduled match", "market", m.MarketTicker, "start_at", startAt.Format(time.RFC3339))
 		}
@@ -135,7 +148,7 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 }
 
 // scheduleOne waits until the scheduled time, then starts tracking.
-func (s *Scheduler) scheduleOne(ctx context.Context, market string, startAt time.Time) {
+func (s *Scheduler) scheduleOne(ctx context.Context, market, eventTicker string, startAt time.Time) {
 	wait := time.Until(startAt)
 	if wait > 0 {
 		select {
@@ -149,14 +162,14 @@ func (s *Scheduler) scheduleOne(ctx context.Context, market string, startAt time
 	delete(s.pending, market)
 	s.mu.Unlock()
 
-	s.startTracking(ctx, market)
+	s.startTracking(ctx, market, eventTicker)
 }
 
 // startTracking subscribes to the market via the tracker.
-func (s *Scheduler) startTracking(ctx context.Context, market string) {
-	if err := s.tracker.StartMatch(ctx, market); err != nil {
+func (s *Scheduler) startTracking(ctx context.Context, market, eventTicker string) {
+	if err := s.tracker.StartMatch(ctx, market, eventTicker); err != nil {
 		s.log.Error("start tracking", "market", market, "err", err)
 		return
 	}
-	s.log.Info("now tracking", "market", market)
+	s.log.Info("now tracking", "market", market, "event", eventTicker)
 }

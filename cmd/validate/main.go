@@ -1,3 +1,14 @@
+// Command validate checks environment configuration, API credentials, and
+// connectivity for the Kalshi Ghost Trader service.
+//
+// It verifies:
+//   - Environment variables (KALSHI_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH, KALSHI_ENV)
+//   - RSA key loading and signing (PKCS#8 and PKCS#1)
+//   - REST API connectivity (portfolio balance, account limits)
+//   - WebSocket endpoint reachability
+//   - SQLite database availability
+//
+// Each check reports PASS, FAIL, or WARN with a detail message.
 package main
 
 import (
@@ -6,10 +17,10 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
-	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -280,14 +291,14 @@ func main() {
 
 	// 13. Optional config vars
 	optionalInts := map[string]int{
-		"SCAN_INTERVAL_HOURS":  24,
-		"TRACK_LEAD_MINUTES":   5,
-		"WS_MIN_BACKOFF_SECS":  1,
-		"WS_MAX_BACKOFF_SECS":  30,
-		"BATCH_SIZE":           500,
-		"FLUSH_TIMEOUT_MS":     250,
-		"HTTP_TIMEOUT_SECS":    30,
-		"SCHEDULER_POLL_SECS":  30,
+		"SCAN_INTERVAL_HOURS": 24,
+		"TRACK_LEAD_MINUTES":  5,
+		"WS_MIN_BACKOFF_SECS": 1,
+		"WS_MAX_BACKOFF_SECS": 30,
+		"BATCH_SIZE":          500,
+		"FLUSH_TIMEOUT_MS":    250,
+		"HTTP_TIMEOUT_SECS":   30,
+		"SCHEDULER_POLL_SECS": 30,
 	}
 	for k, def := range optionalInts {
 		v, ok := envVars[k]

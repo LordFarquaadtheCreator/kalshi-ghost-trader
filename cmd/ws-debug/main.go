@@ -1,3 +1,15 @@
+// Command ws-debug is a diagnostic tool for testing Kalshi API REST and WebSocket
+// endpoints with RSA-PSS-SHA256 signing.
+//
+// It performs signed GET requests to portfolio balance and account limits
+// endpoints, then attempts a WebSocket handshake — printing results for each
+// step. Useful for verifying credentials and connectivity before running the
+// full ghost-trader service.
+//
+// Environment variables:
+//   - KALSHI_API_KEY_ID — Kalshi API key ID
+//   - KALSHI_PRIVATE_KEY_PATH — path to RSA PEM private key
+//   - KALSHI_ENV — "demo" or "prod" (determines API URLs)
 package main
 
 import (

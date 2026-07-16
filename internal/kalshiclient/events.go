@@ -14,9 +14,9 @@ const (
 
 // GetEventsResponse is the response from GET /events.
 type GetEventsResponse struct {
-	Events     []EventData      `json:"events"`
+	Events     []EventData       `json:"events"`
 	Milestones []json.RawMessage `json:"milestones"`
-	Cursor     string           `json:"cursor"`
+	Cursor     string            `json:"cursor"`
 }
 
 // EventData maps the Kalshi event object.
@@ -35,6 +35,7 @@ type EventData struct {
 	LastUpdatedTS        string             `json:"last_updated_ts"`
 }
 
+// SettlementSource represents a settlement source for a Kalshi event.
 type SettlementSource struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
