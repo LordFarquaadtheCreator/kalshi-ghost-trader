@@ -16,6 +16,7 @@ kalshi*.pem
 
 # Env
 .env
+.venv
 
 # Config
 config.yaml

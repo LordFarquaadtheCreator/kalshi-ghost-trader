@@ -27,18 +27,18 @@ testing.
    cd kalshi-ghost-trader
    ```
 
-2. Copy env template:
+2. Copy config template:
 
    ```bash
-   cp .env.example .env
+   cp config.yaml.example config.yaml
    ```
 
-3. Edit `.env`. At minimum set these three:
+3. Edit `config.yaml`. At minimum set these three:
 
-   ```
-   KALSHI_API_KEY_ID=your-key-id
-   KALSHI_PRIVATE_KEY_PATH=/absolute/path/to/private_key.pem
-   KALSHI_ENV=demo
+   ```yaml
+   api_key_id: "your-key-id"
+   private_key_path: "/absolute/path/to/private_key.pem"
+   environment: "demo"
    ```
 
    Use `demo` first. Switch to `prod` once everything works.
@@ -55,24 +55,30 @@ Logs go to stdout. Ctrl+C stops cleanly (flushes SQLite, unsubscribes WS).
 
 ## Configuration
 
-All settings live in `.env`. Full reference in `.env.example`.
+All settings live in `config.yaml`. Override path with `CONFIG_PATH` env var.
+Full reference in `config.yaml.example`.
 
-| Var | Default | What it does |
+| Field | Default | What it does |
 |---|---|---|
-| `KALSHI_API_KEY_ID` | — | Kalshi API key ID (required) |
-| `KALSHI_PRIVATE_KEY_PATH` | — | Path to RSA private key PEM (required) |
-| `KALSHI_ENV` | `demo` | `demo` or `prod` |
-| `DB_PATH` | `kalshi_tennis.db` | SQLite file path |
-| `SERIES_TICKERS` | 8 tennis series | Comma-separated series to scan |
-| `SCAN_INTERVAL_HOURS` | `24` | Hours between daily scans |
-| `TRACK_LEAD_MINUTES` | `5` | Start WS this many minutes before match |
-| `BATCH_SIZE` | `500` | SQLite batch insert size |
-| `FLUSH_TIMEOUT_MS` | `250` | Max ms before partial batch flushes |
-| `HTTP_TIMEOUT_SECS` | `30` | REST client timeout |
-| `SCHEDULER_POLL_SECS` | `30` | How often scheduler checks DB |
-| `WS_MIN_BACKOFF_SECS` | `1` | WS reconnect min backoff |
-| `WS_MAX_BACKOFF_SECS` | `30` | WS reconnect max backoff |
-| `METRICS_PORT` | `6060` | `0` disables metrics server |
+| `api_key_id` | — | Kalshi API key ID (required) |
+| `private_key_path` | — | Path to RSA private key PEM (required) |
+| `environment` | `demo` | `demo` or `prod` |
+| `db_path` | `kalshi_tennis.db` | SQLite file path |
+| `series_tickers` | 8 tennis series | List of series to scan |
+| `scan_interval_hours` | `24` | Hours between daily scans |
+| `track_lead_minutes` | `5` | Start WS this many minutes before match |
+| `batch_size` | `500` | SQLite batch insert size |
+| `flush_timeout_ms` | `250` | Max ms before partial batch flushes |
+| `http_timeout_secs` | `30` | REST client timeout |
+| `rate_limit_rps` | `15` | REST client max requests per second |
+| `scheduler_poll_secs` | `30` | How often scheduler checks DB |
+| `ws_min_backoff_secs` | `1` | WS reconnect min backoff |
+| `ws_max_backoff_secs` | `30` | WS reconnect max backoff |
+| `metrics_port` | `6060` | `0` disables metrics server |
+| `flashscore_enabled` | `false` | Enable FlashScore point-by-point scraper |
+| `flashscore_scan_interval_secs` | `300` | FlashScore feed scan interval |
+| `flashscore_poll_interval_secs` | `10` | FlashScore point poll interval |
+| `flashscore_lookahead_days` | `1` | Days to look ahead in FlashScore feed |
 
 ## Dashboard
 
@@ -138,7 +144,10 @@ SQLite with WAL mode. Single writer, batched inserts. Schema:
 - `ticks` — every WS ticker/trade message with raw JSON
 - `orderbook_events` — orderbook snapshots + deltas with raw JSON
 - `lifecycle_events` — `market_lifecycle_v2` WS events
+- `event_lifecycle_events` — `event_lifecycle` WS messages (event creation)
 - `scan_runs` — scan audit log
+- `flashscore_matches` — FlashScore to Kalshi event mapping
+- `points` — FlashScore point-by-point tennis score data
 
 Inspect:
 
@@ -158,34 +167,66 @@ SELECT COUNT(*) FROM ticks;
 | `KXITFMATCH` | ITF men |
 | `KXITFWMATCH` | ITF women |
 | `KXATPCHALLENGERMATCH` | ATP Challenger |
-| `KWTACHALLENGERMATCH` | WTA Challenger |
+| `KXWTACHALLENGERMATCH` | WTA Challenger |
 | `KXTENNISEXHIBITION` | Exhibition |
 | `KXCHALLENGERMATCH` | Challenger (legacy) |
 
-Override with `SERIES_TICKERS` in `.env`.
+Override with `series_tickers` in `config.yaml`.
 
 ## Architecture
 
 ```
 cmd/ghost-trader/     entrypoint, signal handling, errgroup wiring
-internal/config/      env var loading
+cmd/validate/         config + connectivity validation tool
+cmd/ws-debug/         WS + REST debug tool
+internal/config/      YAML config loading
+cmd/ghost-trader/metrics.go  runtime metrics + pprof HTTP handlers
 internal/kalshiauth/  RSA-PSS-SHA256 request signing
-internal/kalshiclient/  REST client (events, markets, pagination)
+internal/kalshiclient/  REST client (events, markets, pagination, rate limit)
 internal/store/       SQLite (WAL, single writer, batched inserts)
 internal/ws/          WebSocket manager (auto-reconnect, re-subscribe)
 internal/scanner/     daily series scan, stores new events/markets
-internal/tracker/     per-match goroutine lifecycle
+internal/tracker/     market subscription lifecycle (no per-match goroutine)
 internal/scheduler/   schedules tracking at occurrence_datetime - lead
+internal/flashscore/  FlashScore point-by-point scraper (optional)
 ```
 
 Concurrency: one goroutine each for WS manager, tick writer, scanner,
-scheduler. One goroutine per tracked match. All cancelled via root context
-on SIGINT/SIGTERM.
+scheduler, FlashScore scraper (if enabled). One goroutine per scheduled
+match (waits until start time, then subscribes). All cancelled via root
+context on SIGINT/SIGTERM.
 
 ## Kalshi API docs
 
 Local copies in repo root (`gs_*.md`, `ws_*.md`, `openapi.yaml`). Official
 docs at <https://docs.kalshi.com>.
+
+## Diagnostic tools
+
+```bash
+# Validate config, credentials, REST/WS connectivity, DB
+go run ./cmd/validate
+
+# Debug WS handshake + REST signing
+go run ./cmd/ws-debug
+```
+
+## Notebooks
+
+Analysis notebooks live in `notebooks/`. They query the live SQLite DB
+read-only — never write to the DB from notebooks.
+
+```bash
+conda activate kalshi-ghost-trader
+# Recreate from scratch:
+conda env create -f environment.yml
+```
+
+Open in Zed or Jupyter:
+
+```bash
+zed notebooks/nothing_happens.ipynb
+```
 
 ## Verification
 

@@ -1,27 +1,36 @@
 # internal/config
 
-Env var loading. All config via `.env` file + environment.
+YAML-based configuration loading. All config via `config.yaml` (or `CONFIG_PATH` env var override).
 
-## Vars
+## Config Fields
 
-- `KALSHI_ENV` — `demo` or `prod`
-- `KALSHI_API_KEY_ID` — key ID from Kalshi dashboard
-- `KALSHI_PRIVATE_KEY_PATH` — path to RSA PEM file
-- `DB_PATH` — SQLite file path
-- `SCAN_INTERVAL_HOURS` — scanner poll interval
-- `TRACK_LEAD_MINUTES` — start tracking N min before occurrence
-- `BATCH_SIZE` — tick insert batch size
-- `FLUSH_TIMEOUT_MS` — max wait before flushing batch
-- `WS_MIN_BACKOFF_SECS` — reconnect min backoff
-- `WS_MAX_BACKOFF_SECS` — reconnect max backoff
-- `SERIES_TICKERS` — comma-separated tennis series
-- `HTTP_TIMEOUT_SECS` — REST client per-request timeout
-- `RATE_LIMIT_RPS` — REST client max requests per second
-- `SCHEDULER_POLL_SECS` — scheduler DB poll interval
-- `METRICS_PORT` — pprof + runtime metrics HTTP server port (0 = disabled, default 6060)
+- `api_key_id` — Kalshi API key ID
+- `private_key_path` — path to RSA PEM private key
+- `environment` — `demo` or `prod` (determines REST/WS URLs)
+- `db_path` — SQLite file path (default: `kalshi_tennis.db`)
+- `series_tickers` — list of tennis series to scan (defaults to all 8 core series)
+- `scan_interval_hours` — scanner poll interval (default: 24)
+- `track_lead_minutes` — start tracking N min before occurrence (default: 5)
+- `ws_min_backoff_secs` / `ws_max_backoff_secs` — reconnect backoff range (default: 1–30)
+- `batch_size` — tick insert batch size (default: 500)
+- `flush_timeout_ms` — max wait before flushing batch (default: 250)
+- `http_timeout_secs` — REST client per-request timeout (default: 30)
+- `rate_limit_rps` — REST client max requests per second (default: 15)
+- `scheduler_poll_secs` — scheduler DB poll interval (default: 30)
+- `metrics_port` — pprof + runtime metrics HTTP server port (default: 6060, 0 = disabled)
+- `flashscore_enabled` — enable FlashScore scraper (default: false)
+- `flashscore_scan_interval_secs` — feed scan interval (default: 300)
+- `flashscore_poll_interval_secs` — point poll interval (default: 10)
+- `flashscore_lookahead_days` — days to look ahead in feed (default: 1)
+
+## Derived Fields
+
+- `RESTBaseURL` — set from environment (demo/prod), not in YAML
+- `WSURL` — set from environment (demo/prod), not in YAML
 
 ## Gotchas
 
 - Demo vs prod URLs differ in host. Don't hardcode.
 - Series list must include all 8 core tennis series for full coverage.
-- Only credential vars use `KALSHI_` prefix. All others are bare names.
+- `CONFIG_PATH` env var overrides default `config.yaml` path.
+- `RESTBaseURL` and `WSURL` are derived (yaml:"-"), not user-set.
