@@ -26,6 +26,7 @@ config.yaml
 /ghost-trader
 /validate
 /ws-debug
+deploy/out/
 
 # OS
 .DS_Store
