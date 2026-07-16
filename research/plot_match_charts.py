@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 DB = os.path.expanduser("~/kalshi-ghost-trader/snapshot_for_charts.db")
-OUTPUT_DIR = os.path.expanduser("~/kalshi-ghost-trader/charts")
+OUTPUT_DIR = os.path.expanduser("~/kalshi-ghost-trader/research/charts")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def log(msg):
