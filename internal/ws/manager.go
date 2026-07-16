@@ -46,9 +46,9 @@ type subInfo struct {
 }
 
 // PriceUpdater receives market price updates from WS ticker messages.
-// Implemented by signal.Generator to track live prices for edge calculation.
+// Implemented by algorithms.MatchPointStrategy to track live prices for edge calculation.
 type PriceUpdater interface {
-	UpdatePrice(marketTicker string, price float64)
+	OnPrice(marketTicker string, price float64)
 }
 
 // Manager owns the single multiplexed Kalshi WebSocket connection.
@@ -96,7 +96,7 @@ func NewManager(wsURL string, signer *kalshiauth.Signer, tw *store.TickWriter, s
 	}
 }
 
-// SetPriceUpdater wires a price tracker (signal.Generator) to receive
+// SetPriceUpdater wires a price tracker (algorithms.MatchPointStrategy) to receive
 // market price updates from WS ticker messages.
 func (m *Manager) SetPriceUpdater(pu PriceUpdater) {
 	m.priceUpd = pu

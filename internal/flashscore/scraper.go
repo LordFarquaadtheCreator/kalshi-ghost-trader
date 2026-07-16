@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/farquaad/kalshi-ghost-trader/internal/signal"
+	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -21,14 +21,14 @@ func (s *Scraper) StartPolling(eventTicker string) {
 	s.activeMu.Unlock()
 	s.log.Info("flashscore polling started", "event", eventTicker)
 
-	if s.signal != nil {
+	if s.strategy != nil {
 		markets, err := s.db.GetMarketsByEvent(context.Background(), eventTicker)
 		if err != nil {
-			s.log.Error("signal: get markets for registration", "event", eventTicker, "err", err)
+			s.log.Error("strategy: get markets for registration", "event", eventTicker, "err", err)
 			return
 		}
 		tickers := orderMarketsByFlashScore(s, eventTicker, markets)
-		s.signal.RegisterMarkets(eventTicker, tickers)
+		s.strategy.RegisterMarkets(eventTicker, tickers)
 	}
 }
 
@@ -78,8 +78,8 @@ func (s *Scraper) StopPolling(eventTicker string) {
 	delete(s.active, eventTicker)
 	s.activeMu.Unlock()
 
-	if s.signal != nil {
-		s.signal.UnregisterMarkets(eventTicker)
+	if s.strategy != nil {
+		s.strategy.UnregisterMarkets(eventTicker)
 	}
 
 	s.log.Info("flashscore polling stopped", "event", eventTicker)
@@ -93,7 +93,7 @@ type Scraper struct {
 	client        *Client
 	db            *store.DB
 	tickWriter    *store.TickWriter
-	signal        *signal.Generator // nil if signal disabled
+	strategy      algorithms.Strategy // nil if signal disabled
 	log           *slog.Logger
 	scanInterval  time.Duration
 	pollInterval  time.Duration
@@ -104,13 +104,13 @@ type Scraper struct {
 }
 
 // New creates a FlashScore scraper.
-func New(db *store.DB, tw *store.TickWriter, sig *signal.Generator, scanInterval, pollInterval time.Duration,
+func New(db *store.DB, tw *store.TickWriter, strat algorithms.Strategy, scanInterval, pollInterval time.Duration,
 	lookaheadDays int, log *slog.Logger) *Scraper {
 	return &Scraper{
 		client:        NewClient(15 * time.Second),
 		db:            db,
 		tickWriter:    tw,
-		signal:        sig,
+		strategy:      strat,
 		log:           log,
 		scanInterval:  scanInterval,
 		pollInterval:  pollInterval,
@@ -391,8 +391,8 @@ func (s *Scraper) pollMatchPoints(ctx context.Context, fsm store.FSMatch) (int, 
 
 	s.tickWriter.IngestPoints(pts)
 
-	if s.signal != nil {
-		s.signal.OnPoints(pts)
+	if s.strategy != nil {
+		s.strategy.OnPoints(pts)
 	}
 
 	return newCount, status, nil

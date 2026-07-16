@@ -70,3 +70,6 @@ find Kalshi event where both players' last names match.
 - Scraper is disabled by default. Set `flashscore_enabled: true` in config.
 - Points go through TickWriter's pointsIn channel — same single-writer
   architecture as ticks. No separate writer needed.
+- Scraper takes `algorithms.Strategy` interface — calls `OnPoints` after
+  ingesting new points, `RegisterMarkets`/`UnregisterMarkets` on match
+  start/stop. Same interface in live and backtest.

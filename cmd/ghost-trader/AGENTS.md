@@ -10,10 +10,11 @@ Entrypoint. Wires all components via errgroup.
 4. Create tick writer
 5. Create REST client
 6. Create WS manager
-7. Create tracker
-8. Create scanner
-9. Create scheduler
-10. Launch goroutines via errgroup (metrics server, tick writer, WS, scanner, scheduler)
+7. Create MatchPointStrategy (algorithms)
+8. Create tracker (wired to strategy)
+9. Create scanner
+10. Create scheduler
+11. Launch goroutines via errgroup (metrics server, tick writer, WS, scanner, scheduler)
 
 ## Shutdown
 

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/farquaad/kalshi-ghost-trader/internal/signal"
+	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -24,7 +24,7 @@ type Scraper struct {
 	ws         *WSClient
 	db         *store.DB
 	tickWriter *store.TickWriter
-	signal     *signal.Generator
+	strategy   algorithms.Strategy
 	log        *slog.Logger
 
 	workersMu sync.Mutex
@@ -49,17 +49,17 @@ type matchWorker struct {
 	done        chan struct{}
 	seenKeys    map[string]bool // "set:game:point" → ingested, survives restarts
 	tickWriter  *store.TickWriter
-	signal      *signal.Generator
+	strategy    algorithms.Strategy
 	log         *slog.Logger
 }
 
 // New creates an API-Tennis scraper.
-func New(db *store.DB, tw *store.TickWriter, sig *signal.Generator, apiKey, timezone string, log *slog.Logger) *Scraper {
+func New(db *store.DB, tw *store.TickWriter, strat algorithms.Strategy, apiKey, timezone string, log *slog.Logger) *Scraper {
 	return &Scraper{
 		ws:          NewWSClient(apiKey, timezone, log),
 		db:          db,
 		tickWriter:  tw,
-		signal:      sig,
+		strategy:    strat,
 		log:         log,
 		workers:     make(map[string]*matchWorker),
 		matchCache:  make(map[int]string),
@@ -82,7 +82,7 @@ func (s *Scraper) StartPolling(eventTicker string) {
 		done:        make(chan struct{}),
 		seenKeys:    seenKeys,
 		tickWriter:  s.tickWriter,
-		signal:      s.signal,
+		strategy:    s.strategy,
 		log:         s.log,
 	}
 
@@ -92,9 +92,8 @@ func (s *Scraper) StartPolling(eventTicker string) {
 
 	go w.run()
 
-	if s.signal != nil {
-		s.registerMarkets(eventTicker)
-	}
+	// Market registration deferred to first WS event — need player names
+	// from WSEvent to correctly map [home, away] market order.
 	s.log.Info("apitennis worker started", "event", eventTicker)
 }
 
@@ -112,8 +111,8 @@ func (s *Scraper) StopPolling(eventTicker string) {
 		close(w.done)
 	}
 
-	if s.signal != nil {
-		s.signal.UnregisterMarkets(eventTicker)
+	if s.strategy != nil {
+		s.strategy.UnregisterMarkets(eventTicker)
 	}
 	s.log.Info("apitennis worker stopped", "event", eventTicker)
 }
@@ -213,6 +212,11 @@ func (s *Scraper) dispatch(ev WSEvent) {
 		return // No active worker for this event
 	}
 
+	// Register markets on first event for this match (needs player names)
+	if s.strategy != nil {
+		s.maybeRegisterMarkets(eventTicker, ev)
+	}
+
 	// Non-blocking send — drop if worker is busy
 	select {
 	case w.ch <- ev:
@@ -232,36 +236,36 @@ func (s *Scraper) stopAllWorkers() {
 	s.workers = make(map[string]*matchWorker)
 }
 
-// registerMarkets fetches markets for an event and registers them with the
-// signal generator, ordered [home, away] by player name matching.
-func (s *Scraper) registerMarkets(eventTicker string) {
+// maybeRegisterMarkets orders markets [home, away] using player names from
+// the first WSEvent and registers with the strategy. Cached per event.
+func (s *Scraper) maybeRegisterMarkets(eventTicker string, ev WSEvent) {
+	s.marketCacheMu.Lock()
+	cached, ok := s.marketCache[eventTicker]
+	s.marketCacheMu.Unlock()
+
+	if ok {
+		s.strategy.RegisterMarkets(eventTicker, cached)
+		return
+	}
+
 	markets, err := s.db.GetMarketsByEvent(context.Background(), eventTicker)
 	if err != nil {
 		s.log.Error("apitennis: get markets", "err", err, "event", eventTicker)
 		return
 	}
 
-	// Check market cache
-	s.marketCacheMu.Lock()
-	cached, ok := s.marketCache[eventTicker]
-	s.marketCacheMu.Unlock()
-
-	if ok {
-		s.signal.RegisterMarkets(eventTicker, cached)
-		return
-	}
-
-	// No cached ordering — use DB order (tracker will have ordered them)
-	tickers := make([]string, 0, len(markets))
-	for _, m := range markets {
-		tickers = append(tickers, m.MarketTicker)
-	}
+	// Order [home, away] by matching API-Tennis player names to Kalshi markets.
+	// ev.EventFirstPlayer = home (server=1), ev.EventSecondPlayer = away (server=2).
+	tickers := orderMarketsByPlayerNames(ev.EventFirstPlayer, ev.EventSecondPlayer, markets)
 
 	s.marketCacheMu.Lock()
 	s.marketCache[eventTicker] = tickers
 	s.marketCacheMu.Unlock()
 
-	s.signal.RegisterMarkets(eventTicker, tickers)
+	s.strategy.RegisterMarkets(eventTicker, tickers)
+	s.log.Info("apitennis: markets registered", "event", eventTicker,
+		"home", tickers[0], "away", tickers[1],
+		"first_player", ev.EventFirstPlayer, "second_player", ev.EventSecondPlayer)
 }
 
 // run is the per-match worker goroutine. Receives WSEvents, diffs points,
@@ -339,8 +343,8 @@ func (w *matchWorker) processEvent(ev WSEvent) {
 
 	w.tickWriter.IngestPoints(pts)
 
-	if w.signal != nil {
-		w.signal.OnPoints(pts)
+	if w.strategy != nil {
+		w.strategy.OnPoints(pts)
 	}
 
 	w.log.Info("apitennis: new points ingested",

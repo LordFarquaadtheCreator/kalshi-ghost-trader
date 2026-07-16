@@ -30,6 +30,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/apitennis"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/flashscore"
@@ -46,7 +47,16 @@ import (
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				if t, ok := a.Value.Any().(time.Time); ok {
+					a.Value = slog.StringValue(t.Format(time.RFC3339))
+				}
+			}
+			return a
+		},
 	}))
+	slog.SetDefault(log)
 
 	// Load config
 	cfg, err := config.Load()
@@ -83,13 +93,14 @@ func main() {
 	restClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
 		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
 
-	// Signal generator (match point detection + simulated buy orders)
-	sigGen := sigpkg.New(tickWriter, log)
+	// Match point strategy (detection + simulated buy orders)
+	matchPoint := algorithms.NewMatchPointStrategy(
+		algorithms.NewTickWriterEmitter(tickWriter), log)
 
 	// Close timer strategy (buy favorite N min before close)
 	var closeTimer *sigpkg.CloseTimer
 	if cfg.CloseTimerEnabled {
-		closeTimer = sigpkg.NewCloseTimer(db, sigGen, tickWriter,
+		closeTimer = sigpkg.NewCloseTimer(db, matchPoint, tickWriter,
 			cfg.CloseTimerLeadMin, cfg.CloseTimerMinPrice, cfg.CloseTimerSize, log)
 		log.Info("close timer strategy enabled",
 			"lead_min", cfg.CloseTimerLeadMin,
@@ -102,14 +113,14 @@ func main() {
 		time.Duration(cfg.WSMinBackoffSecs)*time.Second,
 		time.Duration(cfg.WSMaxBackoffSecs)*time.Second,
 		log)
-	wsMgr.SetPriceUpdater(sigGen)
+	wsMgr.SetPriceUpdater(matchPoint)
 
 	// FlashScore scraper (optional — created before tracker so tracker can drive polling)
 	var fsScraper *flashscore.Scraper
 	if cfg.FlashScoreEnabled {
 		fsScan := time.Duration(cfg.FlashScoreScanInterval) * time.Second
 		fsPoll := time.Duration(cfg.FlashScorePollInterval) * time.Second
-		fsScraper = flashscore.New(db, tickWriter, sigGen, fsScan, fsPoll,
+		fsScraper = flashscore.New(db, tickWriter, matchPoint, fsScan, fsPoll,
 			cfg.FlashScoreLookaheadDays, log)
 		log.Info("flashscore scraper enabled",
 			"scan_interval", fsScan, "poll_interval", fsPoll)
@@ -122,7 +133,7 @@ func main() {
 			log.Error("apitennis_enabled but apitennis_api_key is empty")
 			os.Exit(1)
 		}
-		atScraper = apitennis.New(db, tickWriter, sigGen, cfg.APITennisAPIKey,
+		atScraper = apitennis.New(db, tickWriter, matchPoint, cfg.APITennisAPIKey,
 			cfg.APITennisTimezone, log)
 		log.Info("apitennis scraper enabled", "timezone", cfg.APITennisTimezone)
 	}
@@ -136,7 +147,7 @@ func main() {
 		scorePoller = fsScraper
 	}
 	tr := tracker.New(wsMgr, scorePoller, log)
-	tr.SetPriceCleaner(sigGen)
+	tr.SetPriceCleaner(matchPoint)
 
 	// Scanner
 	sc := scanner.New(restClient, db, cfg.SeriesTickers, log)

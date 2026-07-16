@@ -19,10 +19,10 @@ API-Tennis WebSocket client. Real-time point-by-point tennis data via `wss://wss
 ## Data Flow
 
 1. Tracker subscribes markets → calls `StartPolling(eventTicker)`
-2. Scraper registers markets with signal generator
+2. Scraper registers markets with `algorithms.Strategy` (MatchPointStrategy)
 3. WS pushes match update → `processEvent` matches to Kalshi event
 4. Diffs points against stored count → ingests new ones via TickWriter
-5. Signal generator processes points → fires orders at match points
+5. Strategy processes points → fires orders at match points
 
 ## Matching
 

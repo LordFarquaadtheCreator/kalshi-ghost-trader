@@ -26,15 +26,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
+const priceStaleTTL = 60 * time.Second
+
 // PriceLookup returns the current YES price for a market ticker.
-// Implemented by Generator.
-type PriceLookup interface {
-	GetPrice(marketTicker string) float64
-	GetPriceAge(marketTicker string) time.Duration
-}
+// Implemented by algorithms.MatchPointStrategy.
+type PriceLookup = algorithms.PriceLookup
 
 // CloseTimer watches for markets approaching close and fires buy orders
 // on the favorite when its price exceeds the threshold.
