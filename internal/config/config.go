@@ -1,3 +1,13 @@
+// Package config loads runtime configuration from a YAML file (config.yaml).
+//
+// The Config struct holds all tunable parameters for the ghost-trader service:
+// Kalshi API credentials, environment selection (demo/prod), SQLite path,
+// tennis series tickers, scanner/scheduler intervals, WebSocket backoff,
+// batch sizes, rate limits, metrics port, and FlashScore scraper settings.
+//
+// Configuration is loaded via [Load], which reads config.yaml (or the path
+// specified by the CONFIG_PATH environment variable), applies defaults for
+// unset fields, and derives REST/WebSocket URLs from the environment.
 package config
 
 import (
@@ -39,7 +49,7 @@ type Config struct {
 	WSMaxBackoffSecs int `yaml:"ws_max_backoff_secs"`
 
 	// SQLite batch settings
-	BatchSize     int `yaml:"batch_size"`
+	BatchSize      int `yaml:"batch_size"`
 	FlushTimeoutMS int `yaml:"flush_timeout_ms"`
 
 	// REST client timeout (seconds)
@@ -55,10 +65,23 @@ type Config struct {
 	MetricsPort int `yaml:"metrics_port"`
 
 	// FlashScore scraper settings
-	FlashScoreEnabled      bool `yaml:"flashscore_enabled"`
-	FlashScoreScanInterval int  `yaml:"flashscore_scan_interval_secs"` // feed scan interval
-	FlashScorePollInterval int  `yaml:"flashscore_poll_interval_secs"` // point poll interval
-	FlashScoreLookaheadDays int `yaml:"flashscore_lookahead_days"`     // days to look ahead in feed
+	FlashScoreEnabled       bool `yaml:"flashscore_enabled"`
+	FlashScoreScanInterval  int  `yaml:"flashscore_scan_interval_secs"` // feed scan interval
+	FlashScorePollInterval  int  `yaml:"flashscore_poll_interval_secs"` // point poll interval
+	FlashScoreLookaheadDays int  `yaml:"flashscore_lookahead_days"`     // days to look ahead in feed
+
+	// API-Tennis scraper settings (WebSocket real-time push)
+	APITennisEnabled  bool   `yaml:"apitennis_enabled"`
+	APITennisAPIKey   string `yaml:"apitennis_api_key"`
+	APITennisTimezone string `yaml:"apitennis_timezone"` // e.g. "+00:00", "-05:00"
+
+	// Close timer strategy: buy the favorite N minutes before market close.
+	// Empirical edge: favorite priced ≥85c at T-10min won 100% in backtest.
+	CloseTimerEnabled  bool    `yaml:"close_timer_enabled"`
+	CloseTimerLeadMin  int     `yaml:"close_timer_lead_minutes"` // fire this many min before close
+	CloseTimerMinPrice float64 `yaml:"close_timer_min_price"`    // only buy favorites ≥ this price
+	CloseTimerPollSecs int     `yaml:"close_timer_poll_secs"`    // DB poll interval
+	CloseTimerSize     float64 `yaml:"close_timer_size"`         // shares per order
 }
 
 // Load reads config from config.yaml in the working directory.
@@ -96,6 +119,11 @@ func Load() (*Config, error) {
 	}
 	if cfg.PrivateKeyPath == "" {
 		return nil, fmt.Errorf("private_key_path is required")
+	}
+
+	if cfg.CloseTimerEnabled && cfg.CloseTimerLeadMin > cfg.TrackLeadMinutes {
+		return nil, fmt.Errorf("close_timer_lead_minutes (%d) cannot exceed track_lead_minutes (%d) — WS not subscribed until T-track_lead",
+			cfg.CloseTimerLeadMin, cfg.TrackLeadMinutes)
 	}
 
 	return cfg, nil
@@ -155,6 +183,21 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	}
 	if c.FlashScoreLookaheadDays == 0 {
 		c.FlashScoreLookaheadDays = 1
+	}
+	if c.APITennisTimezone == "" {
+		c.APITennisTimezone = "+00:00"
+	}
+	if c.CloseTimerLeadMin == 0 {
+		c.CloseTimerLeadMin = 10
+	}
+	if c.CloseTimerMinPrice == 0 {
+		c.CloseTimerMinPrice = 0.85
+	}
+	if c.CloseTimerPollSecs == 0 {
+		c.CloseTimerPollSecs = 30
+	}
+	if c.CloseTimerSize == 0 {
+		c.CloseTimerSize = 50
 	}
 }
 
