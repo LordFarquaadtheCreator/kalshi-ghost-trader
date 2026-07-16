@@ -198,6 +198,7 @@ func (ct *CloseTimer) scan(ctx context.Context, pollSecs int) {
 			EdgeCents:     edgeCents,
 			SuggestedSize: ct.size,
 			SetNumber:     0,
+			Strategy:      "close_timer",
 			Payload:       string(payload),
 		}
 

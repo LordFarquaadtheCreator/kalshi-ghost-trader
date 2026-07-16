@@ -257,6 +257,7 @@ func (s *MatchPointStrategy) processPoint(p store.Point) {
 		EdgeCents:     edgeCents,
 		SuggestedSize: size,
 		SetNumber:     p.SetNumber,
+		Strategy:      "matchpoint",
 		Payload:       string(payload),
 	}
 
