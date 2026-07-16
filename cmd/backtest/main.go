@@ -1,11 +1,12 @@
 // Command backtest replays historical point + tick data from the SQLite DB
-// through the match-point signal strategy and reports P&L.
+// through a trading strategy and reports P&L.
 //
 // Usage:
 //
-//	go run ./cmd/backtest [db_path]
+//	go run ./cmd/backtest -strategy <name> [flags]
 //
 // Default db_path is kalshi_tennis.db in the current directory.
+// Available strategies: matchpoint
 package main
 
 import (
@@ -20,17 +21,27 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
+	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
-const (
-	setsToWin     = 2
-	gamesPerSet   = 6
-	serveConvProb = 0.97
-	minEdgeCents  = 1
-	baseSize      = 10.0
-	maxSize       = 100.0
-	priceStaleTTL = 60 * time.Second
-)
+// replayStrategy extends algorithms.Strategy with backtest-specific
+// time-replay methods. Strategies must implement this to be backtestable.
+type replayStrategy interface {
+	algorithms.Strategy
+	SetReplayTime(ts time.Time)
+	OnPriceAt(marketTicker string, price float64, ts time.Time)
+}
+
+// strategyFactory creates a new strategy instance for backtest.
+type strategyFactory func(emitter algorithms.OrderEmitter, log *slog.Logger) replayStrategy
+
+var strategies = map[string]strategyFactory{
+	"matchpoint": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewMatchPointStrategy(em, log)
+	},
+}
 
 type pointRow struct {
 	ts         int64
@@ -53,6 +64,9 @@ type marketRow struct {
 	status       string
 }
 
+// eventTitles maps event_ticker -> title ("Home vs Away").
+var eventTitles = make(map[string]string)
+
 type tickPrice struct {
 	ts    int64
 	price float64
@@ -63,14 +77,6 @@ type order struct {
 	market    string
 	context   string
 	setNum    int
-	gameNum   int
-	pointNum  int
-	server    int
-	scorer    int
-	homeGames int
-	awayGames int
-	homePts   string
-	awayPts   string
 	price     float64
 	edgeCents int
 	size      float64
@@ -81,10 +87,26 @@ type order struct {
 
 func main() {
 	dbPath := flag.String("db", "kalshi_tennis.db", "path to SQLite DB")
+	strategyName := flag.String("strategy", "matchpoint", "strategy to backtest (available: matchpoint)")
 	minPrice := flag.Float64("min-price", 0.0, "skip signals below this market price (0=disabled)")
+	debugMode := flag.Bool("debug", false, "enable debug logging to see strategy filter reasons")
 	flag.Parse()
 
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	factory, ok := strategies[*strategyName]
+	if !ok {
+		available := make([]string, 0, len(strategies))
+		for name := range strategies {
+			available = append(available, name)
+		}
+		fmt.Fprintf(os.Stderr, "unknown strategy %q (available: %s)\n", *strategyName, strings.Join(available, ", "))
+		os.Exit(1)
+	}
+
+	logLevel := slog.LevelWarn
+	if *debugMode {
+		logLevel = slog.LevelDebug
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 	ctx := context.Background()
 
 	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", *dbPath)
@@ -94,6 +116,22 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+
+	// Load event titles for home/away market ordering
+	eventRows, err := db.QueryContext(ctx, `SELECT event_ticker, title FROM events`)
+	if err != nil {
+		log.Error("query events", "err", err)
+		os.Exit(1)
+	}
+	for eventRows.Next() {
+		var et, title string
+		if err := eventRows.Scan(&et, &title); err != nil {
+			log.Error("scan event", "err", err)
+			os.Exit(1)
+		}
+		eventTitles[et] = title
+	}
+	eventRows.Close()
 
 	// Load markets
 	fmt.Println("Loading markets...")
@@ -170,7 +208,7 @@ func main() {
 	fmt.Printf("Matches with points: %d\n", len(pointsByMatch))
 	fmt.Printf("Matches with markets: %d\n", len(markets))
 
-	// Backtest
+	// Backtest — replay historical data through selected strategy
 	var orders []order
 	both := 0
 	for matchTicker, pts := range pointsByMatch {
@@ -180,90 +218,48 @@ func main() {
 		}
 		both++
 
-		homeMkt := mkts[0].marketTicker
-		awayMkt := mkts[1].marketTicker
+		homeMkt, awayMkt := orderMarketsByTitle(matchTicker, mkts)
 
-		setsHome, setsAway := 0, 0
-		lastSet, lastHomeGames, lastAwayGames, lastScorer := 0, 0, 0, 0
-		seen := make(map[string]bool)
+		collector := algorithms.NewOrderCollector()
+		strat := factory(collector, log)
+		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
 
+		sort.Slice(pts, func(i, j int) bool { return pts[i].ts < pts[j].ts })
+
+		tickIdx := map[string]int{homeMkt: 0, awayMkt: 0}
 		for _, p := range pts {
-			key := fmt.Sprintf("%d:%d:%d", p.setNum, p.gameNum, p.pointNum)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-
-			if p.setNum > lastSet && lastSet > 0 {
-				if lastHomeGames > lastAwayGames {
-					setsHome++
-				} else if lastAwayGames > lastHomeGames {
-					setsAway++
-				} else if lastScorer != 0 {
-					if lastScorer == 1 {
-						setsHome++
-					} else {
-						setsAway++
-					}
+			ptTime := time.UnixMilli(p.ts)
+			strat.SetReplayTime(ptTime)
+			for _, mkt := range []string{homeMkt, awayMkt} {
+				ticks := tickPrices[mkt]
+				for tickIdx[mkt] < len(ticks) && ticks[tickIdx[mkt]].ts <= p.ts {
+					strat.OnPriceAt(mkt, ticks[tickIdx[mkt]].price, time.UnixMilli(ticks[tickIdx[mkt]].ts))
+					tickIdx[mkt]++
 				}
 			}
-			lastSet = p.setNum
-			lastHomeGames = p.homeGames
-			lastAwayGames = p.awayGames
-			lastScorer = p.scorer
+			strat.OnPoints([]store.Point{{
+				MatchTicker: matchTicker,
+				SetNumber:   p.setNum,
+				GameNumber:  p.gameNum,
+				PointNumber: p.pointNum,
+				Server:      p.server,
+				Scorer:      p.scorer,
+				HomePoints:  p.homePts,
+				AwayPoints:  p.awayPts,
+				HomeGames:   p.homeGames,
+				AwayGames:   p.awayGames,
+				IsTiebreak:  p.isTiebreak,
+				TsMs:        p.ts,
+			}})
+		}
 
-			homeNeedsSet := setsToWin - setsHome
-			awayNeedsSet := setsToWin - setsAway
-			if homeNeedsSet <= 0 || awayNeedsSet <= 0 {
+		for _, o := range collector.Orders() {
+			if *minPrice > 0 && o.MarketPrice < *minPrice {
 				continue
 			}
-
-			if p.isTiebreak {
-				continue
-			}
-
-			homeCanWin := canWinGame(p.homePts, p.awayPts, p.server, 1)
-			awayCanWin := canWinGame(p.homePts, p.awayPts, p.server, 2)
-
-			homeMP := homeNeedsSet == 1 && homeCanWin && p.homeGames >= gamesPerSet-1 && p.homeGames > p.awayGames
-			awayMP := awayNeedsSet == 1 && awayCanWin && p.awayGames >= gamesPerSet-1 && p.awayGames > p.homeGames
-
-			if !homeMP && !awayMP {
-				continue
-			}
-
-			winner := 2
-			ctxStr := "away_match_point"
-			mktTicker := awayMkt
-			if homeMP {
-				winner = 1
-				ctxStr = "home_match_point"
-				mktTicker = homeMkt
-			}
-
-			isServing := (winner == 1 && p.server == 1) || (winner == 2 && p.server == 2)
-			if !isServing {
-				continue
-			}
-
-			price := getPriceAt(tickPrices, mktTicker, p.ts)
-			if price <= 0 {
-				continue
-			}
-			if price < *minPrice {
-				continue
-			}
-
-			edgeCents := int((serveConvProb-price)*100 + 1e-9)
-			if edgeCents < minEdgeCents {
-				continue
-			}
-
-			size := suggestedSize(edgeCents)
-
 			mktResult := ""
 			for _, m := range mkts {
-				if m.marketTicker == mktTicker {
+				if m.marketTicker == o.MarketTicker {
 					mktResult = m.result
 					break
 				}
@@ -271,18 +267,14 @@ func main() {
 			won := mktResult == "yes"
 			var pnl float64
 			if won {
-				pnl = size * (1.0 - price)
+				pnl = o.SuggestedSize * (1.0 - o.MarketPrice)
 			} else {
-				pnl = -size * price
+				pnl = -o.SuggestedSize * o.MarketPrice
 			}
-
 			orders = append(orders, order{
-				match: matchTicker, market: mktTicker, context: ctxStr,
-				setNum: p.setNum, gameNum: p.gameNum, pointNum: p.pointNum,
-				server: p.server, scorer: p.scorer,
-				homeGames: p.homeGames, awayGames: p.awayGames,
-				homePts: p.homePts, awayPts: p.awayPts,
-				price: price, edgeCents: edgeCents, size: size,
+				match: o.MatchTicker, market: o.MarketTicker, context: o.Context,
+				setNum: o.SetNumber,
+				price:  o.MarketPrice, edgeCents: o.EdgeCents, size: o.SuggestedSize,
 				won: won, pnl: pnl, result: mktResult,
 			})
 		}
@@ -290,7 +282,7 @@ func main() {
 
 	// Summary
 	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
-	fmt.Println("BACKTEST RESULTS")
+	fmt.Printf("BACKTEST RESULTS — strategy: %s\n", *strategyName)
 	fmt.Printf("%s\n", strings.Repeat("=", 80))
 	fmt.Printf("Matches with both points and markets: %d\n", both)
 	fmt.Printf("Total signals: %d\n", len(orders))
@@ -338,7 +330,7 @@ func main() {
 		if orders[i].match != orders[j].match {
 			return orders[i].match < orders[j].match
 		}
-		return orders[i].pointNum < orders[j].pointNum
+		return orders[i].setNum < orders[j].setNum
 	})
 
 	fmt.Printf("\n%-45s %-20s %6s %5s %6s %4s %8s\n", "match", "ctx", "price", "edge", "size", "won", "pnl")
@@ -353,47 +345,47 @@ func main() {
 	}
 }
 
-func canWinGame(homePts, awayPts string, server, player int) bool {
-	h := normalizeScore(homePts)
-	a := normalizeScore(awayPts)
-	if player == 1 {
-		return h == "A" || (h == "40" && a != "40" && a != "A")
+// orderMarketsByTitle determines [home, away] market order from the event title.
+// Kalshi titles are "Home vs Away". Falls back to DB order if matching fails.
+func orderMarketsByTitle(eventTicker string, mkts []marketRow) (home, away string) {
+	if len(mkts) < 2 {
+		return mkts[0].marketTicker, ""
 	}
-	return a == "A" || (a == "40" && h != "40" && h != "A")
-}
+	title, ok := eventTitles[eventTicker]
+	if !ok {
+		return mkts[0].marketTicker, mkts[1].marketTicker
+	}
+	parts := strings.SplitN(title, " vs ", 2)
+	if len(parts) != 2 {
+		return mkts[0].marketTicker, mkts[1].marketTicker
+	}
+	homeLN := lastName(strings.TrimSpace(parts[0]))
 
-func normalizeScore(s string) string {
-	switch s {
-	case "0", "15", "30", "40", "A":
-		return s
-	default:
-		return ""
-	}
-}
-
-func suggestedSize(edgeCents int) float64 {
-	size := baseSize * float64(edgeCents) / float64(minEdgeCents)
-	if size > maxSize {
-		size = maxSize
-	}
-	return size
-}
-
-func getPriceAt(prices map[string][]tickPrice, marketTicker string, ts int64) float64 {
-	ticks := prices[marketTicker]
-	if len(ticks) == 0 {
-		return 0
-	}
-	lo, hi := 0, len(ticks)-1
-	result := 0.0
-	for lo <= hi {
-		mid := (lo + hi) / 2
-		if ticks[mid].ts <= ts {
-			result = ticks[mid].price
-			lo = mid + 1
-		} else {
-			hi = mid - 1
+	for _, m := range mkts {
+		if lastName(m.playerName) == homeLN {
+			return m.marketTicker, otherMarket(mkts, m.marketTicker)
 		}
 	}
-	return result
+	return mkts[0].marketTicker, mkts[1].marketTicker
+}
+
+func lastName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	parts := strings.Fields(name)
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSuffix(parts[len(parts)-1], "."))
+}
+
+func otherMarket(mkts []marketRow, skip string) string {
+	for _, m := range mkts {
+		if m.marketTicker != skip {
+			return m.marketTicker
+		}
+	}
+	return ""
 }
