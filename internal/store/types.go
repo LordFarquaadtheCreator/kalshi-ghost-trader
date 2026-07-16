@@ -98,37 +98,55 @@ type OrderbookEvent struct {
 // FSMatch maps a flashscore_matches row. Links Kalshi event_ticker to
 // FlashScore's internal match ID.
 type FSMatch struct {
-	FSMatchID     string
-	EventTicker   string // nullable until mapped to Kalshi event
-	HomePlayer    string
-	AwayPlayer    string
-	Tournament    string
-	Surface       string
-	Category      string
-	StartTS       int64
-	FSStatus      int
-	LastPolledTS  int64
+	FSMatchID    string
+	EventTicker  string // nullable until mapped to Kalshi event
+	HomePlayer   string
+	AwayPlayer   string
+	Tournament   string
+	Surface      string
+	Category     string
+	StartTS      int64
+	FSStatus     int
+	LastPolledTS int64
 }
 
 // Point maps a single tennis point from FlashScore point-by-point data.
 // Server/scorer use 1=home, 2=away. Ticker refers to Kalshi event_ticker.
 type Point struct {
-	MatchTicker   string
-	FSMatchID     string
-	TsMs          int64 // 0 = unknown (historical backfill)
-	RecvTS        int64
-	SetNumber     int
-	GameNumber    int
-	PointNumber   int
-	Server        int // 1 or 2
-	Scorer        int // 1 or 2
-	HomePoints    string
-	AwayPoints    string
-	HomeGames     int
-	AwayGames     int
-	HomeSetGames  int // nullable
-	AwaySetGames  int // nullable
-	IsTiebreak    bool
-	IsBreakPoint  bool
-	Payload       string
+	MatchTicker  string
+	FSMatchID    string
+	TsMs         int64 // 0 = unknown (historical backfill)
+	RecvTS       int64
+	SetNumber    int
+	GameNumber   int
+	PointNumber  int
+	Server       int // 1 or 2
+	Scorer       int // 1 or 2
+	HomePoints   string
+	AwayPoints   string
+	HomeGames    int
+	AwayGames    int
+	HomeSetGames int // nullable
+	AwaySetGames int // nullable
+	IsTiebreak   bool
+	IsBreakPoint bool
+	IsMatchPoint bool
+	IsSetPoint   bool
+	Payload      string
+}
+
+// Order maps a simulated buy order from the match point signal algorithm.
+// Traceable to the match via match_ticker (event_ticker) and market_ticker.
+type Order struct {
+	TS            int64
+	MatchTicker   string  // Kalshi event_ticker
+	MarketTicker  string  // Kalshi market_ticker (YES side)
+	Action        string  // "buy"
+	Context       string  // match point context description
+	ConvProb      float64 // converted probability (0-1)
+	MarketPrice   float64 // market YES price (0-1)
+	EdgeCents     int     // edge in cents
+	SuggestedSize float64 // suggested buy size (shares)
+	SetNumber     int     // set when signal fired
+	Payload       string  // extra debug info (JSON)
 }

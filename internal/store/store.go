@@ -1,3 +1,34 @@
+// Package store implements the SQLite persistence layer for the ghost-trader service.
+//
+// The DB struct wraps a single SQLite connection configured with WAL mode,
+// synchronous=NORMAL, and a 64MB page cache. A single-writer architecture
+// is enforced via MaxOpenConns=1 — all writes are serialized.
+//
+// Data is ingested through TickWriter, a dedicated goroutine that batches
+// inserts across five buffered channels: ticks, orderbook events, lifecycle
+// events, event lifecycle events, and FlashScore points. Non-blocking ingest
+// drops on full buffer with a warning log.
+//
+// Tables:
+//   - events — tennis match events (PK: event_ticker)
+//   - markets — two per event, one per player (PK: market_ticker, FK: event_ticker)
+//   - ticks — every WS ticker/trade message with raw JSON payload (no FK — log table)
+//   - orderbook_events — orderbook snapshots and deltas (no FK — log table)
+//   - lifecycle_events — market_lifecycle_v2 WS events (no FK — log table)
+//   - event_lifecycle_events — event_lifecycle WS messages (no FK — log table)
+//   - scan_runs — scanner audit log
+//   - flashscore_matches — FlashScore to Kalshi event mapping
+//   - points — FlashScore point-by-point tennis score data (no FK — log table)
+//
+// Log tables (ticks, orderbook_events, lifecycle_events, event_lifecycle_events,
+// points) intentionally have no foreign keys — WS messages can arrive before
+// the scanner stores the parent market/event, and rejecting them would cause
+// data loss. Orphan cleanup is handled by [DB.CleanOrphans].
+//
+// Cascade triggers on events and markets handle child row deletion when a
+// market or event is removed. The janitor ([DB.CleanOrphans], [DB.AdoptOrphans])
+// removes orphaned rows older than 6 hours and attempts to parent orphan
+// event lifecycle events by creating missing event records.
 package store
 
 import (
@@ -59,6 +90,12 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if err := addColumnIfMissing(ctx, db, "lifecycle_events", "settlement_value", "TEXT"); err != nil {
 		return fmt.Errorf("migrate settlement_value: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "points", "is_match_point", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate is_match_point: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "points", "is_set_point", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate is_set_point: %w", err)
 	}
 
 	return nil
