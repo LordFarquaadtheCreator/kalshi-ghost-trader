@@ -6,7 +6,8 @@
 //	go run ./cmd/backtest -strategy <name> [flags]
 //
 // Default db_path is kalshi_tennis.db in the current directory.
-// Available strategies: matchpoint
+// Available strategies: matchpoint, matchpoint-aggro, setpoint, setpoint-serve,
+// setpoint-cheap, fadelongshot
 package main
 
 import (
@@ -37,9 +38,45 @@ type replayStrategy interface {
 // strategyFactory creates a new strategy instance for backtest.
 type strategyFactory func(emitter algorithms.OrderEmitter, log *slog.Logger) replayStrategy
 
+// closeTimeStrategy is an optional interface for strategies that need
+// close_ts (e.g. fade-longshot). The backtest engine calls RegisterCloseTime
+// if the strategy implements this.
+type closeTimeStrategy interface {
+	RegisterCloseTime(eventTicker string, closeTs int64)
+}
+
 var strategies = map[string]strategyFactory{
 	"matchpoint": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		return algorithms.NewMatchPointStrategy(em, log)
+	},
+	"matchpoint-aggro": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewSetPointStrategy(em, log, algorithms.SetPointConfig{
+			IncludeSetPoints: false,
+			IncludeReturning: true,
+			ServeConvProb:    0.97,
+			ReturnConvProb:   0.89,
+			MinMarketPrice:   0.05,
+			MinEdgeCents:     1,
+			Label:            "matchpoint-aggro",
+		})
+	},
+	"setpoint": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewSetPointStrategy(em, log, algorithms.DefaultSetPointConfig())
+	},
+	"setpoint-serve": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		cfg := algorithms.DefaultSetPointConfig()
+		cfg.IncludeReturning = false
+		cfg.Label = "setpoint-serve"
+		return algorithms.NewSetPointStrategy(em, log, cfg)
+	},
+	"setpoint-cheap": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		cfg := algorithms.DefaultSetPointConfig()
+		cfg.MaxMarketPrice = 0.50
+		cfg.Label = "setpoint-cheap"
+		return algorithms.NewSetPointStrategy(em, log, cfg)
+	},
+	"fadelongshot": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewFadeLongshotStrategy(em, log, algorithms.DefaultFadeLongshotConfig())
 	},
 }
 
@@ -136,18 +173,23 @@ func main() {
 	// Load markets
 	fmt.Println("Loading markets...")
 	markets := make(map[string][]marketRow)
-	marketRows, err := db.QueryContext(ctx, `SELECT event_ticker, market_ticker, player_name, result, status FROM markets ORDER BY event_ticker, market_ticker`)
+	marketCloseTs := make(map[string]int64)
+	marketRows, err := db.QueryContext(ctx, `SELECT event_ticker, market_ticker, player_name, result, status, close_ts FROM markets ORDER BY event_ticker, market_ticker`)
 	if err != nil {
 		log.Error("query markets", "err", err)
 		os.Exit(1)
 	}
 	for marketRows.Next() {
 		var et, mt, pn, res, st string
-		if err := marketRows.Scan(&et, &mt, &pn, &res, &st); err != nil {
+		var closeTs sql.NullInt64
+		if err := marketRows.Scan(&et, &mt, &pn, &res, &st, &closeTs); err != nil {
 			log.Error("scan market", "err", err)
 			os.Exit(1)
 		}
 		markets[et] = append(markets[et], marketRow{mt, pn, res, st})
+		if closeTs.Valid && closeTs.Int64 > 0 {
+			marketCloseTs[et] = closeTs.Int64
+		}
 	}
 	marketRows.Close()
 
@@ -280,6 +322,11 @@ func main() {
 		}
 	}
 
+	// Close-time backtest path: for strategies that trade based on price
+	// near market close (e.g. fadelongshot). These don't need points data.
+	closeOrders := runCloseTimeBacktest(factory, log, markets, marketCloseTs, tickPrices, eventTitles, *minPrice)
+	orders = append(orders, closeOrders...)
+
 	// Summary
 	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
 	fmt.Printf("BACKTEST RESULTS — strategy: %s\n", *strategyName)
@@ -388,4 +435,92 @@ func otherMarket(mkts []marketRow, skip string) string {
 		}
 	}
 	return ""
+}
+
+// runCloseTimeBacktest replays tick data through strategies that use
+// close_ts (e.g. fadelongshot). Iterates ALL finalized events with both
+// markets and close_ts, not just those with points data.
+func runCloseTimeBacktest(
+	factory strategyFactory,
+	log *slog.Logger,
+	markets map[string][]marketRow,
+	marketCloseTs map[string]int64,
+	tickPrices map[string][]tickPrice,
+	eventTitles map[string]string,
+	minPrice float64,
+) []order {
+	collector := algorithms.NewOrderCollector()
+	strat := factory(collector, log)
+
+	cts, ok := strat.(closeTimeStrategy)
+	if !ok {
+		return nil
+	}
+
+	var orders []order
+	both := 0
+	for matchTicker, mkts := range markets {
+		closeTs, ok := marketCloseTs[matchTicker]
+		if !ok || closeTs == 0 {
+			continue
+		}
+		if len(mkts) < 2 {
+			continue
+		}
+		// Only finalized markets
+		finalized := false
+		for _, m := range mkts {
+			if m.status == "finalized" {
+				finalized = true
+				break
+			}
+		}
+		if !finalized {
+			continue
+		}
+		both++
+
+		homeMkt, awayMkt := orderMarketsByTitle(matchTicker, mkts)
+		cts.RegisterCloseTime(matchTicker, closeTs)
+		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
+
+		// Replay all ticks for both markets in chronological order
+		for _, mkt := range []string{homeMkt, awayMkt} {
+			ticks := tickPrices[mkt]
+			for _, t := range ticks {
+				strat.OnPriceAt(mkt, t.price, time.UnixMilli(t.ts))
+			}
+		}
+		strat.UnregisterMarkets(matchTicker)
+	}
+
+	fmt.Printf("Close-time backtest: scanned %d finalized events with close_ts\n", both)
+
+	for _, o := range collector.Orders() {
+		if minPrice > 0 && o.MarketPrice < minPrice {
+			continue
+		}
+		mktResult := ""
+		for _, m := range markets[o.MatchTicker] {
+			if m.marketTicker == o.MarketTicker {
+				mktResult = m.result
+				break
+			}
+		}
+		won := mktResult == "yes"
+		var pnl float64
+		if won {
+			pnl = o.SuggestedSize * (1.0 - o.MarketPrice)
+		} else {
+			pnl = -o.SuggestedSize * o.MarketPrice
+		}
+		orders = append(orders, order{
+			match: o.MatchTicker, market: o.MarketTicker, context: o.Context,
+			setNum: o.SetNumber,
+			price:  o.MarketPrice, edgeCents: o.EdgeCents, size: o.SuggestedSize,
+			won: won, pnl: pnl, result: mktResult,
+		})
+	}
+
+	return orders
 }
