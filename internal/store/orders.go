@@ -18,8 +18,8 @@ func (d *DB) InsertOrdersBatch(ctx context.Context, orders []Order) error {
 
 	stmt, err := tx.PrepareContext(ctx, `
 INSERT INTO orders (ts, match_ticker, market_ticker, action, context,
-    conv_prob, market_price, edge_cents, suggested_size, set_number, payload)
-VALUES (?,?,?,?,?, ?,?,?,?, ?,?)`)
+    conv_prob, market_price, edge_cents, suggested_size, set_number, strategy, payload)
+VALUES (?,?,?,?,?, ?,?,?,?, ?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -32,7 +32,7 @@ VALUES (?,?,?,?,?, ?,?,?,?, ?,?)`)
 		}
 		if _, err := stmt.ExecContext(ctx,
 			o.TS, o.MatchTicker, o.MarketTicker, o.Action, o.Context,
-			o.ConvProb, o.MarketPrice, o.EdgeCents, o.SuggestedSize, o.SetNumber, payload,
+			o.ConvProb, o.MarketPrice, o.EdgeCents, o.SuggestedSize, o.SetNumber, o.Strategy, payload,
 		); err != nil {
 			return err
 		}
@@ -44,7 +44,7 @@ VALUES (?,?,?,?,?, ?,?,?,?, ?,?)`)
 func (d *DB) GetOrders(ctx context.Context) ([]Order, error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT ts, match_ticker, market_ticker, action, context,
-		       conv_prob, market_price, edge_cents, suggested_size, set_number, payload
+		       conv_prob, market_price, edge_cents, suggested_size, set_number, strategy, payload
 		FROM orders ORDER BY ts`)
 	if err != nil {
 		return nil, err
@@ -56,7 +56,7 @@ func (d *DB) GetOrders(ctx context.Context) ([]Order, error) {
 		var o Order
 		var payload sql.NullString
 		if err := rows.Scan(&o.TS, &o.MatchTicker, &o.MarketTicker, &o.Action, &o.Context,
-			&o.ConvProb, &o.MarketPrice, &o.EdgeCents, &o.SuggestedSize, &o.SetNumber, &payload); err != nil {
+			&o.ConvProb, &o.MarketPrice, &o.EdgeCents, &o.SuggestedSize, &o.SetNumber, &o.Strategy, &payload); err != nil {
 			return nil, err
 		}
 		o.Payload = payload.String

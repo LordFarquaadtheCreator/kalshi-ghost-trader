@@ -97,6 +97,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := addColumnIfMissing(ctx, db, "points", "is_set_point", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("migrate is_set_point: %w", err)
 	}
+	if err := addColumnIfMissing(ctx, db, "orders", "strategy", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate orders.strategy: %w", err)
+	}
 
 	return nil
 }

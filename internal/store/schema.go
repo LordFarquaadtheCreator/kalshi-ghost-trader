@@ -193,6 +193,7 @@ CREATE TABLE IF NOT EXISTS orders (
     edge_cents      INTEGER NOT NULL,       -- edge in cents (conv_prob - market_price, in cents)
     suggested_size  REAL NOT NULL,          -- suggested buy size (shares)
     set_number      INTEGER NOT NULL,       -- set when signal fired
+    strategy        TEXT NOT NULL DEFAULT '', -- which strategy generated this order
     payload         TEXT                    -- extra debug info (JSON)
 );
 CREATE INDEX IF NOT EXISTS idx_orders_match_ts ON orders(match_ticker, ts);

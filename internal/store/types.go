@@ -148,5 +148,6 @@ type Order struct {
 	EdgeCents     int     // edge in cents
 	SuggestedSize float64 // suggested buy size (shares)
 	SetNumber     int     // set when signal fired
+	Strategy      string  // strategy name that generated this order
 	Payload       string  // extra debug info (JSON)
 }
