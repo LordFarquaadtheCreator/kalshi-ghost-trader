@@ -180,6 +180,7 @@ cmd/ghost-trader/        entrypoint, signal handling, errgroup wiring
 cmd/ghost-trader/metrics.go  runtime metrics + pprof HTTP handlers
 cmd/validate/            config + connectivity validation tool
 cmd/ws-debug/            WS + REST debug tool
+cmd/backtest/           replay historical data through match-point strategy
 internal/config/         YAML config loading
 internal/kalshiauth/     RSA-PSS-SHA256 request signing
 internal/kalshiclient/   REST client (events, markets, pagination, rate limit)
@@ -212,6 +213,11 @@ go run ./cmd/validate
 
 # Debug WS handshake + REST signing
 go run ./cmd/ws-debug
+
+# Backtest match-point strategy on historical data
+go run ./cmd/backtest -db kalshi_tennis.db
+# Skip dead/illiquid markets (price < 0.05)
+go run ./cmd/backtest -db kalshi_tennis.db -min-price 0.05
 ```
 
 ## Notebooks

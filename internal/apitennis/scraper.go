@@ -3,6 +3,7 @@ package apitennis
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -46,7 +47,7 @@ type matchWorker struct {
 	eventKey    int
 	ch          chan WSEvent
 	done        chan struct{}
-	pointCount  int // total points seen (replaces DB query for diffing)
+	seenKeys    map[string]bool // "set:game:point" → ingested, survives restarts
 	tickWriter  *store.TickWriter
 	signal      *signal.Generator
 	log         *slog.Logger
@@ -69,10 +70,17 @@ func New(db *store.DB, tw *store.TickWriter, sig *signal.Generator, apiKey, time
 // StartPolling is called by the tracker when an event's markets are subscribed.
 // Creates a per-match worker goroutine and registers markets with the signal generator.
 func (s *Scraper) StartPolling(eventTicker string) {
+	seenKeys, err := s.db.GetSeenPointKeys(context.Background(), eventTicker)
+	if err != nil {
+		s.log.Error("apitennis: load seen keys", "err", err, "event", eventTicker)
+		seenKeys = make(map[string]bool)
+	}
+
 	w := &matchWorker{
 		eventTicker: eventTicker,
 		ch:          make(chan WSEvent, 64),
 		done:        make(chan struct{}),
+		seenKeys:    seenKeys,
 		tickWriter:  s.tickWriter,
 		signal:      s.signal,
 		log:         s.log,
@@ -270,62 +278,23 @@ func (w *matchWorker) run() {
 	}
 }
 
-// processEvent flattens points from the WSEvent, diffs against the
-// worker's point counter, and ingests new points.
+// processEvent flattens points from the WSEvent, dedups via seenKeys,
+// and ingests new points.
 func (w *matchWorker) processEvent(ev WSEvent) {
-	var allPoints []flattenedPoint
-	for _, setData := range ev.PointByPoint {
-		setNum := parseSetNumber(setData.SetNumber)
-		server := parseServer(setData.PlayerServed)
-		homeGames, awayGames := parseScore(setData.Score)
-		homeGamesInt, _ := strconv.Atoi(homeGames)
-		awayGamesInt, _ := strconv.Atoi(awayGames)
-
-		gameWinner := parseServer(setData.ServeWinner)
-
-		var prevHome, prevAway string
-		for i, pt := range setData.Points {
-			homePts, awayPts := parseScore(pt.Score)
-			scorer := deriveScorer(prevHome, prevAway, homePts, awayPts, gameWinner, i == len(setData.Points)-1)
-
-			fp := flattenedPoint{
-				setNumber:    setNum,
-				gameNumber:   parseInt(setData.NumberGame),
-				pointNumber:  parseInt(pt.NumberPoint),
-				server:       server,
-				scorer:       scorer,
-				homePoints:   homePts,
-				awayPoints:   awayPts,
-				homeGames:    homeGamesInt,
-				awayGames:    awayGamesInt,
-				isBreakPoint: pt.BreakPoint != nil,
-				isMatchPoint: pt.MatchPoint != nil,
-				isSetPoint:   pt.SetPoint != nil,
-			}
-			allPoints = append(allPoints, fp)
-			prevHome, prevAway = homePts, awayPts
-		}
-	}
-
+	allPoints := flattenPoints(ev)
 	if len(allPoints) == 0 {
-		return
-	}
-
-	// Diff against in-memory counter — no DB query needed
-	startIdx := w.pointCount
-	if startIdx > len(allPoints) {
-		startIdx = len(allPoints)
-	}
-	newPoints := allPoints[startIdx:]
-	w.pointCount = len(allPoints)
-
-	if len(newPoints) == 0 {
 		return
 	}
 
 	now := time.Now().UnixMilli()
 	var pts []store.Point
-	for _, fp := range newPoints {
+	for _, fp := range allPoints {
+		key := fmt.Sprintf("%d:%d:%d", fp.setNumber, fp.gameNumber, fp.pointNumber)
+		if w.seenKeys[key] {
+			continue
+		}
+		w.seenKeys[key] = true
+
 		payload, _ := json.Marshal(map[string]any{
 			"source":      "apitennis",
 			"event_key":   ev.EventKey,
@@ -364,6 +333,10 @@ func (w *matchWorker) processEvent(ev WSEvent) {
 		})
 	}
 
+	if len(pts) == 0 {
+		return
+	}
+
 	w.tickWriter.IngestPoints(pts)
 
 	if w.signal != nil {
@@ -373,6 +346,62 @@ func (w *matchWorker) processEvent(ev WSEvent) {
 	w.log.Info("apitennis: new points ingested",
 		"event", w.eventTicker, "event_key", ev.EventKey,
 		"new", len(pts), "total", len(allPoints))
+}
+
+// flattenPoints converts a WSEvent into flattenedPoints with correct running
+// game counts computed from ServeWinner. setData.Score is unreliable —
+// API-Tennis sends stale/zero values for later games in a set.
+func flattenPoints(ev WSEvent) []flattenedPoint {
+	var allPoints []flattenedPoint
+
+	type setGames struct{ home, away int }
+	setGameCounts := make(map[int]*setGames)
+
+	for _, setData := range ev.PointByPoint {
+		setNum := parseSetNumber(setData.SetNumber)
+		server := parseServer(setData.PlayerServed)
+		gameWinner := parseServer(setData.ServeWinner)
+
+		sg, ok := setGameCounts[setNum]
+		if !ok {
+			sg = &setGames{}
+			setGameCounts[setNum] = sg
+		}
+
+		homeGamesInt := sg.home
+		awayGamesInt := sg.away
+
+		var prevHome, prevAway string
+		for i, pt := range setData.Points {
+			homePts, awayPts := parseScore(pt.Score)
+			scorer := deriveScorer(prevHome, prevAway, homePts, awayPts, gameWinner, i == len(setData.Points)-1)
+
+			fp := flattenedPoint{
+				setNumber:    setNum,
+				gameNumber:   parseInt(setData.NumberGame),
+				pointNumber:  parseInt(pt.NumberPoint),
+				server:       server,
+				scorer:       scorer,
+				homePoints:   homePts,
+				awayPoints:   awayPts,
+				homeGames:    homeGamesInt,
+				awayGames:    awayGamesInt,
+				isBreakPoint: pt.BreakPoint != nil,
+				isMatchPoint: pt.MatchPoint != nil,
+				isSetPoint:   pt.SetPoint != nil,
+			}
+			allPoints = append(allPoints, fp)
+			prevHome, prevAway = homePts, awayPts
+		}
+
+		if gameWinner == 1 {
+			sg.home++
+		} else if gameWinner == 2 {
+			sg.away++
+		}
+	}
+
+	return allPoints
 }
 
 // flattenedPoint is an intermediate representation before converting to store.Point.

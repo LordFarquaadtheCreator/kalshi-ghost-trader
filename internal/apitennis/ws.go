@@ -15,8 +15,8 @@ import (
 // The server pushes match updates as JSON messages whenever a live match
 // changes state (point won, game/set completed, etc).
 type WSClient struct {
-	url    string
-	log    *slog.Logger
+	url        string
+	log        *slog.Logger
 	minBackoff time.Duration
 	maxBackoff time.Duration
 }
@@ -43,6 +43,8 @@ func (w *WSClient) Connect(ctx context.Context) (*websocket.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ws dial: %w", err)
 	}
+	// API-Tennis sends full pointbypoint data on every push — long matches exceed 32KB default.
+	conn.SetReadLimit(1 << 20) // 1MB
 	return conn, nil
 }
 

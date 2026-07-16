@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 // InsertPointsBatch inserts a batch of points in one transaction.
@@ -112,6 +113,29 @@ ORDER BY ts_ms`, matchTicker)
 		pts = append(pts, p)
 	}
 	return pts, rows.Err()
+}
+
+// GetSeenPointKeys returns a set of "set:game:point" keys for all distinct
+// points already stored for a match. Used to dedup on worker restart —
+// API-Tennis re-sends full pointbypoint data on every WS push.
+func (d *DB) GetSeenPointKeys(ctx context.Context, matchTicker string) (map[string]bool, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT DISTINCT set_number, game_number, point_number FROM points WHERE match_ticker = ?`,
+		matchTicker)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	keys := make(map[string]bool)
+	for rows.Next() {
+		var setNum, gameNum, ptNum int
+		if err := rows.Scan(&setNum, &gameNum, &ptNum); err != nil {
+			return nil, err
+		}
+		keys[fmt.Sprintf("%d:%d:%d", setNum, gameNum, ptNum)] = true
+	}
+	return keys, rows.Err()
 }
 
 // GetSettledMarkets returns recently settled markets with results, ordered by close_ts desc.
