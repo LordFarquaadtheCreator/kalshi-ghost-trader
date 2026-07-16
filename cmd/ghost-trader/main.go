@@ -1,3 +1,19 @@
+// Command ghost-trader is the main entrypoint for the Kalshi Ghost Trader service.
+//
+// It loads configuration from config.yaml, initializes an RSA signer for Kalshi
+// API authentication, opens a SQLite database with WAL mode, and launches all
+// core goroutines via errgroup:
+//
+//   - TickWriter — single SQLite writer for batched tick/orderbook/lifecycle/points inserts
+//   - WebSocket Manager — auto-reconnecting connection to Kalshi's real-time feed
+//   - Scanner — periodic REST scan for new tennis events and markets
+//   - Scheduler — starts per-market WS tracking at occurrence_datetime minus lead time
+//   - FlashScore Scraper — optional point-by-point tennis data polling
+//   - Metrics Server — runtime stats + pprof on 127.0.0.1 (default port 6060)
+//
+// SIGINT/SIGTERM triggers graceful shutdown: root context is cancelled, errgroup
+// waits for all goroutines to exit, tracker unsubscribes all markets, and the
+// database is closed after the TickWriter has flushed remaining batches.
 package main
 
 import (
@@ -14,12 +30,14 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/apitennis"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/flashscore"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scheduler"
+	sigpkg "github.com/farquaad/kalshi-ghost-trader/internal/signal"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 	"github.com/farquaad/kalshi-ghost-trader/internal/tracker"
 	wsclient "github.com/farquaad/kalshi-ghost-trader/internal/ws"
@@ -65,14 +83,60 @@ func main() {
 	restClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
 		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
 
+	// Signal generator (match point detection + simulated buy orders)
+	sigGen := sigpkg.New(tickWriter, log)
+
+	// Close timer strategy (buy favorite N min before close)
+	var closeTimer *sigpkg.CloseTimer
+	if cfg.CloseTimerEnabled {
+		closeTimer = sigpkg.NewCloseTimer(db, sigGen, tickWriter,
+			cfg.CloseTimerLeadMin, cfg.CloseTimerMinPrice, cfg.CloseTimerSize, log)
+		log.Info("close timer strategy enabled",
+			"lead_min", cfg.CloseTimerLeadMin,
+			"min_price", cfg.CloseTimerMinPrice,
+			"size", cfg.CloseTimerSize)
+	}
+
 	// WebSocket manager
 	wsMgr := wsclient.NewManager(cfg.WSURL, signer, tickWriter, cfg.SeriesTickers,
 		time.Duration(cfg.WSMinBackoffSecs)*time.Second,
 		time.Duration(cfg.WSMaxBackoffSecs)*time.Second,
 		log)
+	wsMgr.SetPriceUpdater(sigGen)
+
+	// FlashScore scraper (optional — created before tracker so tracker can drive polling)
+	var fsScraper *flashscore.Scraper
+	if cfg.FlashScoreEnabled {
+		fsScan := time.Duration(cfg.FlashScoreScanInterval) * time.Second
+		fsPoll := time.Duration(cfg.FlashScorePollInterval) * time.Second
+		fsScraper = flashscore.New(db, tickWriter, sigGen, fsScan, fsPoll,
+			cfg.FlashScoreLookaheadDays, log)
+		log.Info("flashscore scraper enabled",
+			"scan_interval", fsScan, "poll_interval", fsPoll)
+	}
+
+	// API-Tennis scraper (optional — WebSocket real-time push, no polling delay)
+	var atScraper *apitennis.Scraper
+	if cfg.APITennisEnabled {
+		if cfg.APITennisAPIKey == "" {
+			log.Error("apitennis_enabled but apitennis_api_key is empty")
+			os.Exit(1)
+		}
+		atScraper = apitennis.New(db, tickWriter, sigGen, cfg.APITennisAPIKey,
+			cfg.APITennisTimezone, log)
+		log.Info("apitennis scraper enabled", "timezone", cfg.APITennisTimezone)
+	}
 
 	// Tracker (market subscription lifecycle)
-	tr := tracker.New(wsMgr, log)
+	// Score poller coupling: tracker drives polling on subscribe/unsubscribe
+	var scorePoller tracker.ScorePoller
+	if atScraper != nil {
+		scorePoller = atScraper
+	} else if fsScraper != nil {
+		scorePoller = fsScraper
+	}
+	tr := tracker.New(wsMgr, scorePoller, log)
+	tr.SetPriceCleaner(sigGen)
 
 	// Scanner
 	sc := scanner.New(restClient, db, cfg.SeriesTickers, log)
@@ -132,17 +196,25 @@ func main() {
 		return sched.Run(ctx, schedPoll)
 	})
 
-	// 5. FlashScore scraper (optional — polls tennis point-by-point data)
-	if cfg.FlashScoreEnabled {
-		fsScan := time.Duration(cfg.FlashScoreScanInterval) * time.Second
-		fsPoll := time.Duration(cfg.FlashScorePollInterval) * time.Second
-		fsScraper := flashscore.New(db, tickWriter, fsScan, fsPoll,
-			cfg.FlashScoreLookaheadDays, log)
+	// 5. FlashScore scraper goroutine (optional — polls tennis point-by-point data)
+	if fsScraper != nil {
 		g.Go(func() error {
 			return fsScraper.Run(ctx)
 		})
-		log.Info("flashscore scraper enabled",
-			"scan_interval", fsScan, "poll_interval", fsPoll)
+	}
+
+	// 5b. API-Tennis scraper goroutine (optional — WS real-time push)
+	if atScraper != nil {
+		g.Go(func() error {
+			return atScraper.Run(ctx)
+		})
+	}
+
+	// 6. Close timer strategy goroutine (optional — buys favorites near close)
+	if cfg.CloseTimerEnabled {
+		g.Go(func() error {
+			return closeTimer.Run(ctx, cfg.CloseTimerPollSecs)
+		})
 	}
 
 	log.Info("ghost trader running", "scan_interval", scanInterval, "lead_minutes", cfg.TrackLeadMinutes)
