@@ -99,11 +99,13 @@ copy even while the scraper is writing.
 
 ## Tennis Series
 
-8 core match-winner series:
-- KXATPMATCH, KXWTAMATCH (main tour)
-- KXITFMATCH, KXITFWMATCH (ITF)
-- KXATPCHALLENGERMATCH, KXWTACHALLENGERMATCH (Challenger)
-- KXTENNISEXHIBITION, KXCHALLENGERMATCH (exhibition/legacy)
+12 core match-winner series:
+- KXATPMATCH, KXWTAMATCH (main tour singles)
+- KXITFMATCH, KXITFWMATCH (ITF singles)
+- KXATPCHALLENGERMATCH, KXWTACHALLENGERMATCH (Challenger singles)
+- KXTENNISEXHIBITION, KXCHALLENGERMATCH (exhibition/legacy singles)
+- KXATPDOUBLES, KXWTADOUBLES (main tour doubles)
+- KXITFDOUBLES, KXITFWDOUBLES (ITF doubles)
 
 ## Python (notebooks)
 

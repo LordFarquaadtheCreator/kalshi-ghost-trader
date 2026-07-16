@@ -8,7 +8,7 @@ YAML-based configuration loading. All config via `config.yaml` (or `CONFIG_PATH`
 - `private_key_path` — path to RSA PEM private key
 - `environment` — `demo` or `prod` (determines REST/WS URLs)
 - `db_path` — SQLite file path (default: `kalshi_tennis.db`)
-- `series_tickers` — list of tennis series to scan (defaults to all 8 core series)
+- `series_tickers` — list of tennis series to scan (defaults to all 12 core series: 8 singles + 4 doubles)
 - `scan_interval_hours` — scanner poll interval (default: 24)
 - `track_lead_minutes` — start tracking N min before occurrence (default: 5)
 - `ws_min_backoff_secs` / `ws_max_backoff_secs` — reconnect backoff range (default: 1–30)
@@ -31,6 +31,6 @@ YAML-based configuration loading. All config via `config.yaml` (or `CONFIG_PATH`
 ## Gotchas
 
 - Demo vs prod URLs differ in host. Don't hardcode.
-- Series list must include all 8 core tennis series for full coverage.
+- Series list must include all 12 core tennis series for full coverage.
 - `CONFIG_PATH` env var overrides default `config.yaml` path.
 - `RESTBaseURL` and `WSURL` are derived (yaml:"-"), not user-set.

@@ -8,7 +8,7 @@ environment: demo
 # SQLite database path (relative to working dir)
 db_path: kalshi_tennis.db
 
-# Tennis series tickers to scan (defaults to all 8 core series if omitted)
+# Tennis series tickers to scan (defaults to all 12 core series if omitted)
 series_tickers:
   - KXATPMATCH
   - KXWTAMATCH
@@ -18,6 +18,10 @@ series_tickers:
   - KXWTACHALLENGERMATCH
   - KXTENNISEXHIBITION
   - KXCHALLENGERMATCH
+  - KXATPDOUBLES
+  - KXWTADOUBLES
+  - KXITFDOUBLES
+  - KXITFWDOUBLES
 
 # Scanner interval (hours between daily scans)
 scan_interval_hours: 24
