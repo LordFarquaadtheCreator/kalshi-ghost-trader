@@ -1,0 +1,10 @@
+{
+  "total_samples": 576,
+  "positive_rate": 0.2864583333333333,
+  "n_matches": 6,
+  "hmm_states": 3,
+  "horizon_sec": 30,
+  "best_model_auc": 0.6306870129726109,
+  "best_model_variant": "baseline",
+  "best_model_type": "xgboost"
+}

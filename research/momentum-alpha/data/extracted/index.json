@@ -1,0 +1,122 @@
+[
+  {
+    "match_ticker": "KXATPCHALLENGERMATCH-26JUL13VUKBRO",
+    "file": "data/extracted/KXATPCHALLENGERMATCH-26JUL13VUKBRO.json",
+    "home_player": "Vukic A.",
+    "away_player": "Broady L.",
+    "tournament": "Granby (Canada)",
+    "point_count": 173,
+    "tick_count": 52391,
+    "orderbook_snapshots": 7710,
+    "lifecycle_events": 0,
+    "span_sec": 7723
+  },
+  {
+    "match_ticker": "KXATPCHALLENGERMATCH-26JUL13ARSMAR",
+    "file": "data/extracted/KXATPCHALLENGERMATCH-26JUL13ARSMAR.json",
+    "home_player": "Martin D.",
+    "away_player": "Arseneault M.",
+    "tournament": "Granby (Canada) - Qualification",
+    "point_count": 173,
+    "tick_count": 31010,
+    "orderbook_snapshots": 5532,
+    "lifecycle_events": 0,
+    "span_sec": 19170
+  },
+  {
+    "match_ticker": "KXATPCHALLENGERMATCH-26JUL13ARSMAR",
+    "file": "data/extracted/KXATPCHALLENGERMATCH-26JUL13ARSMAR.json",
+    "home_player": "Arseneault N.",
+    "away_player": "Martin A.",
+    "tournament": "Granby (Canada)",
+    "point_count": 173,
+    "tick_count": 31010,
+    "orderbook_snapshots": 5532,
+    "lifecycle_events": 0,
+    "span_sec": 19170
+  },
+  {
+    "match_ticker": "KXATPCHALLENGERMATCH-26JUL13BOUZHA",
+    "file": "data/extracted/KXATPCHALLENGERMATCH-26JUL13BOUZHA.json",
+    "home_player": "Boulais J.",
+    "away_player": "Zhang Z.",
+    "tournament": "Granby (Canada)",
+    "point_count": 124,
+    "tick_count": 30745,
+    "orderbook_snapshots": 5422,
+    "lifecycle_events": 0,
+    "span_sec": 5449
+  },
+  {
+    "match_ticker": "KXITFWMATCH-26JUL13CROXUX",
+    "file": "data/extracted/KXITFWMATCH-26JUL13CROXUX.json",
+    "home_player": "Cross K.",
+    "away_player": "Xu A.",
+    "tournament": "W75 Granby (Canada)",
+    "point_count": 165,
+    "tick_count": 26663,
+    "orderbook_snapshots": 8035,
+    "lifecycle_events": 0,
+    "span_sec": 8342
+  },
+  {
+    "match_ticker": "KXATPCHALLENGERMATCH-26JUL13INCSTE",
+    "file": "data/extracted/KXATPCHALLENGERMATCH-26JUL13INCSTE.json",
+    "home_player": "Inchauspe P.",
+    "away_player": "Stewart H.",
+    "tournament": "Pozoblanco (Spain)",
+    "point_count": 166,
+    "tick_count": 25318,
+    "orderbook_snapshots": 2372,
+    "lifecycle_events": 0,
+    "span_sec": 4475
+  },
+  {
+    "match_ticker": "KXITFWMATCH-26JUL13CABPLE",
+    "file": "data/extracted/KXITFWMATCH-26JUL13CABPLE.json",
+    "home_player": "Cabrera L.",
+    "away_player": "Plekhanova D.",
+    "tournament": "W75 Granby (Canada)",
+    "point_count": 152,
+    "tick_count": 11691,
+    "orderbook_snapshots": 4246,
+    "lifecycle_events": 0,
+    "span_sec": 11749
+  },
+  {
+    "match_ticker": "KXATPCHALLENGERMATCH-26JUL13POLMIY",
+    "file": "data/extracted/KXATPCHALLENGERMATCH-26JUL13POLMIY.json",
+    "home_player": null,
+    "away_player": null,
+    "tournament": null,
+    "point_count": 221,
+    "tick_count": 11454,
+    "orderbook_snapshots": 6615,
+    "lifecycle_events": 6,
+    "span_sec": 65916
+  },
+  {
+    "match_ticker": "KXATPCHALLENGERMATCH-26JUL13NOGBRO",
+    "file": "data/extracted/KXATPCHALLENGERMATCH-26JUL13NOGBRO.json",
+    "home_player": "Noguchi R.",
+    "away_player": "Broom C.",
+    "tournament": "Lincoln (USA)",
+    "point_count": 161,
+    "tick_count": 9385,
+    "orderbook_snapshots": 795,
+    "lifecycle_events": 0,
+    "span_sec": 794
+  },
+  {
+    "match_ticker": "KXITFWMATCH-26JUL14ZELADA",
+    "file": "data/extracted/KXITFWMATCH-26JUL14ZELADA.json",
+    "home_player": "Zelnickova R.",
+    "away_player": "Adams J.",
+    "tournament": "W75 Olomouc (Czech Republic)",
+    "point_count": 198,
+    "tick_count": 3958,
+    "orderbook_snapshots": 560,
+    "lifecycle_events": 0,
+    "span_sec": 850
+  }
+]
