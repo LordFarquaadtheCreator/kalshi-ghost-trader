@@ -46,6 +46,8 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `internal/tracker/` — market subscription lifecycle (no per-match goroutine)
 - `internal/scheduler/` — schedules tracking at occurrence_datetime - lead
 - `internal/flashscore/` — FlashScore point-by-point scraper (optional)
+- `internal/apitennis/` — API-Tennis WebSocket real-time point-by-point scraper (optional)
+- `internal/signal/` — match-point detection, close-timer strategy, simulated order emission
 
 ## Concurrency Model
 
@@ -54,6 +56,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - One Scanner goroutine: daily REST scan
 - One Scheduler goroutine: polls DB, schedules match tracking
 - One FlashScore goroutine (if enabled): scan loop + point poll loop
+- One API-Tennis goroutine (if enabled): WS read loop, per-match dispatch
 - One goroutine per scheduled match: waits until start time, then subscribes
 
 ## SQLite Schema

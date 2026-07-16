@@ -176,30 +176,33 @@ Override with `series_tickers` in `config.yaml`.
 ## Architecture
 
 ```
-cmd/ghost-trader/     entrypoint, signal handling, errgroup wiring
-cmd/validate/         config + connectivity validation tool
-cmd/ws-debug/         WS + REST debug tool
-internal/config/      YAML config loading
+cmd/ghost-trader/        entrypoint, signal handling, errgroup wiring
 cmd/ghost-trader/metrics.go  runtime metrics + pprof HTTP handlers
-internal/kalshiauth/  RSA-PSS-SHA256 request signing
-internal/kalshiclient/  REST client (events, markets, pagination, rate limit)
-internal/store/       SQLite (WAL, single writer, batched inserts)
-internal/ws/          WebSocket manager (auto-reconnect, re-subscribe)
-internal/scanner/     daily series scan, stores new events/markets
-internal/tracker/     market subscription lifecycle (no per-match goroutine)
-internal/scheduler/   schedules tracking at occurrence_datetime - lead
-internal/flashscore/  FlashScore point-by-point scraper (optional)
+cmd/validate/            config + connectivity validation tool
+cmd/ws-debug/            WS + REST debug tool
+internal/config/         YAML config loading
+internal/kalshiauth/     RSA-PSS-SHA256 request signing
+internal/kalshiclient/   REST client (events, markets, pagination, rate limit)
+internal/store/          SQLite (WAL, single writer, batched inserts)
+internal/ws/             WebSocket manager (auto-reconnect, re-subscribe)
+internal/scanner/        daily series scan, stores new events/markets
+internal/tracker/        market subscription lifecycle (no per-match goroutine)
+internal/scheduler/      schedules tracking at occurrence_datetime - lead
+internal/flashscore/     FlashScore point-by-point scraper (optional)
+internal/apitennis/      API-Tennis WebSocket real-time point-by-point scraper
+internal/signal/         match-point detection + close-timer strategy + simulated orders
 ```
 
 Concurrency: one goroutine each for WS manager, tick writer, scanner,
-scheduler, FlashScore scraper (if enabled). One goroutine per scheduled
-match (waits until start time, then subscribes). All cancelled via root
-context on SIGINT/SIGTERM.
+scheduler, FlashScore scraper (if enabled), API-Tennis scraper (if enabled).
+One goroutine per scheduled match (waits until start time, then subscribes).
+All cancelled via root context on SIGINT/SIGTERM.
 
 ## Kalshi API docs
 
-Local copies in repo root (`gs_*.md`, `ws_*.md`, `openapi.yaml`). Official
-docs at <https://docs.kalshi.com>.
+Local copies in [`docs/kalshi-api/`](docs/kalshi-api/) (`gs_*.md`, `ws_*.md`,
+`openapi.yaml`). Design notes in [`docs/DESIGN.md`](docs/DESIGN.md).
+Official docs at <https://docs.kalshi.com>.
 
 ## Diagnostic tools
 
