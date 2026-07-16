@@ -37,6 +37,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `cmd/ghost-trader/` — entrypoint, signal handling, errgroup wiring
 - `cmd/validate/` — config + connectivity validation tool
 - `cmd/ws-debug/` — WS + REST debug tool
+- `cmd/backtest/` — replay historical data through trading strategies
 - `internal/config/` — YAML config loading
 - `internal/kalshiauth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
 - `internal/kalshiclient/` — REST client (events, markets, pagination, rate limit)
@@ -47,7 +48,8 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `internal/scheduler/` — schedules tracking at occurrence_datetime - lead
 - `internal/flashscore/` — FlashScore point-by-point scraper (optional)
 - `internal/apitennis/` — API-Tennis WebSocket real-time point-by-point scraper (optional)
-- `internal/signal/` — match-point detection, close-timer strategy, simulated order emission
+- `internal/algorithms/` — pluggable trading strategies (match-point detection, order emission)
+- `internal/signal/` — close-timer strategy, simulated order emission
 
 ## Concurrency Model
 
@@ -114,6 +116,18 @@ conda env create -f environment.yml
 ```
 
 Notebooks query the live SQLite DB read-only. Never open the DB for writes from notebooks.
+
+## Backtest
+
+Replay historical point + tick data through a strategy and report P&L.
+
+```bash
+go run ./cmd/backtest -strategy matchpoint -db kalshi_tennis.db
+go run ./cmd/backtest -strategy matchpoint -debug   # log filter reasons
+```
+
+Strategies register in `strategies` map in `cmd/backtest/main.go`.
+Must implement `replayStrategy` (Strategy + `SetReplayTime` + `OnPriceAt`).
 
 ## Verification
 

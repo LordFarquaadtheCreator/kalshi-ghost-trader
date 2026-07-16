@@ -180,7 +180,7 @@ cmd/ghost-trader/        entrypoint, signal handling, errgroup wiring
 cmd/ghost-trader/metrics.go  runtime metrics + pprof HTTP handlers
 cmd/validate/            config + connectivity validation tool
 cmd/ws-debug/            WS + REST debug tool
-cmd/backtest/           replay historical data through match-point strategy
+cmd/backtest/           replay historical data through trading strategies
 internal/config/         YAML config loading
 internal/kalshiauth/     RSA-PSS-SHA256 request signing
 internal/kalshiclient/   REST client (events, markets, pagination, rate limit)
@@ -191,7 +191,8 @@ internal/tracker/        market subscription lifecycle (no per-match goroutine)
 internal/scheduler/      schedules tracking at occurrence_datetime - lead
 internal/flashscore/     FlashScore point-by-point scraper (optional)
 internal/apitennis/      API-Tennis WebSocket real-time point-by-point scraper
-internal/signal/         match-point detection + close-timer strategy + simulated orders
+internal/algorithms/      pluggable trading strategies (match-point detection, order emission)
+internal/signal/          close-timer strategy, simulated order emission
 ```
 
 Concurrency: one goroutine each for WS manager, tick writer, scanner,
@@ -214,10 +215,12 @@ go run ./cmd/validate
 # Debug WS handshake + REST signing
 go run ./cmd/ws-debug
 
-# Backtest match-point strategy on historical data
-go run ./cmd/backtest -db kalshi_tennis.db
+# Backtest a strategy on historical data
+go run ./cmd/backtest -strategy matchpoint -db kalshi_tennis.db
 # Skip dead/illiquid markets (price < 0.05)
-go run ./cmd/backtest -db kalshi_tennis.db -min-price 0.05
+go run ./cmd/backtest -strategy matchpoint -db kalshi_tennis.db -min-price 0.05
+# Debug mode: log strategy filter reasons (why signals were skipped)
+go run ./cmd/backtest -strategy matchpoint -debug
 ```
 
 ## Notebooks
