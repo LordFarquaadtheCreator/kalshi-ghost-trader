@@ -28,6 +28,7 @@ config.yaml
 /validate
 /ws-debug
 /backtest
+/strategy-api
 deploy/out/
 
 # OS
