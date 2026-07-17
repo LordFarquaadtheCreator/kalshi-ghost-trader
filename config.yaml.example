@@ -72,10 +72,11 @@ close_timer_min_price: 0.85
 close_timer_poll_secs: 30
 close_timer_size: 50
 
-# Order quota — throttles order emission. Enabled by default.
-# Per-market cooldown prevents N strategies from firing N orders on same market.
-# Paper and real budgets tracked independently.
-order_quota_enabled: true
+# Order quota — throttles order emission for the REAL trading path only.
+# Paper mode bypasses QuotaGuard entirely: every strategy fires independently
+# so the paper trail captures the full signal surface for backtesting.
+# These fields are reserved for future real-trading wiring (currently unused).
+order_quota_enabled: false
 order_quota_cooldown_secs: 30   # per-market: first order passes, rest dropped within window
 order_quota_max_per_sec: 2      # global rate limit across all markets
 order_quota_daily_limit: 100    # hard daily ceiling (0 = unlimited)
