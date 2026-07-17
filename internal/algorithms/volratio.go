@@ -39,12 +39,12 @@ type VolumeRatioConfig struct {
 
 func DefaultVolumeRatioConfig() VolumeRatioConfig {
 	return VolumeRatioConfig{
-		WindowSeconds:   600,
-		MinVolumeRatio:  2.0,
-		MinPrice:        0.10,
-		MaxPrice:        0.90,
-		BaseSize:        10.0,
-		Label:           "volratio",
+		WindowSeconds:  600,
+		MinVolumeRatio: 2.0,
+		MinPrice:       0.10,
+		MaxPrice:       0.90,
+		BaseSize:       10.0,
+		Label:          "volratio",
 	}
 }
 
@@ -317,7 +317,9 @@ func (s *VolumeRatioStrategy) checkEntry(marketTicker string, ts time.Time) {
 		ConvProb:      convProb,
 		MarketPrice:   heavyPrice,
 		EdgeCents:     actualEdge,
-		SuggestedSize: s.cfg.BaseSize,
+		SuggestedSize: kellySized(convProb, heavyPrice),
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
 		SetNumber:     0,
 		Strategy:      s.cfg.Label,
 		Payload:       string(payload),

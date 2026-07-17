@@ -62,15 +62,15 @@ type priceSample struct {
 // Implements ScoreObserver to track match/set point context.
 // Implements PreMatchGated — only fires after match starts.
 type SpikeFadeStrategy struct {
-	mu          sync.RWMutex
-	prices      map[string][]priceSample
-	markets     map[string][]string
-	fired       map[string]bool // per event
-	scoreState  map[string]*spikeScoreState
-	emitter     OrderEmitter
-	log         *slog.Logger
-	cfg         SpikeFadeConfig
-	replayNow   *time.Time
+	mu         sync.RWMutex
+	prices     map[string][]priceSample
+	markets    map[string][]string
+	fired      map[string]bool // per event
+	scoreState map[string]*spikeScoreState
+	emitter    OrderEmitter
+	log        *slog.Logger
+	cfg        SpikeFadeConfig
+	replayNow  *time.Time
 }
 
 type spikeScoreState struct {
@@ -209,14 +209,14 @@ func (s *SpikeFadeStrategy) OnPriceAt(marketTicker string, price float64, ts tim
 	}
 
 	payload, _ := json.Marshal(map[string]any{
-		"spiked_mkt":     marketTicker,
-		"spiked_price":   currentPrice,
-		"pre_spike":      windowStart,
-		"spike_cents":    spikeCents,
-		"fade_mkt":       otherMkt,
-		"fade_price":     otherPrice,
-		"fair_value":     fairValue,
-		"hold_seconds":   s.cfg.HoldSeconds,
+		"spiked_mkt":   marketTicker,
+		"spiked_price": currentPrice,
+		"pre_spike":    windowStart,
+		"spike_cents":  spikeCents,
+		"fade_mkt":     otherMkt,
+		"fade_price":   otherPrice,
+		"fair_value":   fairValue,
+		"hold_seconds": s.cfg.HoldSeconds,
 	})
 
 	o := store.Order{
@@ -228,7 +228,9 @@ func (s *SpikeFadeStrategy) OnPriceAt(marketTicker string, price float64, ts tim
 		ConvProb:      fairValue,
 		MarketPrice:   otherPrice,
 		EdgeCents:     edgeCents,
-		SuggestedSize: s.cfg.BaseSize,
+		SuggestedSize: kellySized(fairValue, otherPrice),
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
 		SetNumber:     0,
 		Strategy:      s.cfg.Label,
 		Payload:       string(payload),

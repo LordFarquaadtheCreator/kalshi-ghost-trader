@@ -132,9 +132,9 @@ func (s *CrossArbStrategy) OnPriceAt(marketTicker string, price float64, ts time
 func (s *CrossArbStrategy) fireBuyBothYES(eventTicker, homeMkt, awayMkt string, homePrice, awayPrice float64, edgeCents int, ts time.Time) {
 	payload, _ := json.Marshal(map[string]any{
 		"home_yes": homePrice, "away_yes": awayPrice,
-		"yes_sum":  homePrice + awayPrice,
+		"yes_sum":    homePrice + awayPrice,
 		"edge_cents": edgeCents,
-		"side": "buy_both_yes",
+		"side":       "buy_both_yes",
 	})
 
 	for _, mkt := range []string{homeMkt, awayMkt} {
@@ -151,7 +151,9 @@ func (s *CrossArbStrategy) fireBuyBothYES(eventTicker, homeMkt, awayMkt string, 
 			ConvProb:      1.0 - price, // approx — arb doesn't need conv prob
 			MarketPrice:   price,
 			EdgeCents:     edgeCents,
-			SuggestedSize: s.cfg.BaseSize,
+			SuggestedSize: kellySized(1.0-price, price),
+			Bankroll:      paperBankroll,
+			KellyFraction: kellyFractionP,
 			Strategy:      s.cfg.Label,
 			Payload:       string(payload),
 		}
@@ -168,9 +170,9 @@ func (s *CrossArbStrategy) fireBuyBothYES(eventTicker, homeMkt, awayMkt string, 
 func (s *CrossArbStrategy) fireBuyNO(eventTicker, homeMkt, awayMkt string, homePrice, awayPrice float64, edgeCents int, ts time.Time) {
 	payload, _ := json.Marshal(map[string]any{
 		"home_yes": homePrice, "away_yes": awayPrice,
-		"yes_sum":  homePrice + awayPrice,
+		"yes_sum":    homePrice + awayPrice,
 		"edge_cents": edgeCents,
-		"side": "buy_both_no",
+		"side":       "buy_both_no",
 	})
 
 	// Buy NO = buy YES of the opposite player's market
@@ -197,7 +199,9 @@ func (s *CrossArbStrategy) fireBuyNO(eventTicker, homeMkt, awayMkt string, homeP
 			ConvProb:      price, // NO wins when YES loses
 			MarketPrice:   noPrice,
 			EdgeCents:     edgeCents,
-			SuggestedSize: s.cfg.BaseSize,
+			SuggestedSize: kellySized(price, noPrice),
+			Bankroll:      paperBankroll,
+			KellyFraction: kellyFractionP,
 			Strategy:      s.cfg.Label,
 			Payload:       string(payload),
 		}

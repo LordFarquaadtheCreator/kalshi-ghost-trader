@@ -229,7 +229,7 @@ func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
 		return
 	}
 
-	size := suggestedSize(edgeCents)
+	size := kellySized(convProb, mktPrice)
 
 	payload, _ := json.Marshal(map[string]any{
 		"home_games": p.HomeGames, "away_games": p.AwayGames,
@@ -250,6 +250,8 @@ func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
 		MarketPrice:   mktPrice,
 		EdgeCents:     edgeCents,
 		SuggestedSize: size,
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
 		SetNumber:     p.SetNumber,
 		Strategy:      s.cfg.Label,
 		Payload:       string(payload),

@@ -43,11 +43,11 @@ func DefaultCalibratedMarkovConfig() CalibratedMarkovConfig {
 
 // serveWinModel holds logistic regression weights loaded from JSON.
 type serveWinModel struct {
-	Coef       []float64 `json:"coef"`
-	Intercept  float64   `json:"intercept"`
-	SeriesMap  map[string]int `json:"series_map"`
-	PointMap   map[string]int `json:"point_map"`
-	OverallRate float64   `json:"overall_rate"`
+	Coef        []float64      `json:"coef"`
+	Intercept   float64        `json:"intercept"`
+	SeriesMap   map[string]int `json:"series_map"`
+	PointMap    map[string]int `json:"point_map"`
+	OverallRate float64        `json:"overall_rate"`
 }
 
 // CalibratedMarkovStrategy uses ML-calibrated serve-win probability
@@ -294,7 +294,9 @@ func (s *CalibratedMarkovStrategy) checkEdge(eventTicker, mkt string, marketPric
 		ConvProb:      fairValue,
 		MarketPrice:   marketPrice,
 		EdgeCents:     edgeCents,
-		SuggestedSize: s.cfg.SuggestedSize,
+		SuggestedSize: kellySized(fairValue, marketPrice),
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
 		SetNumber:     setNum,
 		Strategy:      s.cfg.Label,
 	}

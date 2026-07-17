@@ -71,7 +71,7 @@ func newCloseTimerTestEnv(t *testing.T) (*testEnv, *mockPriceLookup, *CloseTimer
 	t.Helper()
 	e := newTestEnv(t)
 	pl := newMockPriceLookup()
-	ct := NewCloseTimer(e.db, pl, e.tw, 10, 0.85, 50.0, slog.Default())
+	ct := NewCloseTimer(e.db, pl, e.tw, 10, 0.85, slog.Default())
 	return e, pl, ct
 }
 
@@ -107,8 +107,10 @@ func TestCloseTimer_FiresOrder(t *testing.T) {
 	if o.EdgeCents != 9 {
 		t.Fatalf("edgeCents=%d, want 9", o.EdgeCents)
 	}
-	if o.SuggestedSize != 50.0 {
-		t.Fatalf("suggestedSize=%v, want 50.0", o.SuggestedSize)
+	// Kelly: fKelly=(0.95-0.90)/(1-0.90)=0.5, size=0.25*0.5*1000=125, capped at 5/0.90≈5.556
+	wantSize := 5.0 / 0.90
+	if o.SuggestedSize != wantSize {
+		t.Fatalf("suggestedSize=%v, want %v", o.SuggestedSize, wantSize)
 	}
 	if o.Context != "close_timer_10m" {
 		t.Fatalf("context=%q, want close_timer_10m", o.Context)

@@ -270,7 +270,7 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	size := s.cfg.BaseSize
+	size := kellySized(convProb, favPrice)
 
 	payload, _ := json.Marshal(map[string]any{
 		"window_s":     s.cfg.WindowSeconds,
@@ -293,6 +293,8 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		MarketPrice:   favPrice,
 		EdgeCents:     edgeCents,
 		SuggestedSize: size,
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
 		SetNumber:     0,
 		Strategy:      "nofade",
 		Payload:       string(payload),

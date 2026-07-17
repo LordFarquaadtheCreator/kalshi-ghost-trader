@@ -12,8 +12,6 @@ import (
 
 const (
 	minEdgeCents   = 1
-	baseSize       = 10.0
-	maxSize        = 100.0
 	setsToWin      = 2
 	gamesPerSet    = 6
 	priceStaleTTL  = 60 * time.Second
@@ -209,7 +207,7 @@ func (s *MatchPointStrategy) processPoint(eventTicker string, p store.Point) {
 		return
 	}
 
-	size := suggestedSize(edgeCents)
+	size := kellySized(convProb, mktPrice)
 
 	payload, _ := json.Marshal(map[string]any{
 		"home_games": p.HomeGames, "away_games": p.AwayGames,
@@ -229,6 +227,8 @@ func (s *MatchPointStrategy) processPoint(eventTicker string, p store.Point) {
 		MarketPrice:   mktPrice,
 		EdgeCents:     edgeCents,
 		SuggestedSize: size,
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
 		SetNumber:     p.SetNumber,
 		Strategy:      "matchpoint",
 		Payload:       string(payload),
@@ -315,14 +315,6 @@ func normalizeScore(s string) string {
 	default:
 		return ""
 	}
-}
-
-func suggestedSize(absEdgeCents int) float64 {
-	size := baseSize * float64(absEdgeCents) / float64(minEdgeCents)
-	if size > maxSize {
-		size = maxSize
-	}
-	return size
 }
 
 // DeletePrice removes a single market's price tracking state.

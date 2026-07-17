@@ -204,7 +204,7 @@ func (s *ConvexPoolStrategy) processConvex(eventTicker string, p store.Point) {
 			continue
 		}
 
-		size := suggestedSize(edgeCents)
+		size := kellySized(blended, price)
 
 		s.emitter.EmitOrder(store.Order{
 			MatchTicker:   eventTicker,
@@ -215,6 +215,8 @@ func (s *ConvexPoolStrategy) processConvex(eventTicker string, p store.Point) {
 			MarketPrice:   price,
 			EdgeCents:     edgeCents,
 			SuggestedSize: size,
+			Bankroll:      paperBankroll,
+			KellyFraction: kellyFractionP,
 			SetNumber:     p.SetNumber,
 			Strategy:      s.cfg.Label,
 		})

@@ -54,12 +54,12 @@ func DefaultFadeLongshotConfig() FadeLongshotConfig {
 
 // fadeScoreState tracks live score context for dynamic convProb.
 type fadeScoreState struct {
-	homeSetWins   int
-	awaySetWins   int
-	homeGames     int
-	awayGames     int
-	isMatchPoint  bool
-	isSetPoint    bool
+	homeSetWins  int
+	awaySetWins  int
+	homeGames    int
+	awayGames    int
+	isMatchPoint bool
+	isSetPoint   bool
 }
 
 // FadeLongshotStrategy buys the favorite (higher-priced YES) at a fixed
@@ -451,7 +451,7 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	size := s.cfg.BaseSize
+	size := kellySized(convProb, favPrice)
 
 	payload, _ := json.Marshal(map[string]any{
 		"window_s":    s.cfg.WindowSeconds,
@@ -473,6 +473,8 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		MarketPrice:   favPrice,
 		EdgeCents:     edgeCents,
 		SuggestedSize: size,
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
 		SetNumber:     0,
 		Strategy:      "fadelongshot",
 		Payload:       string(payload),

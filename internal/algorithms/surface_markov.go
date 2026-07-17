@@ -20,6 +20,7 @@ import (
 //	ITF men:        57.9%   ITF women:      54.0%
 //
 // Surface adjustments (literature + partial data):
+//
 //	clay:  -4pp vs base   (slower, more breaks)
 //	hard:   0pp           (baseline)
 //	grass: +6pp           (faster, fewer breaks)
@@ -50,18 +51,18 @@ func DefaultSurfaceMarkovConfig() SurfaceMarkovConfig {
 // seriesBasePServe maps series_ticker to base serve-win probability.
 // Derived from empirical hold rates in EXPLORATORY_QUESTIONS.md RQ6.
 var seriesBasePServe = map[string]float64{
-	"KXATPMATCH":            0.613,
-	"KXWTAMATCH":            0.520,
-	"KXATPCHALLENGERMATCH":  0.610,
-	"KXWTACHALLENGERMATCH":  0.523,
-	"KXITFMATCH":            0.579,
-	"KXITFWMATCH":           0.540,
-	"KXATPDOUBLES":          0.560, // doubles: lower hold
-	"KXWTADOUBLES":          0.500,
-	"KXITFDOUBLES":          0.530,
-	"KXITFWDOUBLES":         0.490,
-	"KXTENNISEXHIBITION":    0.580,
-	"KXCHALLENGERMATCH":     0.580,
+	"KXATPMATCH":           0.613,
+	"KXWTAMATCH":           0.520,
+	"KXATPCHALLENGERMATCH": 0.610,
+	"KXWTACHALLENGERMATCH": 0.523,
+	"KXITFMATCH":           0.579,
+	"KXITFWMATCH":          0.540,
+	"KXATPDOUBLES":         0.560, // doubles: lower hold
+	"KXWTADOUBLES":         0.500,
+	"KXITFDOUBLES":         0.530,
+	"KXITFWDOUBLES":        0.490,
+	"KXTENNISEXHIBITION":   0.580,
+	"KXCHALLENGERMATCH":    0.580,
 }
 
 // surfaceAdjustment returns serve-win probability adjustment by surface.
@@ -263,7 +264,9 @@ func (s *SurfaceMarkovStrategy) checkEdge(eventTicker, mkt string, marketPrice, 
 		ConvProb:      fairValue,
 		MarketPrice:   marketPrice,
 		EdgeCents:     edgeCents,
-		SuggestedSize: s.cfg.SuggestedSize,
+		SuggestedSize: kellySized(fairValue, marketPrice),
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
 		SetNumber:     setNum,
 		Strategy:      s.cfg.Label,
 	}

@@ -38,12 +38,12 @@ type Comeback040Config struct {
 
 func DefaultComeback040Config() Comeback040Config {
 	return Comeback040Config{
-		MinPeakPrice:   0.40,
-		MaxEntryPrice:   0.70,
-		MinEntryPrice:   0.10,
-		ConvProb:        0.35,
-		BaseSize:        10.0,
-		Label:           "comeback040",
+		MinPeakPrice:  0.40,
+		MaxEntryPrice: 0.70,
+		MinEntryPrice: 0.10,
+		ConvProb:      0.35,
+		BaseSize:      10.0,
+		Label:         "comeback040",
 	}
 }
 
@@ -178,14 +178,14 @@ func (s *Comeback040Strategy) OnPoint(eventTicker string, p store.Point) {
 
 	ts := s.now()
 	payload, _ := json.Marshal(map[string]any{
-		"set":          p.SetNumber,
-		"game":         p.GameNumber,
-		"server":       p.Server,
-		"home_points":  p.HomePoints,
-		"away_points":  p.AwayPoints,
-		"entry_price":  price,
-		"max_price":    maxPrice,
-		"conv_prob":    s.cfg.ConvProb,
+		"set":         p.SetNumber,
+		"game":        p.GameNumber,
+		"server":      p.Server,
+		"home_points": p.HomePoints,
+		"away_points": p.AwayPoints,
+		"entry_price": price,
+		"max_price":   maxPrice,
+		"conv_prob":   s.cfg.ConvProb,
 	})
 
 	o := store.Order{
@@ -197,7 +197,9 @@ func (s *Comeback040Strategy) OnPoint(eventTicker string, p store.Point) {
 		ConvProb:      s.cfg.ConvProb,
 		MarketPrice:   price,
 		EdgeCents:     edgeCents,
-		SuggestedSize: s.cfg.BaseSize,
+		SuggestedSize: kellySized(s.cfg.ConvProb, price),
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
 		SetNumber:     p.SetNumber,
 		Strategy:      s.cfg.Label,
 		Payload:       string(payload),

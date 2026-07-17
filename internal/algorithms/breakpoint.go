@@ -229,7 +229,7 @@ func (s *BreakPointStrategy) processBreakPoint(eventTicker string, p store.Point
 		return
 	}
 
-	size := suggestedSize(edgeCents)
+	size := kellySized(fv, price)
 
 	s.emitter.EmitOrder(store.Order{
 		MatchTicker:   eventTicker,
@@ -240,6 +240,8 @@ func (s *BreakPointStrategy) processBreakPoint(eventTicker string, p store.Point
 		MarketPrice:   price,
 		EdgeCents:     edgeCents,
 		SuggestedSize: size,
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
 		SetNumber:     p.SetNumber,
 		Strategy:      s.cfg.Label,
 	})

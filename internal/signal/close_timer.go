@@ -44,7 +44,6 @@ type CloseTimer struct {
 	tickWriter *store.TickWriter
 	leadMin    int
 	minPrice   float64
-	size       float64
 	log        *slog.Logger
 
 	mu    sync.Mutex
@@ -53,14 +52,13 @@ type CloseTimer struct {
 
 // NewCloseTimer creates a close-timer strategy instance.
 func NewCloseTimer(db *store.DB, prices PriceLookup, tw *store.TickWriter,
-	leadMin int, minPrice, size float64, log *slog.Logger) *CloseTimer {
+	leadMin int, minPrice float64, log *slog.Logger) *CloseTimer {
 	return &CloseTimer{
 		db:         db,
 		prices:     prices,
 		tickWriter: tw,
 		leadMin:    leadMin,
 		minPrice:   minPrice,
-		size:       size,
 		log:        log,
 		fired:      make(map[string]bool),
 	}
@@ -196,7 +194,9 @@ func (ct *CloseTimer) scan(ctx context.Context, pollSecs int) {
 			ConvProb:      favConvProb,
 			MarketPrice:   favPrice,
 			EdgeCents:     edgeCents,
-			SuggestedSize: ct.size,
+			SuggestedSize: algorithms.KellySizedExported(favConvProb, favPrice),
+			Bankroll:      algorithms.GetPaperBankroll(),
+			KellyFraction: algorithms.GetKellyFraction(),
 			SetNumber:     0,
 			Strategy:      "close_timer",
 			Payload:       string(payload),
@@ -214,7 +214,7 @@ func (ct *CloseTimer) scan(ctx context.Context, pollSecs int) {
 			"event", eventTicker, "market", favMkt.MarketTicker,
 			"player", favMkt.PlayerName, "price", favPrice,
 			"edge_cents", edgeCents, "secs_to_close", int(secsToClose),
-			"size", ct.size)
+			"size", algorithms.KellySizedExported(favConvProb, favPrice))
 		firedThisCycle++
 	}
 
