@@ -10,12 +10,16 @@
 
   const trackedStore = createPoll(() => api.getTracked(), 2000, { data: null, error: null, connected: false });
   const countsStore = createPoll(() => api.getOrderCounts(), 5000, { data: null, error: null, connected: false });
+  const ordersStore = createPoll(() => api.getOrders(), 5000, { data: null, error: null, connected: false });
 
   let subs = $derived($trackedStore.data?.subs || []);
   let eventCount = $derived($trackedStore.data?.event_count || 0);
   let marketCount = $derived($trackedStore.data?.market_count || 0);
   /** @type {Record<string, number>} */
   let orderCounts = $derived($countsStore.data?.counts || {});
+  let netPnl = $derived(ordersStore.data?.summary?.net_pnl ?? 0);
+  let paperOrders = $derived(ordersStore.data?.summary?.total_orders ?? 0);
+  let realOrders = $derived(0);
 
   const columns = [
     { key: 'event_ticker', label: 'Event Ticker', class: 'mono' },
@@ -49,6 +53,9 @@
   <div class="stats-grid">
     <StatCard label="Events" value={eventCount} />
     <StatCard label="Markets" value={marketCount} />
+    <StatCard label="Net P&L" value={`$${netPnl.toFixed(2)}`} />
+    <StatCard label="Paper Orders" value={paperOrders} />
+    <StatCard label="Real Orders" value={realOrders} />
   </div>
 
   {#if $trackedStore.connected && subs.length === 0}
