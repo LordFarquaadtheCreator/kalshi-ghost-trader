@@ -267,8 +267,8 @@ func main() {
 		metricsSrv := &http.Server{
 			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),
 			Handler:      corsMiddleware(mux),
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 5 * time.Second,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 120 * time.Second,
 		}
 		g.Go(func() error {
 			log.Info("metrics server listening", "addr", metricsSrv.Addr)
