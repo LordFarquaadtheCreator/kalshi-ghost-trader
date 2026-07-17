@@ -10,6 +10,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
   import ChartLoading from '$lib/components/ChartLoading.svelte';
+  import StatAnalysis from '$lib/components/StatAnalysis.svelte';
 
   const store = createPoll(() => api.getOrders(), 5000, { data: null, error: null, connected: false });
 
@@ -17,6 +18,7 @@
   let loading = $derived(!$store.data && $store.connected === false && !$store.error);
   let selectedStrategies = $state(new Set());
   let minPrice = $state(0);
+  let maxPrice = $state(0);
   let filterMatch = $state('');
   let filterResult = $state('');
 
@@ -53,6 +55,7 @@
     return data.orders.filter((/** @type {any} */ o) => {
       if (selectedStrategies.size > 0 && !selectedStrategies.has(o.strategy)) return false;
       if (minPrice > 0 && o.market_price < minPrice) return false;
+      if (maxPrice > 0 && o.market_price > maxPrice) return false;
       if (filterMatch && !o.match_ticker.toLowerCase().includes(filterMatch.toLowerCase())) return false;
       if (filterResult === 'won' && !o.won) return false;
       if (filterResult === 'lost' && o.won) return false;
@@ -465,6 +468,10 @@
           </CollapsibleSection>
         {/if}
 
+        {#if settledOrders.length > 0}
+          <StatAnalysis orders={settledOrders} title="Statistical Analysis" count={settledOrders.length} />
+        {/if}
+
         {#if pendingOrders.length > 0}
           <CollapsibleSection title="Open Positions" count={pendingOrders.length}>
             <div class="table-wrap">
@@ -578,7 +585,10 @@
         <div class="filter-group">
           <h3>Filters</h3>
           <label class="filter-label">Min Price
-            <input type="number" bind:value={minPrice} min="0" max="1" step="0.05" />
+            <input type="number" bind:value={minPrice} min="0" max="1" step="0.05" placeholder="0 (off)" />
+          </label>
+          <label class="filter-label">Max Price
+            <input type="number" bind:value={maxPrice} min="0" max="1" step="0.05" placeholder="0 (off)" />
           </label>
           <label class="filter-label">Match
             <input type="text" placeholder="Search match..." bind:value={filterMatch} />

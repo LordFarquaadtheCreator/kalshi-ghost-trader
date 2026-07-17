@@ -9,6 +9,7 @@
   import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
   import ChartLoading from '$lib/components/ChartLoading.svelte';
   import { vibrantColor } from '$lib/utils.js';
+  import StatAnalysis from '$lib/components/StatAnalysis.svelte';
 
   /** @type {string[]} */
   let strategies = $state([]);
@@ -19,6 +20,7 @@
   /** @type {string | null} */
   let error = $state(null);
   let minPrice = $state(0);
+  let maxPrice = $state(0);
   let lastRun = $state(0);
   let filterResult = $state('');
   let filterMatch = $state('');
@@ -73,7 +75,7 @@
     loading = true;
     error = null;
     try {
-      const data = await api.runBacktest([...selected], minPrice);
+      const data = await api.runBacktest([...selected], 0);
       results = {};
       for (const r of data.results || []) {
         results[r.name] = r;
@@ -101,6 +103,8 @@
 
   function filterOrders(/** @type {any[]} */ orders) {
     return (orders || []).filter((o) => {
+      if (minPrice > 0 && o.price < minPrice) return false;
+      if (maxPrice > 0 && o.price > maxPrice) return false;
       if (filterResult === 'won' && !o.won) return false;
       if (filterResult === 'lost' && o.won) return false;
       if (filterMatch && !o.match.toLowerCase().includes(filterMatch.toLowerCase())) return false;
@@ -115,6 +119,17 @@
       return Math.round(cum * 100) / 100;
     });
   }
+
+  // All filtered orders across selected strategies for aggregate stats.
+  let allFiltered = $derived.by(() => {
+    /** @type {any[]} */
+    let all = [];
+    for (const name of selected) {
+      const r = results[name];
+      if (r) all = all.concat(filterOrders(r.orders));
+    }
+    return all;
+  });
 
   async function renderCharts() {
     if (!browser || Object.keys(results).length === 0) return;
@@ -286,6 +301,18 @@
           <div style="height: 300px; width: 100%; position: relative;"><canvas bind:this={priceDistCanvas}></canvas>{#if !priceDistReady}<ChartLoading />{/if}</div>
         </div>
 
+        {#if allFiltered.length > 0}
+          <StatAnalysis orders={allFiltered} title="Statistical Analysis (All Strategies)" count={allFiltered.length} />
+        {/if}
+
+        {#each [...selected] as name}
+          {@const r = results[name]}
+          {@const filtered = r ? filterOrders(r.orders) : []}
+          {#if r && filtered.length > 0}
+            <StatAnalysis orders={filtered} title={`Stats — ${name}`} count={filtered.length} />
+          {/if}
+        {/each}
+
         <div class="orders-section">
           <h2>Orders Detail</h2>
           {#each [...selected] as name}
@@ -349,12 +376,19 @@
 
       <div class="filter-group">
         <h3>Backtest</h3>
-        <label class="filter-label">Min Price
-          <input type="number" bind:value={minPrice} min="0" max="1" step="0.05" />
-        </label>
         <button class="run-btn" onclick={runBacktest} disabled={loading || selected.size === 0}>
           {loading ? 'Running...' : 'Recompute'}
         </button>
+      </div>
+
+      <div class="filter-group">
+        <h3>Price Filter</h3>
+        <label class="filter-label">Min Price
+          <input type="number" bind:value={minPrice} min="0" max="1" step="0.05" placeholder="0 (off)" />
+        </label>
+        <label class="filter-label">Max Price
+          <input type="number" bind:value={maxPrice} min="0" max="1" step="0.05" placeholder="0 (off)" />
+        </label>
       </div>
 
       <div class="filter-group">
