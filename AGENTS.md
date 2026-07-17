@@ -81,9 +81,21 @@ Coverage classification on events at settlement:
 Payload retention: non-`full` events have `payload` NULLed in ticks/orderbook at settlement (P7).
 Orphan janitor (`CleanOrphans`) and late-parenting sweep (`AdoptOrphans`) run after each scan cycle.
 
+## Local Linux Box
+
+Linux Mint box on LAN for ad-hoc work. Passwordless SSH from Mac.
+
+```bash
+ssh mint                                    # alias in ~/.ssh/config
+ssh fahad@192.168.1.246                     # direct
+```
+
+Key: `~/.ssh/id_ed25519` (copied via `ssh-copy-id`). Host: `linux-mint`,
+Linux Mint 24.04, x86_64.
+
 ## Remote Deployment
 
-App runs on Oracle Cloud ARM instance. DB is on remote disk — not accessible locally.
+App runs on remote ARM instance. DB is on remote disk — not accessible locally.
 See `deploy/README.md` for deployment instructions.
 
 ## Snapshots (Remote → Local)

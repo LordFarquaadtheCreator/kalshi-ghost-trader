@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy ghost-trader to Oracle Cloud instance.
+# Deploy ghost-trader to remote instance.
 # Usage: ./deploy/deploy.sh <instance-ip>
 # Prerequisites: ARM instance running, 50GB block volume mounted at /data
 set -e

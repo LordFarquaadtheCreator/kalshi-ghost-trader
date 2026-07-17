@@ -87,11 +87,13 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	// persist order to DB as real before submission
 	o.IsReal = true
 	o.OrderStatus = "pending"
-	if err := e.db.InsertOrdersBatch(context.Background(), []store.Order{o}); err != nil {
+	orderID, err := e.db.InsertRealOrder(context.Background(), o)
+	if err != nil {
 		e.log.Error("real: failed to persist order to DB",
 			"market", o.MarketTicker, "error", err)
 		return false
 	}
+	o.ID = orderID
 
 	// deduct from liquidity pool (cost = count * price * 100 cents)
 	spendCents := int64(count * o.MarketPrice * 100)
@@ -125,6 +127,11 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 			"market", o.MarketTicker, "strategy", o.Strategy,
 			"side", "bid", "count", countStr, "price", priceStr,
 			"error", err)
+		// refund liquidity pool — order never executed
+		if _, refundErr := e.db.RefundLiquidityPool(context.Background(), spendCents); refundErr != nil {
+			e.log.Error("real: failed to refund liquidity pool",
+				"market", o.MarketTicker, "spend_cents", spendCents, "error", refundErr)
+		}
 		// mark order as failed in DB
 		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID); dbErr != nil {
 			e.log.Error("real: failed to mark order as failed", "error", dbErr)

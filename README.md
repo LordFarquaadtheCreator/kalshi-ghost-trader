@@ -123,7 +123,7 @@ Binary lands at `./ghost-trader`. Run it the same way:
 
 ## Deploy
 
-Oracle Cloud ARM deployment scripts in `deploy/`. See
+ARM deployment scripts in `deploy/`. See
 [deploy/README.md](deploy/README.md) for full instructions.
 
 Quick version:

@@ -1,18 +1,10 @@
-# Oracle Cloud Deployment
+# Remote Deployment
 
 ## Prerequisites
 
-1. Oracle Cloud account (signup at cloud.oracle.com)
-   - Home region: **US East (Ashburn)** — `us-ashburn-1`
-   - Real credit card, no VPN, address matches card
-2. Upgrade to **Pay As You Go** after signup
-   - Still $0 within Always Free limits
-   - Removes idle instance reclamation
-3. Create ARM instance: `VM.Standard.A1.Flex`
-   - 2 OCPU, 4GB RAM, Ubuntu 24.04 LTS
-   - If "Out of capacity" — retry. See retry script below.
-4. Create 50GB block volume, attach to instance
-5. SSH key: upload your public key during instance creation
+1. Remote ARM instance (e.g. Ampere A1, 2 OCPU, 4GB RAM, Ubuntu 24.04 LTS)
+2. Create 50GB block volume, attach to instance
+3. SSH key: upload your public key during instance creation
 
 ## Deploy
 
@@ -34,31 +26,6 @@ sed -i 's|DB_PATH=.*|DB_PATH=/data/kalshi_tennis.db|' /data/.env
 sudo systemctl start ghost-trader
 sudo journalctl -u ghost-trader -f
 ```
-
-## ARM Capacity Retry
-
-If instance creation fails with "Out of host capacity", retry:
-
-```bash
-# Run locally with OCI CLI installed + configured
-# Adjust shape config + image OCID + compartment OCID
-while true; do
-  oci compute instance launch \
-    --shape VM.Standard.A1.Flex \
-    --shape-config "{\"ocpus\":2,\"memoryInGBs\":4}" \
-    --availability-domain "TGTh:US-EAST-ASHBURN-1-AD-1" \
-    --compartment-id "<your-compartment-ocid>" \
-    --image-ocid "<ubuntu-2404-arm64-image-ocid>" \
-    --subnet-id "<your-subnet-ocid>" \
-    --assign-public-ip true \
-    --ssh-authorized-keys-file ~/.ssh/id_rsa.pub \
-  && break
-  echo "Retrying in 60s..."
-  sleep 60
-done
-```
-
-Or just click "Create" in the console every few hours.
 
 ## Architecture
 
@@ -142,7 +109,7 @@ Exports: `orders.json.gz` (P&L), `strategy_summary.json.gz`, `events_summary.jso
 
 ## Cost
 
-$0/month. Within Always Free limits:
-- 2 OCPU + 4GB RAM ARM (of 4 OCPU + 24GB free)
-- 50GB boot + 50GB data = 100GB (of 200GB free)
-- 10TB/month outbound (app uses <1GB/month)
+Depends on hosting provider. Within free tier limits on most providers:
+- 2 OCPU + 4GB RAM ARM
+- 50GB boot + 50GB data = 100GB
+- Minimal outbound traffic

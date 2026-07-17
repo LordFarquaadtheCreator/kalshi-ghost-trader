@@ -258,3 +258,19 @@ RETURNING balance_cents`,
 		spendCents, spendCents, time.Now().UnixMilli()).Scan(&newBalance)
 	return newBalance, err
 }
+
+// RefundLiquidityPool atomically refunds spendCents to the pool balance
+// and subtracts from total_spent_cents. Used when a real order fails
+// after deduction but before execution.
+func (d *DB) RefundLiquidityPool(ctx context.Context, refundCents int64) (int64, error) {
+	var newBalance int64
+	err := d.db.QueryRowContext(ctx, `
+UPDATE liquidity_pool
+SET balance_cents = balance_cents + ?,
+    total_spent_cents = MAX(total_spent_cents - ?, 0),
+    updated_ts = ?
+WHERE id = 1
+RETURNING balance_cents`,
+		refundCents, refundCents, time.Now().UnixMilli()).Scan(&newBalance)
+	return newBalance, err
+}

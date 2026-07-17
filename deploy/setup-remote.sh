@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs on the Oracle Cloud instance. Sets up /data volume, installs binary,
+# Runs on the remote instance. Sets up /data volume, installs binary,
 # configures systemd. Run via deploy.sh (SSH).
 set -e
 
@@ -20,7 +20,7 @@ if ! mountpoint -q "$DATA_DIR"; then
 
   if [ -z "$DEVICE" ]; then
     echo "ERROR: No block device found for data volume."
-    echo "Create + attach a block volume in Oracle Console first."
+    echo "Create + attach a block volume first."
     exit 1
   fi
 

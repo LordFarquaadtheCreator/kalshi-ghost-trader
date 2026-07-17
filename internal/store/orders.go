@@ -82,6 +82,28 @@ func (d *DB) GetOrders(ctx context.Context) ([]Order, error) {
 	return orders, rows.Err()
 }
 
+// InsertRealOrder inserts a single real order and returns the autoincrement ID.
+// Used by KalshiOrderEmitter which needs the ID for subsequent status updates.
+func (d *DB) InsertRealOrder(ctx context.Context, o Order) (int64, error) {
+	var payload interface{}
+	if o.Payload != "" {
+		payload = o.Payload
+	}
+	res, err := d.db.ExecContext(ctx, `
+INSERT INTO orders (ts, match_ticker, market_ticker, action, context,
+    conv_prob, market_price, edge_cents, suggested_size, set_number, strategy, payload,
+    bankroll, kelly_fraction, is_real, order_status)
+VALUES (?,?,?,?,?, ?,?,?,?, ?,?, ?, ?,?, 1, ?)`,
+		o.TS, o.MatchTicker, o.MarketTicker, o.Action, o.Context,
+		o.ConvProb, o.MarketPrice, o.EdgeCents, o.SuggestedSize, o.SetNumber, o.Strategy, payload,
+		o.Bankroll, o.KellyFraction, o.OrderStatus,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
 // UpdateRealOrder updates an existing order row with Kalshi response fields.
 // Called by KalshiOrderEmitter after order submission.
 func (d *DB) UpdateRealOrder(ctx context.Context, orderID int64, kalshiOrderID string, fillCount float64, status string) error {
@@ -140,8 +162,8 @@ func (d *DB) GetRealOrders(ctx context.Context) ([]Order, error) {
 }
 
 // ResolveRealOrders resolves all real orders for a settled market.
-// P&L uses fill_count (not SuggestedSize) — IOC orders may partially fill.
-// Updates liquidity pool with realized P&L.
+// Pool adjustment: refund unfilled portion cost + add gross payout ($1/contract if won).
+// resolved_pnl_cents = payout - filled_cost (P&L on filled contracts only).
 func (d *DB) ResolveRealOrders(ctx context.Context, marketTicker, result string) error {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -149,9 +171,9 @@ func (d *DB) ResolveRealOrders(ctx context.Context, marketTicker, result string)
 	}
 	defer tx.Rollback()
 
-	// Fetch unresolved real orders for this market
+	// Fetch unresolved real orders with suggested_size for cost computation
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, fill_count, market_price, order_status
+		SELECT id, fill_count, market_price, suggested_size
 		FROM orders
 		WHERE is_real = 1 AND market_ticker = ?
 		  AND order_status IN ('submitted', 'filled', 'partial')`, marketTicker)
@@ -160,15 +182,16 @@ func (d *DB) ResolveRealOrders(ctx context.Context, marketTicker, result string)
 	}
 
 	type pendingOrder struct {
-		id        int64
-		fillCount float64
-		price     float64
+		id          int64
+		fillCount   float64
+		price       float64
+		suggestedSz float64
 	}
 	var pending []pendingOrder
 	for rows.Next() {
 		var po pendingOrder
 		var fc sql.NullFloat64
-		if err := rows.Scan(&po.id, &fc, &po.price, new(sql.NullString)); err != nil {
+		if err := rows.Scan(&po.id, &fc, &po.price, &po.suggestedSz); err != nil {
 			rows.Close()
 			return err
 		}
@@ -193,17 +216,26 @@ func (d *DB) ResolveRealOrders(ctx context.Context, marketTicker, result string)
 
 	won := result == "yes"
 	for _, po := range pending {
-		var pnlCents int64
-		if po.fillCount > 0 {
-			if won {
-				pnlCents = int64(po.fillCount * (1.0 - po.price) * 100)
-			} else {
-				pnlCents = int64(-po.fillCount * po.price * 100)
-			}
+		// refund unfilled portion
+		unfilledRefundCents := int64((po.suggestedSz - po.fillCount) * po.price * 100)
+		if unfilledRefundCents < 0 {
+			unfilledRefundCents = 0
 		}
 
+		// gross payout: $1 per contract if won, $0 if lost
+		var payoutCents int64
+		var pnlCents int64
+		if po.fillCount > 0 && won {
+			payoutCents = int64(po.fillCount * 100)
+			pnlCents = payoutCents - int64(po.fillCount*po.price*100)
+		} else if po.fillCount > 0 {
+			pnlCents = -int64(po.fillCount * po.price * 100)
+		}
+		// zero fill: pnlCents = 0, full refund via unfilledRefundCents
+
+		poolAdjustment := unfilledRefundCents + payoutCents
 		before := poolBalance
-		poolBalance += pnlCents
+		poolBalance += poolAdjustment
 
 		if _, err := tx.ExecContext(ctx, `
 UPDATE orders SET order_status = 'resolved', resolved_pnl_cents = ?,
@@ -214,12 +246,11 @@ WHERE id = ?`,
 		}
 	}
 
-	// Update liquidity pool
+	// Update liquidity pool balance
 	if _, err := tx.ExecContext(ctx, `
-UPDATE liquidity_pool SET balance_cents = ?, total_pnl_cents = total_pnl_cents + ?,
-                           updated_ts = ?
+UPDATE liquidity_pool SET balance_cents = ?, updated_ts = ?
 WHERE id = 1`,
-		poolBalance, 0, nowMillis()); err != nil {
+		poolBalance, nowMillis()); err != nil {
 		return err
 	}
 

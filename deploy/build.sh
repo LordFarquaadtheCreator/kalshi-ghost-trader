@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cross-compile ghost-trader for Oracle Cloud ARM64 (Ampere A1)
+# Cross-compile ghost-trader for remote ARM64
 # Uses modernc.org/sqlite (pure Go, no CGO needed)
 set -e
 
