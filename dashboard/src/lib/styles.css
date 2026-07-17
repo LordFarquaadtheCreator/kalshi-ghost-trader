@@ -156,6 +156,13 @@
   font-size: 12px;
 }
 
+.score {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-bright);
+  white-space: nowrap;
+}
+
 .num {
   text-align: right;
   font-variant-numeric: tabular-nums;

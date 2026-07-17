@@ -63,10 +63,12 @@ func trackedHandler(tr *tracker.Tracker, e *backtest.Engine) http.HandlerFunc {
 			subs[i].Title = e.EventTitle(subs[i].EventTicker)
 		}
 		events := tr.ActiveEvents()
+		scores, _ := e.LatestScores(r.Context(), events)
 		json.NewEncoder(w).Encode(map[string]any{
 			"subs":         subs,
 			"event_count":  len(events),
 			"market_count": len(subs),
+			"scores":       scores,
 		})
 	}
 }

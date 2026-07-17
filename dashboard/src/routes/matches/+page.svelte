@@ -16,6 +16,8 @@
   let subs = $derived($trackedStore.data?.subs || []);
   let eventCount = $derived($trackedStore.data?.event_count || 0);
   let marketCount = $derived($trackedStore.data?.market_count || 0);
+  /** @type {Record<string, any>} */
+  let scores = $derived($trackedStore.data?.scores || {});
   /** @type {Record<string, number>} */
   let orderCounts = $derived($countsStore.data?.counts || {});
   let pendingCounts = $derived($pendingStore.data?.counts || {});
@@ -28,14 +30,24 @@
     { key: 'title', label: 'Match' },
     { key: 'series', label: 'Series', class: 'series' },
     { key: 'market_ticker', label: 'Market Ticker', class: 'mono' },
+    { key: 'score', label: 'Score', class: 'score' },
     { key: 'sim_orders', label: 'Sim Orders', align: 'right' },
     { key: 'live_orders', label: 'Live Orders', align: 'right' },
   ];
+
+  function fmtScore(/** @type {any} */ s) {
+    if (!s) return '—';
+    const sets = `${s.home_set_games}-${s.away_set_games}`;
+    const games = `${s.home_games}-${s.away_games}`;
+    const pts = `${s.home_points}-${s.away_points}`;
+    return `${sets}  ${games}  ${pts}`;
+  }
 
   let rows = $derived(subs.map((/** @type {any} */ s) => ({
     ...s,
     title: s.title || fmtTicker(s.event_ticker),
     series: seriesFromTicker(s.event_ticker),
+    score: fmtScore(scores[s.event_ticker]),
     sim_orders: orderCounts[s.event_ticker] || 0,
     live_orders: pendingCounts[s.event_ticker] || 0,
   })));

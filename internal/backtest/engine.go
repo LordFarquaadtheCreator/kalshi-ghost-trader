@@ -233,12 +233,26 @@ type OrderRow struct {
 	Strategy      string  `json:"strategy"`
 }
 
+// ScoreEvent is a game-completion score snapshot, returned by GetEventTickPrices.
+type ScoreEvent struct {
+	TS           int64  `json:"ts"`
+	SetNumber    int    `json:"set_number"`
+	GameNumber   int    `json:"game_number"`
+	HomeGames    int    `json:"home_games"`
+	AwayGames    int    `json:"away_games"`
+	HomePoints   string `json:"home_points"`
+	AwayPoints   string `json:"away_points"`
+	HomeSetGames int    `json:"home_set_games"`
+	AwaySetGames int    `json:"away_set_games"`
+}
+
 // EventTickData holds tick data for all markets in an event.
 type EventTickData struct {
 	EventTicker string           `json:"event_ticker"`
 	Title       string           `json:"title"`
 	Markets     []MarketTickData `json:"markets"`
 	Orders      []OrderRow       `json:"orders"`
+	Scores      []ScoreEvent     `json:"scores"`
 }
 
 // GetEventTickPrices queries live tick prices for all markets in an event.
@@ -321,6 +335,35 @@ func (e *Engine) GetEventTickPrices(ctx context.Context, eventTicker string) (*E
 			Ticks:        ticks,
 		})
 	}
+
+	// Query game-completion score events (last point per game)
+	scoreRows, err := e.db.QueryContext(ctx,
+		`SELECT recv_ts, set_number, game_number,
+		        home_games, away_games, home_points, away_points,
+		        COALESCE(home_set_games, 0), COALESCE(away_set_games, 0)
+		 FROM (
+			SELECT *, ROW_NUMBER() OVER (
+				PARTITION BY set_number, game_number
+				ORDER BY point_number DESC
+			) as rn
+			FROM points
+			WHERE match_ticker = ?
+		 ) WHERE rn = 1
+		 ORDER BY recv_ts`, eventTicker)
+	if err != nil {
+		return nil, fmt.Errorf("query score events: %w", err)
+	}
+	for scoreRows.Next() {
+		var s ScoreEvent
+		if err := scoreRows.Scan(&s.TS, &s.SetNumber, &s.GameNumber,
+			&s.HomeGames, &s.AwayGames, &s.HomePoints, &s.AwayPoints,
+			&s.HomeSetGames, &s.AwaySetGames); err != nil {
+			scoreRows.Close()
+			return nil, err
+		}
+		result.Scores = append(result.Scores, s)
+	}
+	scoreRows.Close()
 
 	return result, nil
 }

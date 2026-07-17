@@ -12,7 +12,7 @@
 
   const POLL_MS = 3000;
 
-  /** @type {{event_ticker: string, title: string, markets: {market_ticker: string, player_name: string, ticks: {ts: number, price: number}[]}[], orders: {ts: number, market_ticker: string, player_name: string, context: string, market_price: number, edge_cents: number, suggested_size: number, strategy: string}[]} | null} */
+  /** @type {{event_ticker: string, title: string, markets: {market_ticker: string, player_name: string, ticks: {ts: number, price: number}[]}[], orders: {ts: number, market_ticker: string, player_name: string, context: string, market_price: number, edge_cents: number, suggested_size: number, strategy: string}[], scores: {ts: number, set_number: number, game_number: number, home_games: number, away_games: number, home_points: string, away_points: string, home_set_games: number, away_set_games: number}[]} | null} */
   let data = $state(null);
   let loading = $state(true);
   let chartReady = $state(false);
@@ -59,10 +59,41 @@
       tension: 0.2,
     }));
 
+    const plugins = [];
+
+    if (data.scores && data.scores.length > 0) {
+      const scoreEvents = data.scores;
+      plugins.push({
+        id: 'scoreLines',
+        afterDatasetsDraw(/** @type {any} */ chart) {
+          const { ctx, chartArea, scales } = chart;
+          if (!chartArea) return;
+          ctx.save();
+          for (const s of scoreEvents) {
+            const x = scales.x.getPixelForValue(s.ts);
+            if (x < chartArea.left || x > chartArea.right) continue;
+            ctx.strokeStyle = '#34d39988';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(x, chartArea.top);
+            ctx.lineTo(x, chartArea.bottom);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = '#34d399';
+            ctx.font = '10px monospace';
+            const label = `${s.home_set_games}-${s.away_set_games} ${s.home_games}-${s.away_games}`;
+            ctx.fillText(label, x + 3, chartArea.top + 12);
+          }
+          ctx.restore();
+        },
+      });
+    }
+
     if (data.orders && data.orders.length > 0) {
       const orderTimes = data.orders.map((o) => o.ts);
 
-      const allOrderLines = {
+      plugins.push({
         id: 'orderLines',
         afterDatasetsDraw(/** @type {any} */ chart) {
           const { ctx, chartArea, scales } = chart;
@@ -82,7 +113,7 @@
           }
           ctx.restore();
         },
-      };
+      });
 
       // placeholder dataset so plugin has access — invisible point at each order
       datasets.push(/** @type {any} */ ({
@@ -92,118 +123,63 @@
         pointRadius: 0,
         orderLines: true,
       }));
-
-      chart = new Chart(canvas, {
-        type: 'line',
-        data: { datasets },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: false,
-          plugins: {
-            legend: { labels: { color: '#94a3b8', font: { size: 12 } } },
-            tooltip: {
-              mode: 'index',
-              intersect: false,
-              callbacks: {
-                label: (/** @type {any} */ ctx) => {
-                  const raw = /** @type {{x: number, y: number}} */ (ctx.raw);
-                  if (raw && typeof raw === 'object' && 'y' in raw && raw.y !== null) {
-                    return `${ctx.dataset.label}: ${(raw.y * 100).toFixed(1)}c`;
-                  }
-                  return null;
-                },
-              },
-            },
-          },
-          scales: {
-            x: {
-              type: 'linear',
-              ticks: {
-                color: '#64748b',
-                font: { size: 10 },
-                callback: (/** @type {number} */ v) => {
-                  const d = new Date(v);
-                  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                },
-              },
-              grid: { color: '#1e293b' },
-              title: { display: true, text: 'Time', color: '#64748b' },
-            },
-            y: {
-              min: 0,
-              max: 1,
-              ticks: {
-                color: '#64748b',
-                font: { size: 10 },
-                callback: (/** @type {number} */ v) => {
-                  const val = Number(v);
-                  return val.toFixed(2);
-                },
-              },
-              grid: { color: '#1e293b' },
-              title: { display: true, text: 'Price (cents)', color: '#64748b' },
-            },
-          },
-        },
-        plugins: [allOrderLines],
-      });
-    } else {
-      chart = new Chart(canvas, {
-        type: 'line',
-        data: { datasets },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: false,
-          plugins: {
-            legend: { labels: { color: '#94a3b8', font: { size: 12 } } },
-            tooltip: {
-              mode: 'index',
-              intersect: false,
-              callbacks: {
-                label: (/** @type {any} */ ctx) => {
-                  const raw = /** @type {{x: number, y: number}} */ (ctx.raw);
-                  if (raw && typeof raw === 'object' && 'y' in raw) {
-                    return `${ctx.dataset.label}: ${(raw.y * 100).toFixed(1)}c`;
-                  }
-                  return `${ctx.dataset.label}: ${ctx.raw}`;
-                },
-              },
-            },
-          },
-          scales: {
-            x: {
-              type: 'linear',
-              ticks: {
-                color: '#64748b',
-                font: { size: 10 },
-                callback: (/** @type {number} */ v) => {
-                  const d = new Date(v);
-                  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                },
-              },
-              grid: { color: '#1e293b' },
-              title: { display: true, text: 'Time', color: '#64748b' },
-            },
-            y: {
-              min: 0,
-              max: 1,
-              ticks: {
-                color: '#64748b',
-                font: { size: 10 },
-                callback: (/** @type {number} */ v) => {
-                  const val = Number(v);
-                  return val.toFixed(2);
-                },
-              },
-              grid: { color: '#1e293b' },
-              title: { display: true, text: 'Price (cents)', color: '#64748b' },
-            },
-          },
-        },
-      });
     }
+
+    chart = new Chart(canvas, {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+          legend: { labels: { color: '#94a3b8', font: { size: 12 } } },
+          tooltip: {
+            mode: 'index',
+            intersect: false,
+            callbacks: {
+              label: (/** @type {any} */ ctx) => {
+                const raw = /** @type {{x: number, y: number}} */ (ctx.raw);
+                if (raw && typeof raw === 'object' && 'y' in raw && raw.y !== null) {
+                  return `${ctx.dataset.label}: ${(raw.y * 100).toFixed(1)}c`;
+                }
+                return null;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: 'linear',
+            ticks: {
+              color: '#64748b',
+              font: { size: 10 },
+              callback: (/** @type {number} */ v) => {
+                const d = new Date(v);
+                return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+              },
+            },
+            grid: { color: '#1e293b' },
+            title: { display: true, text: 'Time', color: '#64748b' },
+          },
+          y: {
+            min: 0,
+            max: 1,
+            ticks: {
+              color: '#64748b',
+              font: { size: 10 },
+              callback: (/** @type {number} */ v) => {
+                const val = Number(v);
+                return val.toFixed(2);
+              },
+            },
+            grid: { color: '#1e293b' },
+            title: { display: true, text: 'Price (cents)', color: '#64748b' },
+          },
+        },
+      },
+      plugins,
+    });
   }
 
   onMount(() => {
