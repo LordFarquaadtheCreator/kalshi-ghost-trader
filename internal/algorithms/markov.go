@@ -197,6 +197,15 @@ func (m *MarkovModel) tbWinProbRecursive(h, a int, p float64, homeServing bool, 
 	if a >= 7 && a-h >= 2 {
 		return 0.0
 	}
+	// Tiebreak deuce: both >= 7 and equal. Closed form prevents infinite
+	// recursion — same pattern as gameWinProbRecursive's deuce handling.
+	// Uses average serve probability since tiebreak serve alternates.
+	if h >= 7 && a >= 7 && h == a {
+		pAvg := 0.5*m.pServe + 0.5*m.pReturn
+		p2 := pAvg * pAvg
+		q2 := (1 - pAvg) * (1 - pAvg)
+		return p2 / (p2 + q2)
+	}
 
 	// Serve alternation: 1,2,2,1,1,2,2,1,...
 	// Point 0: player 1 serves
