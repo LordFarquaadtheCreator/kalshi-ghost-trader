@@ -69,5 +69,14 @@ func DefaultFactories() map[string]StrategyFactory {
 		"calibrated-markov": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewCalibratedMarkovStrategy(em, log, algorithms.DefaultCalibratedMarkovConfig())
 		},
+		"cross-arb": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewCrossArbStrategy(em, log, algorithms.DefaultCrossArbConfig())
+		},
+		"tiebreak-server": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewTiebreakServerStrategy(em, log, algorithms.DefaultTiebreakServerConfig())
+		},
+		"set1winner": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewSet1WinnerStrategy(em, log, algorithms.DefaultSet1WinnerConfig())
+		},
 	}
 }

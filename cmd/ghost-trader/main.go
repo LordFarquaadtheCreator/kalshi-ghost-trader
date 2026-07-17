@@ -206,6 +206,15 @@ func main() {
 		"calibrated-markov": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewCalibratedMarkovStrategyWithDB(e, db, log, algorithms.DefaultCalibratedMarkovConfig())
 		},
+		"cross-arb": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewCrossArbStrategy(e, log, algorithms.DefaultCrossArbConfig())
+		},
+		"tiebreak-server": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewTiebreakServerStrategy(e, log, algorithms.DefaultTiebreakServerConfig())
+		},
+		"set1winner": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewSet1WinnerStrategy(e, log, algorithms.DefaultSet1WinnerConfig())
+		},
 	})
 	multi.SetDB(db)
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())

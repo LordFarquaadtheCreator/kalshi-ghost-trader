@@ -112,6 +112,15 @@ var strategies = map[string]strategyFactory{
 	"calibrated-markov": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		return algorithms.NewCalibratedMarkovStrategy(em, log, algorithms.DefaultCalibratedMarkovConfig())
 	},
+	"cross-arb": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewCrossArbStrategy(em, log, algorithms.DefaultCrossArbConfig())
+	},
+	"tiebreak-server": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewTiebreakServerStrategy(em, log, algorithms.DefaultTiebreakServerConfig())
+	},
+	"set1winner": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewSet1WinnerStrategy(em, log, algorithms.DefaultSet1WinnerConfig())
+	},
 }
 
 type marketRow struct {
@@ -355,7 +364,16 @@ func runStrategy(
 					break
 				}
 			}
+			// Skip unresolved markets — can't evaluate PnL
+			if mktResult == "" {
+				continue
+			}
 			won := mktResult == "yes"
+			// buy_no: win when result is "no". PnL = size*(1-no_price) on win, -size*no_price on loss.
+			// no_price stored in MarketPrice for buy_no orders.
+			if o.Action == "buy_no" {
+				won = mktResult == "no"
+			}
 			var pnl float64
 			if won {
 				pnl = o.SuggestedSize * (1.0 - o.MarketPrice)

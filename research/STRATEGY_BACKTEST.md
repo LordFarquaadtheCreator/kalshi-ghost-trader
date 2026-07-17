@@ -101,6 +101,9 @@ finding was small-sample luck. Market is efficient at match point.
 | Strategy | Model | n | Hit | Net P&L | ROI | Sharpe | PF | Verdict |
 |---|---|---|---|---|---|---|---|---|
 | calibrated-markov | M1 logistic | 117 | 23.9% | -$20.10 | -6.7% | -0.04 | 0.90 | Negative but close. Better than breakpoint. |
+| cross-arb | YES+YES<1.0 | 316 | 49.7% | +$40.10 | 2.6% | 0.03 | 1.07 | **Positive.** Guaranteed edge per pair. |
+| tiebreak-server | TB server 60% | 22 | 36.4% | +$19.30 | 31.8% | 0.19 | 1.58 | **Positive.** Small sample, strong Sharpe. |
+| set1winner | S1 winner 72% | 65 | 29.2% | -$29.20 | -13.3% | -0.11 | 0.76 | Negative. Market prices set 1 winner correctly. |
 
 **M1 serve-win logistic**: 66.8% accuracy, Brier 0.21. Per-series rates
 match empirical (ATP 61%, WTA 52%). Model itself is good — problem is
