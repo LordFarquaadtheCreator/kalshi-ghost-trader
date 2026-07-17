@@ -13,5 +13,11 @@ func kellySize(convProb, marketPrice, bankroll, kellyFraction float64) float64 {
 	if fKelly <= 0 {
 		return 0
 	}
-	return kellyFraction * fKelly * bankroll
+	size := kellyFraction * fKelly * bankroll
+	// cap total cost at $5 (size * price)
+	maxSize := 5.0 / marketPrice
+	if size > maxSize {
+		size = maxSize
+	}
+	return size
 }
