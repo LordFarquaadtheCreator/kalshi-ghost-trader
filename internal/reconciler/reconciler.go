@@ -116,6 +116,16 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 				r.log.Warn("reconciler: finalize event failed",
 					"event", m.EventTicker, "err", err)
 			}
+			// Resolve real orders for this market
+			if mkt.Result != "" {
+				if err := r.db.ResolveRealOrders(ctx, m.MarketTicker, mkt.Result); err != nil {
+					r.log.Warn("reconciler: resolve real orders failed",
+						"market", m.MarketTicker, "err", err)
+				} else {
+					r.log.Info("reconciler: resolved real orders",
+						"market", m.MarketTicker, "result", mkt.Result)
+				}
+			}
 		}
 	}
 

@@ -67,6 +67,11 @@ WHERE market_ticker=?`,
 			return err
 		}
 
+		// Resolve real orders for this market
+		if le.Result != "" {
+			_ = d.ResolveRealOrders(ctx, le.MarketTicker, le.Result)
+		}
+
 		// Get the event_ticker for this market
 		var eventTicker string
 		err = d.db.QueryRowContext(ctx, "SELECT event_ticker FROM markets WHERE market_ticker = ?", le.MarketTicker).Scan(&eventTicker)
