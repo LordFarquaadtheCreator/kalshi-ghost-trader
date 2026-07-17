@@ -65,6 +65,7 @@
   })());
 
   let liveRows = $derived(rows.filter((/** @type {any} */ r) => scores[r.event_ticker]));
+  /** @type {any[]} */
   let nonLiveRows = $derived(rows.filter((/** @type {any} */ r) => !scores[r.event_ticker]));
 
   function handleRowClick(/** @type {any} */ row) {
