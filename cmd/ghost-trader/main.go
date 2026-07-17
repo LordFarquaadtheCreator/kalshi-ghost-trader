@@ -128,6 +128,18 @@ func main() {
 		log.Warn("REAL TRADING ENABLED — live orders will be submitted to Kalshi",
 			"environment", cfg.Environment, "bankroll", cfg.RealBankroll)
 
+		// Auto-init liquidity pool if not yet seeded and bankroll is meaningful
+		if cfg.RealBankroll > 1 {
+			if _, err := db.GetLiquidityPool(ctx); err != nil {
+				initialCents := int64(cfg.RealBankroll * 100)
+				if err := db.InitLiquidityPool(ctx, initialCents); err != nil {
+					log.Error("auto-init liquidity pool", "err", err)
+				} else {
+					log.Info("auto-initialized liquidity pool", "initial_cents", initialCents)
+				}
+			}
+		}
+
 		realEmitter := algorithms.NewKalshiOrderEmitter(restClient, db, algorithms.RealOrderConfig{
 			Enabled:       true,
 			Bankroll:      cfg.RealBankroll,
