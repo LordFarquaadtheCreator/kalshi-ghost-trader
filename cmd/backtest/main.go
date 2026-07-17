@@ -91,6 +91,24 @@ var strategies = map[string]strategyFactory{
 	"convexpool": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		return algorithms.NewConvexPoolStrategy(em, log, algorithms.DefaultConvexPoolConfig())
 	},
+	"breakback": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewBreakBackStrategy(em, log, algorithms.DefaultBreakBackConfig())
+	},
+	"nofade": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewNoFadeStrategy(em, log, algorithms.DefaultNoFadeConfig())
+	},
+	"server1530": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewServer1530Strategy(em, log, algorithms.DefaultServer1530Config())
+	},
+	"setdown": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewSetDownStrategy(em, log, algorithms.DefaultSetDownConfig())
+	},
+	"tiebreak": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewTiebreakStrategy(em, log, algorithms.DefaultTiebreakConfig())
+	},
+	"comeback040": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewComeback040Strategy(em, log, algorithms.DefaultComeback040Config())
+	},
 }
 
 type marketRow struct {
