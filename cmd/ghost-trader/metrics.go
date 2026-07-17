@@ -100,7 +100,7 @@ func strategyListHandler(e *backtest.Engine) http.HandlerFunc {
 
 var btMu sync.Mutex
 
-func backtestHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
+func backtestHandler(e *backtest.Engine, cache *backtest.Cache, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -122,11 +122,16 @@ func backtestHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
 
 		results := make([]*backtest.StrategyResult, 0, len(selected))
 		for _, name := range selected {
+			if cached := cache.Get(name, minPrice); cached != nil {
+				results = append(results, cached)
+				continue
+			}
 			res, err := e.RunStrategy(name, minPrice)
 			if err != nil {
 				log.Error("run strategy", "name", name, "err", err)
 				continue
 			}
+			cache.Put(name, minPrice, res)
 			results = append(results, res)
 		}
 

@@ -351,13 +351,16 @@ func main() {
 	}
 	defer btEngine.Close()
 
+	// Backtest result cache — 5 min TTL
+	btCache := backtest.NewCache(5 * time.Minute)
+
 	// pprof + runtime metrics + strategy API server
 	if cfg.MetricsPort > 0 {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/metrics", metricsHandler)
 		mux.HandleFunc("/api/tracked", trackedHandler(tr, btEngine))
 		mux.HandleFunc("/api/strategies", corsHandler(strategyListHandler(btEngine)))
-		mux.HandleFunc("/api/backtest", corsHandler(backtestHandler(btEngine, log)))
+		mux.HandleFunc("/api/backtest", corsHandler(backtestHandler(btEngine, btCache, log)))
 		mux.HandleFunc("/api/price-bands", corsHandler(priceBandsHandler(btEngine, log)))
 		mux.HandleFunc("/api/ticks", corsHandler(ticksHandler(btEngine, log)))
 		mux.HandleFunc("/api/orders", corsHandler(ordersHandler(btEngine, log)))
