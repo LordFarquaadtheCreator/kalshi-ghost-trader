@@ -38,6 +38,18 @@ Filter surface mirrors `/strategies` (simulated outcomes) for parity.
 - Settled Trades table: `CollapsibleSection`, resolved orders with WON/LOST badge + P&L
 - Strategy toggles reuse `strategyColors` map from `/strategies` page; fallback `vibrantColor(name)`
 
+## Charts
+
+Six Chart.js charts in Analysis `CollapsibleSection`:
+1. Cumulative P&L — line, settled orders sorted by ts
+2. P&L by Strategy — bar, net pnl per strategy
+3. Win / Loss by Strategy — stacked bar
+4. Entry Price Distribution — bar, 10 bins (0-100c)
+5. Orders by Day — mixed: count bars (left y) + net P&L line (right y). Day = YYYY-MM-DD from `o.ts`
+6. Orders by Hour (24hr) — mixed: count bars + P&L line. Hour = 0-23 from `new Date(o.ts).getHours()`
+
+`bucketByDay` / `bucketByHour` helpers group filtered orders. Count bars use all filtered orders; P&L line sums `o.pnl` for settled orders only (pending orders contribute to count, not P&L).
+
 ## Chart Colors
 
 Same `strategyColors` map as `/strategies` page: matchpoint=#60a5fa, matchpoint-aggro=#a78bfa, setpoint=#34d399, setpoint-serve=#fbbf24, setpoint-cheap=#f472b0, fadelongshot=#f87171.

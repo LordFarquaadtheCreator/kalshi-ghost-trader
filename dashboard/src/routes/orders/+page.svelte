@@ -100,14 +100,51 @@
   /** @type {HTMLCanvasElement | null} */ let stratPnlCanvas = $state(null);
   /** @type {HTMLCanvasElement | null} */ let winlossCanvas = $state(null);
   /** @type {HTMLCanvasElement | null} */ let priceDistCanvas = $state(null);
+  /** @type {HTMLCanvasElement | null} */ let byDayCanvas = $state(null);
+  /** @type {HTMLCanvasElement | null} */ let byHourCanvas = $state(null);
   /** @type {any} */ let pnlChart = null;
   /** @type {any} */ let stratPnlChart = null;
   /** @type {any} */ let winlossChart = null;
   /** @type {any} */ let priceDistChart = null;
+  /** @type {any} */ let byDayChart = null;
+  /** @type {any} */ let byHourChart = null;
   let pnlReady = $state(false);
   let stratPnlReady = $state(false);
   let winlossReady = $state(false);
   let priceDistReady = $state(false);
+  let byDayReady = $state(false);
+  let byHourReady = $state(false);
+
+  // Bucket orders by calendar day (YYYY-MM-DD) and by hour-of-day (0-23, 24hr).
+  // Count bars use all filtered orders; P&L line sums pnl of settled orders only.
+  /** @returns {{labels: string[], counts: number[], pnl: number[]}} */
+  function bucketByDay(/** @type {any[]} */ orders) {
+    /** @type {Record<string, {count: number, pnl: number}>} */
+    const m = {};
+    for (const o of orders) {
+      const d = new Date(o.ts);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!m[key]) m[key] = { count: 0, pnl: 0 };
+      m[key].count++;
+      if (o.result) m[key].pnl += o.pnl;
+    }
+    const labels = Object.keys(m).sort();
+    return { labels, counts: labels.map((k) => m[k].count), pnl: labels.map((k) => Math.round(m[k].pnl * 100) / 100) };
+  }
+
+  /** @returns {{labels: string[], counts: number[], pnl: number[]}} */
+  function bucketByHour(/** @type {any[]} */ orders) {
+    /** @type {Record<number, {count: number, pnl: number}>} */
+    const m = {};
+    for (let h = 0; h < 24; h++) m[h] = { count: 0, pnl: 0 };
+    for (const o of orders) {
+      const h = new Date(o.ts).getHours();
+      m[h].count++;
+      if (o.result) m[h].pnl += o.pnl;
+    }
+    const labels = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0'));
+    return { labels, counts: labels.map((_, h) => m[h].count), pnl: labels.map((_, h) => Math.round(m[h].pnl * 100) / 100) };
+  }
 
   $effect(() => {
     if (!browser || !pnlCanvas || settledOrders.length === 0) return;
@@ -266,6 +303,72 @@
       priceDistReady = true;
     })();
   });
+
+  $effect(() => {
+    if (!browser || !byDayCanvas || filteredOrders.length === 0) return;
+    (async () => {
+      byDayReady = false;
+      const Chart = await setupChart();
+      if (!Chart) return;
+      if (byDayChart) byDayChart.destroy();
+
+      const { labels, counts, pnl } = bucketByDay(filteredOrders);
+
+      byDayChart = new Chart(byDayCanvas, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar', label: 'Orders', data: counts, backgroundColor: '#60a5fa80', borderColor: '#60a5fa', borderWidth: 1, yAxisID: 'y' },
+            { type: 'line', label: 'Net P&L', data: pnl, borderColor: '#fbbf24', backgroundColor: '#fbbf2420', borderWidth: 2, pointRadius: 2, tension: 0.2, yAxisID: 'y1' },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
+          scales: {
+            x: { ticks: { color: '#64748b', font: { size: 10 }, maxRotation: 45, minRotation: 45 }, grid: { color: '#1e293b' }, title: { display: true, text: 'Day', color: '#64748b' } },
+            y: { type: 'linear', position: 'left', ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' }, title: { display: true, text: 'Orders', color: '#64748b' }, beginAtZero: true },
+            y1: { type: 'linear', position: 'right', ticks: { color: '#64748b', font: { size: 10 }, callback: (/** @type {number} */ v) => '$' + v }, grid: { drawOnChartArea: false }, title: { display: true, text: 'Net P&L ($)', color: '#64748b' } },
+          },
+        },
+      });
+      byDayReady = true;
+    })();
+  });
+
+  $effect(() => {
+    if (!browser || !byHourCanvas || filteredOrders.length === 0) return;
+    (async () => {
+      byHourReady = false;
+      const Chart = await setupChart();
+      if (!Chart) return;
+      if (byHourChart) byHourChart.destroy();
+
+      const { labels, counts, pnl } = bucketByHour(filteredOrders);
+
+      byHourChart = new Chart(byHourCanvas, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { type: 'bar', label: 'Orders', data: counts, backgroundColor: '#a78bfa80', borderColor: '#a78bfa', borderWidth: 1, yAxisID: 'y' },
+            { type: 'line', label: 'Net P&L', data: pnl, borderColor: '#fbbf24', backgroundColor: '#fbbf2420', borderWidth: 2, pointRadius: 2, tension: 0.2, yAxisID: 'y1' },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
+          scales: {
+            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' }, title: { display: true, text: 'Hour (24hr)', color: '#64748b' } },
+            y: { type: 'linear', position: 'left', ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' }, title: { display: true, text: 'Orders', color: '#64748b' }, beginAtZero: true },
+            y1: { type: 'linear', position: 'right', ticks: { color: '#64748b', font: { size: 10 }, callback: (/** @type {number} */ v) => '$' + v }, grid: { drawOnChartArea: false }, title: { display: true, text: 'Net P&L ($)', color: '#64748b' } },
+          },
+        },
+      });
+      byHourReady = true;
+    })();
+  });
 </script>
 
 <svelte:head>
@@ -349,6 +452,14 @@
               <div class="chart-card">
                 <h3>Entry Price Distribution</h3>
                 <div class="chart-container" style="position: relative;"><canvas bind:this={priceDistCanvas}></canvas>{#if !priceDistReady}<ChartLoading />{/if}</div>
+              </div>
+              <div class="chart-card">
+                <h3>Orders by Day</h3>
+                <div class="chart-container" style="position: relative;"><canvas bind:this={byDayCanvas}></canvas>{#if !byDayReady}<ChartLoading />{/if}</div>
+              </div>
+              <div class="chart-card">
+                <h3>Orders by Hour (24hr)</h3>
+                <div class="chart-container" style="position: relative;"><canvas bind:this={byHourCanvas}></canvas>{#if !byHourReady}<ChartLoading />{/if}</div>
               </div>
             </div>
           </CollapsibleSection>
