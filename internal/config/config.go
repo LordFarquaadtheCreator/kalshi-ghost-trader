@@ -85,6 +85,15 @@ type Config struct {
 	CloseTimerMinPrice float64 `yaml:"close_timer_min_price"`    // only buy favorites ≥ this price
 	CloseTimerPollSecs int     `yaml:"close_timer_poll_secs"`    // DB poll interval
 	CloseTimerSize     float64 `yaml:"close_timer_size"`         // shares per order
+
+	// Order quota — throttles order emission to prevent exhausting API quota.
+	// When disabled, all orders are paper trades only (current behavior).
+	OrderQuotaEnabled      bool    `yaml:"order_quota_enabled"`
+	OrderQuotaCooldownSecs int     `yaml:"order_quota_cooldown_secs"` // per-market cooldown window
+	OrderQuotaMaxPerSec    int     `yaml:"order_quota_max_per_sec"`   // global rate limit (0 = unlimited)
+	OrderQuotaDailyLimit   int     `yaml:"order_quota_daily_limit"`   // hard daily ceiling (0 = unlimited)
+	OrderQuotaBudgetTotal  float64 `yaml:"order_quota_budget_total"`  // starting budget in dollars (0 = no tracking)
+	OrderQuotaBudgetFloor  float64 `yaml:"order_quota_budget_floor"`  // stop when remaining drops below this
 }
 
 // Load reads config from config.yaml in the working directory.
@@ -206,6 +215,18 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	}
 	if c.ReconcilerIntervalSecs == 0 {
 		c.ReconcilerIntervalSecs = 300
+	}
+	if c.OrderQuotaCooldownSecs == 0 {
+		c.OrderQuotaCooldownSecs = 30
+	}
+	if c.OrderQuotaMaxPerSec == 0 {
+		c.OrderQuotaMaxPerSec = 2
+	}
+	if c.OrderQuotaDailyLimit == 0 {
+		c.OrderQuotaDailyLimit = 100
+	}
+	if c.OrderQuotaBudgetFloor == 0 && c.OrderQuotaBudgetTotal > 0 {
+		c.OrderQuotaBudgetFloor = 5.0
 	}
 }
 

@@ -75,3 +75,13 @@ close_timer_lead_minutes: 10
 close_timer_min_price: 0.85
 close_timer_poll_secs: 30
 close_timer_size: 50
+
+# Order quota — throttles order emission to prevent exhausting API quota.
+# When disabled, all orders are paper trades only (current behavior).
+# Enable when wiring real order execution.
+order_quota_enabled: false
+order_quota_cooldown_secs: 30   # per-market: first order passes, rest dropped within window
+order_quota_max_per_sec: 2      # global rate limit across all markets
+order_quota_daily_limit: 100    # hard daily ceiling (0 = unlimited)
+order_quota_budget_total: 0     # starting budget in dollars (0 = no budget tracking)
+order_quota_budget_floor: 5.00  # stop ordering when remaining budget drops below this

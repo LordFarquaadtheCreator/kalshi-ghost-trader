@@ -42,5 +42,8 @@ func DefaultFactories() map[string]StrategyFactory {
 		"fadelongshot": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewFadeLongshotStrategy(em, log, algorithms.DefaultFadeLongshotConfig())
 		},
+		"nofade": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewNoFadeStrategy(em, log, algorithms.DefaultNoFadeConfig())
+		},
 	}
 }

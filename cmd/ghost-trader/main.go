@@ -94,21 +94,46 @@ func main() {
 	restClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
 		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
 
-	// Shared emitter — all strategies tag orders and forward here
-	sharedEmitter := algorithms.NewTickWriterEmitter(tickWriter)
+	// Quota guard — throttles orders when enabled. Paper trail always complete.
+	// When order_quota_enabled=false, all orders are paper trades (current behavior).
+	// When enabled, per-market cooldown prevents N strategies from firing N orders
+	// on the same market simultaneously.
+	paperEmitter := algorithms.NewTickWriterEmitter(tickWriter)
+	guard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{},
+		algorithms.QuotaConfig{
+			Enabled:      cfg.OrderQuotaEnabled,
+			CooldownSecs: cfg.OrderQuotaCooldownSecs,
+			MaxPerSec:    cfg.OrderQuotaMaxPerSec,
+			DailyLimit:   cfg.OrderQuotaDailyLimit,
+			BudgetTotal:  cfg.OrderQuotaBudgetTotal,
+			BudgetFloor:  cfg.OrderQuotaBudgetFloor,
+		}, log)
+	defer guard.Close()
+
+	if cfg.OrderQuotaEnabled {
+		log.Info("order quota enabled",
+			"cooldown_secs", cfg.OrderQuotaCooldownSecs,
+			"max_per_sec", cfg.OrderQuotaMaxPerSec,
+			"daily_limit", cfg.OrderQuotaDailyLimit,
+			"budget_total", cfg.OrderQuotaBudgetTotal,
+			"budget_floor", cfg.OrderQuotaBudgetFloor)
+	}
 
 	// matchPoint is the primary strategy and also serves as PriceLookup for CloseTimer
-	matchPoint := algorithms.NewMatchPointStrategy(sharedEmitter, log)
+	matchPoint := algorithms.NewMatchPointStrategy(guard, log)
 
 	// FadeLongshot: buy favorite at T-10min before close. Highest Sharpe (1.01).
 	// Created outside factory because it needs DB for live close_ts loading.
 	// All orders are paper trades — TickWriterEmitter writes to orders table, no real execution.
-	fadeLongshot := algorithms.NewFadeLongshotStrategyWithDB(sharedEmitter, db, log,
+	fadeLongshot := algorithms.NewFadeLongshotStrategyWithDB(guard, db, log,
 		algorithms.DefaultFadeLongshotConfig())
+
+	noFade := algorithms.NewNoFadeStrategyWithDB(guard, db, log,
+		algorithms.DefaultNoFadeConfig())
 
 	// Multi-strategy runtime: all point-based strategies run simultaneously.
 	// Each strategy's orders are tagged with its name in the orders table.
-	multi := algorithms.NewMultiStrategyFromFactories(sharedEmitter, log, map[string]algorithms.StrategyFactoryFn{
+	multi := algorithms.NewMultiStrategyFromFactories(guard, log, map[string]algorithms.StrategyFactoryFn{
 		"matchpoint": func(e algorithms.OrderEmitter) algorithms.Strategy { return matchPoint },
 		"matchpoint-aggro": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
@@ -156,6 +181,7 @@ func main() {
 			})
 		},
 		"fadelongshot": func(e algorithms.OrderEmitter) algorithms.Strategy { return fadeLongshot },
+		"nofade":       func(e algorithms.OrderEmitter) algorithms.Strategy { return noFade },
 	})
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())
 

@@ -12,9 +12,11 @@ import (
 // QuotaConfig controls order throttling to prevent exhausting API quota.
 type QuotaConfig struct {
 	Enabled      bool
-	CooldownSecs int // per-market cooldown window
-	MaxPerSec    int // global rate limit (orders/sec, 0 = unlimited)
-	DailyLimit   int // hard daily ceiling (0 = unlimited)
+	CooldownSecs int     // per-market cooldown window
+	MaxPerSec    int     // global rate limit (orders/sec, 0 = unlimited)
+	DailyLimit   int     // hard daily ceiling (0 = unlimited)
+	BudgetTotal  float64 // starting budget in dollars (0 = no budget tracking)
+	BudgetFloor  float64 // stop ordering when remaining drops below this
 }
 
 // QuotaGuard wraps two emitters: a paper trail emitter (always receives all
@@ -24,13 +26,15 @@ type QuotaConfig struct {
 // When Enabled is false, all orders pass to paper only — inner is expected
 // to be NoopEmitter. This preserves current paper-trading behavior.
 //
-// When Enabled is true, applies three layers of throttling before forwarding
+// When Enabled is true, applies four layers of throttling before forwarding
 // to inner:
 //  1. Per-market cooldown — first order per market within window passes,
 //     rest dropped. Prevents N strategies from firing N orders on same market.
-//  2. Global rate limit — token bucket caps orders/sec across all markets.
+//  2. Budget floor — tracks cumulative spend locally. If remaining budget
+//     would drop below floor, order is dropped. No REST balance query needed.
+//  3. Global rate limit — token bucket caps orders/sec across all markets.
 //     Non-blocking: drops if no token available (never blocks WS goroutine).
-//  3. Daily quota — hard ceiling on total orders per session.
+//  4. Daily quota — hard ceiling on total orders per session.
 type QuotaGuard struct {
 	paper OrderEmitter
 	inner OrderEmitter
@@ -44,7 +48,8 @@ type QuotaGuard struct {
 	stop   chan struct{}
 	closed sync.Once
 
-	remaining atomic.Int64
+	remaining atomic.Int64 // daily quota counter
+	spent     atomic.Int64 // cumulative spend in cents (for budget tracking)
 }
 
 // NewQuotaGuard creates a quota-throttling emitter wrapper.
@@ -113,7 +118,24 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 	q.lastOrder[o.MarketTicker] = time.Now()
 	q.mu.Unlock()
 
-	// 2. daily quota
+	// 2. budget floor — track spend locally, drop if below floor
+	if q.cfg.BudgetTotal > 0 {
+		orderCents := int64(o.SuggestedSize * 100)
+		newSpent := q.spent.Add(orderCents)
+		remainingCents := int64(q.cfg.BudgetTotal*100) - newSpent
+		floorCents := int64(q.cfg.BudgetFloor * 100)
+		if remainingCents < floorCents {
+			q.spent.Add(-orderCents) // rollback
+			q.log.Warn("quota: budget floor reached, dropped",
+				"market", o.MarketTicker, "strategy", o.Strategy,
+				"order_size", o.SuggestedSize,
+				"remaining", float64(remainingCents)/100,
+				"floor", q.cfg.BudgetFloor)
+			return false
+		}
+	}
+
+	// 3. daily quota
 	if q.cfg.DailyLimit > 0 {
 		if q.remaining.Add(-1) < 0 {
 			q.remaining.Store(0)
@@ -123,7 +145,7 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 		}
 	}
 
-	// 3. global rate limit — non-blocking, drop if no token
+	// 4. global rate limit — non-blocking, drop if no token
 	if q.tokens != nil {
 		select {
 		case <-q.tokens:
@@ -136,9 +158,15 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 		}
 	}
 
+	remainingBudget := -1.0
+	if q.cfg.BudgetTotal > 0 {
+		remainingBudget = q.cfg.BudgetTotal - float64(q.spent.Load())/100
+	}
+
 	q.log.Info("quota: order approved",
 		"market", o.MarketTicker, "strategy", o.Strategy,
-		"edge_cents", o.EdgeCents, "price", o.MarketPrice)
+		"edge_cents", o.EdgeCents, "price", o.MarketPrice,
+		"remaining_budget", remainingBudget)
 
 	return q.inner.EmitOrder(o)
 }
@@ -157,6 +185,14 @@ func (q *QuotaGuard) RemainingQuota() int64 {
 		return -1
 	}
 	return q.remaining.Load()
+}
+
+// RemainingBudget returns remaining budget in dollars (-1 = no budget tracking).
+func (q *QuotaGuard) RemainingBudget() float64 {
+	if q.cfg.BudgetTotal <= 0 {
+		return -1
+	}
+	return q.cfg.BudgetTotal - float64(q.spent.Load())/100
 }
 
 // Close stops the rate limiter goroutine. Safe to call once.
