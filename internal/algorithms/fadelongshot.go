@@ -45,29 +45,31 @@ func DefaultFadeLongshotConfig() FadeLongshotConfig {
 // RegisterCloseTime. In live mode, close_ts comes from the markets table.
 // In backtest, the backtest engine provides it.
 type FadeLongshotStrategy struct {
-	mu         sync.RWMutex
-	prices     map[string]float64
-	priceTimes map[string]time.Time
-	markets    map[string][]string
-	closeTimes map[string]int64
-	fired      map[string]bool
-	emitter    OrderEmitter
-	db         *store.DB // nil in backtest mode
-	log        *slog.Logger
-	cfg        FadeLongshotConfig
-	replayNow  *time.Time
+	mu          sync.RWMutex
+	prices      map[string]float64
+	priceTimes  map[string]time.Time
+	markets     map[string][]string
+	closeTimes  map[string]int64
+	fired       map[string]bool
+	closeWarned map[string]bool // warn once per event when close_ts=0
+	emitter     OrderEmitter
+	db          *store.DB // nil in backtest mode
+	log         *slog.Logger
+	cfg         FadeLongshotConfig
+	replayNow   *time.Time
 }
 
 func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLongshotConfig) *FadeLongshotStrategy {
 	return &FadeLongshotStrategy{
-		prices:     make(map[string]float64),
-		priceTimes: make(map[string]time.Time),
-		markets:    make(map[string][]string),
-		closeTimes: make(map[string]int64),
-		fired:      make(map[string]bool),
-		emitter:    emitter,
-		log:        log,
-		cfg:        cfg,
+		prices:      make(map[string]float64),
+		priceTimes:  make(map[string]time.Time),
+		markets:     make(map[string][]string),
+		closeTimes:  make(map[string]int64),
+		fired:       make(map[string]bool),
+		closeWarned: make(map[string]bool),
+		emitter:     emitter,
+		log:         log,
+		cfg:         cfg,
 	}
 }
 
@@ -102,11 +104,21 @@ func (s *FadeLongshotStrategy) loadCloseTime(eventTicker string) {
 		if m.CloseTS > 0 {
 			s.mu.Lock()
 			s.closeTimes[eventTicker] = m.CloseTS
+			delete(s.closeWarned, eventTicker)
 			s.mu.Unlock()
-			s.log.Debug("fadelongshot: loaded close_ts", "event", eventTicker, "close_ts", m.CloseTS)
+			s.log.Info("fadelongshot: loaded close_ts", "event", eventTicker, "close_ts", m.CloseTS)
 			return
 		}
 	}
+	// No close_ts yet — warn once per event
+	s.mu.Lock()
+	if !s.closeWarned[eventTicker] {
+		s.closeWarned[eventTicker] = true
+		s.mu.Unlock()
+		s.log.Warn("fadelongshot: no close_ts for event", "event", eventTicker)
+		return
+	}
+	s.mu.Unlock()
 }
 
 // RegisterCloseTime sets the close timestamp for an event.
@@ -126,6 +138,7 @@ func (s *FadeLongshotStrategy) UnregisterMarkets(eventTicker string) {
 	delete(s.markets, eventTicker)
 	delete(s.closeTimes, eventTicker)
 	delete(s.fired, eventTicker)
+	delete(s.closeWarned, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -193,6 +206,10 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 	closeTs, ok := s.closeTimes[eventTicker]
 	if !ok || closeTs == 0 {
 		s.mu.Unlock()
+		// Retry: close_ts may have arrived via lifecycle event after RegisterMarkets
+		if s.db != nil {
+			s.loadCloseTime(eventTicker)
+		}
 		return
 	}
 
