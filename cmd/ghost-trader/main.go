@@ -193,6 +193,12 @@ func main() {
 		"tiebreak": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewTiebreakStrategy(e, log, algorithms.DefaultTiebreakConfig())
 		},
+		"breakpoint": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewBreakPointStrategy(e, log, algorithms.DefaultBreakPointConfig())
+		},
+		"convexpool": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewConvexPoolStrategy(e, log, algorithms.DefaultConvexPoolConfig())
+		},
 	})
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())
 
@@ -221,7 +227,7 @@ func main() {
 			log.Error("apitennis_enabled but apitennis_api_key is empty")
 			os.Exit(1)
 		}
-		atScraper = apitennis.New(db, multi, cfg.APITennisAPIKey,
+		atScraper = apitennis.New(db, multi, tickWriter, cfg.APITennisAPIKey,
 			cfg.APITennisTimezone, log)
 		log.Info("apitennis scraper enabled", "timezone", cfg.APITennisTimezone)
 	}
@@ -263,6 +269,7 @@ func main() {
 		mux.HandleFunc("/api/ticks", corsHandler(ticksHandler(btEngine, log)))
 		mux.HandleFunc("/api/orders", corsHandler(ordersHandler(btEngine, log)))
 		mux.HandleFunc("/api/order-counts", corsHandler(orderCountsHandler(btEngine, log)))
+		mux.HandleFunc("/api/pending-order-counts", corsHandler(pendingOrderCountsHandler(btEngine, log)))
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{
 			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),

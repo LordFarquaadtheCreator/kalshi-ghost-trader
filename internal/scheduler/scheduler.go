@@ -151,10 +151,15 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 func (s *Scheduler) scheduleOne(ctx context.Context, market, eventTicker string, startAt time.Time) {
 	wait := time.Until(startAt)
 	if wait > 0 {
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
+			s.mu.Lock()
+			delete(s.pending, market)
+			s.mu.Unlock()
 			return
-		case <-time.After(wait):
+		case <-timer.C:
 		}
 	}
 

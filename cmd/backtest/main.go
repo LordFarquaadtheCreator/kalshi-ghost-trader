@@ -85,6 +85,12 @@ var strategies = map[string]strategyFactory{
 	"fadelongshot": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		return algorithms.NewFadeLongshotStrategy(em, log, algorithms.DefaultFadeLongshotConfig())
 	},
+	"breakpoint": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewBreakPointStrategy(em, log, algorithms.DefaultBreakPointConfig())
+	},
+	"convexpool": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewConvexPoolStrategy(em, log, algorithms.DefaultConvexPoolConfig())
+	},
 }
 
 type marketRow struct {

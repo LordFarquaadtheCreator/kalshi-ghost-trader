@@ -80,6 +80,15 @@ func (m *MultiStrategyRuntime) DeletePrice(marketTicker string) {
 	}
 }
 
+// OnPoint fans out score updates to strategies implementing ScoreObserver.
+func (m *MultiStrategyRuntime) OnPoint(eventTicker string, p store.Point) {
+	for _, ns := range m.strategies {
+		if obs, ok := ns.Strat.(ScoreObserver); ok {
+			obs.OnPoint(eventTicker, p)
+		}
+	}
+}
+
 func (m *MultiStrategyRuntime) String() string {
 	names := make([]string, len(m.strategies))
 	for i, ns := range m.strategies {

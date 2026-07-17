@@ -57,5 +57,11 @@ func DefaultFactories() map[string]StrategyFactory {
 		"tiebreak": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewTiebreakStrategy(em, log, algorithms.DefaultTiebreakConfig())
 		},
+		"breakpoint": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewBreakPointStrategy(em, log, algorithms.DefaultBreakPointConfig())
+		},
+		"convexpool": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewConvexPoolStrategy(em, log, algorithms.DefaultConvexPoolConfig())
+		},
 	}
 }

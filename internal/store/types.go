@@ -97,7 +97,10 @@ type OrderbookEvent struct {
 
 // Point maps a single point-by-point score entry from the points table.
 type Point struct {
+	MatchTicker  string // Kalshi event_ticker
+	FSMatchID    string // FlashScore/API-Tennis match ID
 	TS           int64  // unix ms (may be 0 if historical)
+	RecvTS       int64  // when we stored it
 	SetNumber    int    // 1-based
 	GameNumber   int    // 1-based within set
 	PointNumber  int    // 1-based within game

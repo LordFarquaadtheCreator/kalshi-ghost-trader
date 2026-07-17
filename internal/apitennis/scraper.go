@@ -3,6 +3,7 @@ package apitennis
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -17,10 +18,11 @@ import (
 //
 // Implements tracker.ScorePoller for lifecycle integration.
 type Scraper struct {
-	ws       *WSClient
-	db       *store.DB
-	strategy algorithms.Strategy
-	log      *slog.Logger
+	ws         *WSClient
+	db         *store.DB
+	strategy   algorithms.Strategy
+	tickWriter *store.TickWriter
+	log        *slog.Logger
 
 	workersMu sync.Mutex
 	workers   map[string]*matchWorker // event_ticker → worker
@@ -42,15 +44,21 @@ type matchWorker struct {
 	ch          chan WSEvent
 	done        chan struct{}
 	strategy    algorithms.Strategy
+	scoreObs    algorithms.ScoreObserver
+	tickWriter  *store.TickWriter
 	log         *slog.Logger
+
+	// Track which points we've already processed to avoid duplicates
+	seenPoints map[string]bool
 }
 
 // New creates an API-Tennis scraper.
-func New(db *store.DB, strat algorithms.Strategy, apiKey, timezone string, log *slog.Logger) *Scraper {
+func New(db *store.DB, strat algorithms.Strategy, tickWriter *store.TickWriter, apiKey, timezone string, log *slog.Logger) *Scraper {
 	return &Scraper{
 		ws:          NewWSClient(apiKey, timezone, log),
 		db:          db,
 		strategy:    strat,
+		tickWriter:  tickWriter,
 		log:         log,
 		workers:     make(map[string]*matchWorker),
 		matchCache:  make(map[int]string),
@@ -66,7 +74,12 @@ func (s *Scraper) StartPolling(eventTicker string) {
 		ch:          make(chan WSEvent, 64),
 		done:        make(chan struct{}),
 		strategy:    s.strategy,
+		tickWriter:  s.tickWriter,
+		seenPoints:  make(map[string]bool),
 		log:         s.log,
+	}
+	if obs, ok := s.strategy.(algorithms.ScoreObserver); ok {
+		w.scoreObs = obs
 	}
 
 	s.workersMu.Lock()
@@ -249,16 +262,123 @@ func (s *Scraper) maybeRegisterMarkets(eventTicker string, ev WSEvent) {
 		"first_player", ev.EventFirstPlayer, "second_player", ev.EventSecondPlayer)
 }
 
-// run is the per-match worker goroutine. Exists to ensure clean lifecycle
-// per match — market registration is handled by dispatch.
+// run is the per-match worker goroutine. Converts WSEvents to store.Point,
+// dispatches OnPoint to strategies, and ingests into TickWriter for DB storage.
 func (w *matchWorker) run() {
 	for {
 		select {
 		case <-w.done:
 			return
-		case <-w.ch:
-			// Events received but no processing needed —
-			// market registration happens in dispatch.
+		case ev := <-w.ch:
+			w.processEvent(ev)
 		}
 	}
+}
+
+// processEvent extracts new points from a WSEvent and dispatches them.
+// API-Tennis sends full point-by-point data on every push — dedup via seenPoints.
+func (w *matchWorker) processEvent(ev WSEvent) {
+	now := time.Now().UnixMilli()
+
+	// Accumulate set games from Scores
+	setGamesHome := make(map[int]int)
+	setGamesAway := make(map[int]int)
+	for _, sc := range ev.Scores {
+		sn := parseSetNumber(sc.ScoreSet)
+		setGamesHome[sn] = atoiSafe(sc.ScoreFirst)
+		setGamesAway[sn] = atoiSafe(sc.ScoreSecond)
+	}
+
+	for _, setData := range ev.PointByPoint {
+		setNum := parseSetNumber(setData.SetNumber)
+		gameNum := atoiSafe(setData.NumberGame)
+		server := parseServer(setData.PlayerServed)
+		scorer := parseServer(setData.ServeWinner)
+		if scorer == 0 && setData.ServeLost != "" {
+			scorer = parseServer(setData.ServeLost)
+		}
+
+		// Games before this set
+		homeSetGames := 0
+		awaySetGames := 0
+		for sn := 1; sn < setNum; sn++ {
+			homeSetGames += setGamesHome[sn]
+			awaySetGames += setGamesAway[sn]
+		}
+
+		// Current game score from SetData.Score "h - a"
+		homeGames, awayGames := parseScore(setData.Score)
+		hg := atoiSafe(homeGames)
+		ag := atoiSafe(awayGames)
+
+		isTB := false
+		if hg == 6 && ag == 6 {
+			isTB = true
+		}
+
+		for _, pt := range setData.Points {
+			ptNum := atoiSafe(pt.NumberPoint)
+			ptKey := strconv.Itoa(setNum) + ":" + strconv.Itoa(gameNum) + ":" + strconv.Itoa(ptNum)
+			if w.seenPoints[ptKey] {
+				continue
+			}
+			w.seenPoints[ptKey] = true
+
+			homePts, awayPts := parseScore(pt.Score)
+
+			p := store.Point{
+				MatchTicker:  w.eventTicker,
+				FSMatchID:    strconv.Itoa(ev.EventKey),
+				TS:           now,
+				RecvTS:       now,
+				SetNumber:    setNum,
+				GameNumber:   gameNum,
+				PointNumber:  ptNum,
+				Server:       server,
+				Scorer:       scorer,
+				HomePoints:   homePts,
+				AwayPoints:   awayPts,
+				HomeGames:    hg,
+				AwayGames:    ag,
+				HomeSetGames: homeSetGames,
+				AwaySetGames: awaySetGames,
+				IsTiebreak:   isTB,
+			}
+
+			// Classify point flags
+			pc := algorithms.ClassifyPoint(algorithms.PointContext{
+				SetsHome:   homeSetGames,
+				SetsAway:   awaySetGames,
+				HomeGames:  hg,
+				AwayGames:  ag,
+				HomePoints: homePts,
+				AwayPoints: awayPts,
+				Server:     server,
+				IsTiebreak: isTB,
+			})
+			p.IsBreakPoint = pc.IsBreakPoint
+			p.IsSetPoint = pc.IsSetPoint
+			p.IsMatchPoint = pc.IsMatchPoint
+
+			// Store to DB
+			if w.tickWriter != nil {
+				w.tickWriter.IngestPoint(p)
+			}
+
+			// Dispatch to strategies
+			if w.scoreObs != nil {
+				w.scoreObs.OnPoint(w.eventTicker, p)
+			}
+		}
+	}
+}
+
+func atoiSafe(s string) int {
+	n := 0
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			n = n*10 + int(c-'0')
+		}
+	}
+	return n
 }
