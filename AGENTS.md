@@ -81,16 +81,65 @@ Coverage classification on events at settlement:
 Payload retention: non-`full` events have `payload` NULLed in ticks/orderbook at settlement (P7).
 Orphan janitor (`CleanOrphans`) and late-parenting sweep (`AdoptOrphans`) run after each scan cycle.
 
+## Remote Deployment
+
+App runs on Oracle Cloud ARM instance. DB is on remote disk — not accessible locally.
+See `deploy/README.md` for deployment instructions.
+
+## Snapshots (Remote → Local)
+
+Since DB lives on remote, `scripts/snapshot.sh` runs on remote via cron and exports
+gzipped JSON summaries + backtest output to `/data/snapshots/YYYYMMDD_HHMM/`.
+`scripts/fetch-snapshots.sh` rsyncs them locally to `snapshots/`.
+
+Exports:
+- `orders.json.gz` — all simulated orders with computed P&L
+- `orders_unresolved.json.gz` — orders without market result yet
+- `events_summary.json.gz` — events with coverage, market status, tick counts
+- `strategy_summary.json.gz` — per-strategy aggregates (win rate, ROI, P&L)
+- `tick_stats.json.gz` — tick counts per market (top 500)
+- `scan_runs.json.gz` — recent scan audit log
+- `lifecycle_summary.json.gz` — recent market lifecycle transitions
+- `points_summary.json.gz` — point-by-point score data summary
+- `db_stats.json.gz` — table row counts, DB file size
+- `backtest.txt.gz` — full `ghost-trader backtest -strategy all` output
+- `meta.json.gz` — snapshot timestamp, uptime, goroutine count, heap
+
+Tiered retention (both remote + local):
+- 0–48h: keep all snapshots (8 at 6h intervals)
+- 2–30 days: keep 1 per day
+- 30–90 days: keep 1 per week
+- 90+ days: delete
+
+Cron (on remote, every 6 hours):
+```
+0 */6 * * * /data/snapshot.sh >> /data/snapshots/cron.log 2>&1
+```
+
+Fetch locally:
+```bash
+./scripts/fetch-snapshots.sh <instance-ip>
+```
+
+Inspect:
+```bash
+zcat snapshots/<dir>/strategy_summary.json.gz | python3 -m json.tool
+zcat snapshots/<dir>/backtest.txt.gz
+```
+
 ## Backup
 
+On remote — daily full DB backup, keep 7 days:
 ```bash
-# Create a snapshot of the live DB
+sqlite3 /data/kalshi_tennis.db ".backup /data/backups/kalshi_$(date +%Y%m%d).db"
+find /data/backups/ -name "kalshi_*.db" -mtime +7 -delete
+```
+
+Locally — atomic snapshot while scraper running:
+```bash
 mkdir -p backups
 sqlite3 kalshi_tennis.db ".backup backups/kalshi_tennis_$(date +%Y%m%d_%H%M).db"
 ```
-
-Backups live in `backups/`. The `.backup` command produces an atomic, transactionally-consistent
-copy even while the scraper is writing.
 
 ## Tennis Series
 

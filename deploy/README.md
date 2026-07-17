@@ -100,8 +100,9 @@ sudo systemctl stop ghost-trader
 
 ## Backup
 
+Daily full DB backup, keep 7 days:
+
 ```bash
-# Add to crontab on instance — daily backup, keep 7 days
 echo '#!/bin/bash
 sqlite3 /data/kalshi_tennis.db ".backup '\''/data/backups/kalshi_$(date +%Y%m%d).db'\''"
 find /data/backups/ -name "kalshi_*.db" -mtime +7 -delete' | sudo tee /etc/cron.daily/backup-kalshi-db
@@ -109,6 +110,35 @@ sudo chmod +x /etc/cron.daily/backup-kalshi-db
 sudo mkdir -p /data/backups
 sudo chown ubuntu:ubuntu /data/backups
 ```
+
+## Snapshots
+
+Summarized exports for local analysis. Runs SQL queries + backtest binary on
+remote, outputs gzipped JSON to `/data/snapshots/YYYYMMDD_HHMM/`.
+
+```bash
+# Upload snapshot script
+scp scripts/snapshot.sh ubuntu@<ip>:/data/snapshot.sh
+ssh ubuntu@<ip> 'chmod +x /data/snapshot.sh && mkdir -p /data/snapshots'
+
+# Add to crontab (every 6 hours)
+ssh ubuntu@<ip> 'echo "0 */6 * * * /data/snapshot.sh >> /data/snapshots/cron.log 2>&1" | crontab -'
+
+# Test manually
+ssh ubuntu@<ip> '/data/snapshot.sh'
+
+# Fetch locally
+./scripts/fetch-snapshots.sh <ip>
+```
+
+Tiered retention (both remote + local):
+- 0–48h: keep all (8 at 6h intervals)
+- 2–30 days: keep 1 per day
+- 30–90 days: keep 1 per week
+- 90+ days: delete
+
+Exports: `orders.json.gz` (P&L), `strategy_summary.json.gz`, `events_summary.json.gz`,
+`tick_stats.json.gz`, `backtest.txt.gz`, `db_stats.json.gz`, `meta.json.gz`, others.
 
 ## Cost
 

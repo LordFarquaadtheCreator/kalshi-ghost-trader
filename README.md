@@ -237,6 +237,29 @@ Open in Zed or Jupyter:
 zed notebooks/nothing_happens.ipynb
 ```
 
+## Snapshots (remote → local)
+
+Since the DB lives on the remote instance, `scripts/snapshot.sh` runs on remote
+via cron and exports gzipped JSON summaries + backtest output. Fetch with
+`scripts/fetch-snapshots.sh`.
+
+```bash
+# On remote — add to crontab (every 6 hours)
+0 */6 * * * /data/snapshot.sh >> /data/snapshots/cron.log 2>&1
+
+# Locally — fetch snapshots
+./scripts/fetch-snapshots.sh <instance-ip>
+
+# Inspect
+zcat snapshots/<dir>/strategy_summary.json.gz | python3 -m json.tool
+zcat snapshots/<dir>/backtest.txt.gz
+```
+
+Tiered retention (both ends): all snapshots within 48h, daily for 30 days,
+weekly for 90 days, older deleted.
+
+See [deploy/README.md](deploy/README.md) for remote setup instructions.
+
 ## Verification
 
 ```bash
