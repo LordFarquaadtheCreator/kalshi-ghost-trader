@@ -36,8 +36,7 @@ npm run preview  # preview production build
 
 ## Backend Dependencies
 
-- `localhost:6060` — ghost-trader metrics + tracked markets API
-- `localhost:6061` — strategy-api for backtest, ticks, orders, strategies
+- `localhost:6060` — ghost-trader: metrics, tracked markets, strategy API (backtest, ticks, orders)
 
 ## Pages
 

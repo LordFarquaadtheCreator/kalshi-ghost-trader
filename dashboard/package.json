@@ -4,7 +4,7 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"dev": "vite dev",
+		"dev": "curl -s http://127.0.0.1:6060/metrics > /dev/null 2>&1 || (cd .. && go run ./cmd/ghost-trader &) && sleep 1 && vite dev",
 		"dev:web": "vite dev",
 		"build": "vite build",
 		"preview": "vite preview",
