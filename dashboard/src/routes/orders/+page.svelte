@@ -9,6 +9,7 @@
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
+  import ChartLoading from '$lib/components/ChartLoading.svelte';
 
   const store = createPoll(() => api.getOrders(), 5000, { data: null, error: null, connected: false });
 
@@ -65,12 +66,17 @@
   /** @type {any} */ let stratPnlChart = null;
   /** @type {any} */ let winlossChart = null;
   /** @type {any} */ let priceDistChart = null;
+  let pnlReady = $state(false);
+  let stratPnlReady = $state(false);
+  let winlossReady = $state(false);
+  let priceDistReady = $state(false);
 
   const chartColors = ['#60a5fa', '#a78bfa', '#34d399', '#fbbf24', '#f472b0', '#f87171', '#22d3ee', '#c084fc'];
 
   $effect(() => {
     if (!browser || !pnlCanvas || settledOrders.length === 0) return;
     (async () => {
+      pnlReady = false;
       const Chart = await setupChart();
       if (!Chart) return;
       if (pnlChart) pnlChart.destroy();
@@ -100,12 +106,14 @@
           },
         },
       });
+      pnlReady = true;
     })();
   });
 
   $effect(() => {
     if (!browser || !stratPnlCanvas || filteredOrders.length === 0) return;
     (async () => {
+      stratPnlReady = false;
       const Chart = await setupChart();
       if (!Chart) return;
       if (stratPnlChart) stratPnlChart.destroy();
@@ -140,12 +148,14 @@
           },
         },
       });
+      stratPnlReady = true;
     })();
   });
 
   $effect(() => {
     if (!browser || !winlossCanvas || filteredOrders.length === 0) return;
     (async () => {
+      winlossReady = false;
       const Chart = await setupChart();
       if (!Chart) return;
       if (winlossChart) winlossChart.destroy();
@@ -178,12 +188,14 @@
           },
         },
       });
+      winlossReady = true;
     })();
   });
 
   $effect(() => {
     if (!browser || !priceDistCanvas || filteredOrders.length === 0) return;
     (async () => {
+      priceDistReady = false;
       const Chart = await setupChart();
       if (!Chart) return;
       if (priceDistChart) priceDistChart.destroy();
@@ -215,6 +227,7 @@
           },
         },
       });
+      priceDistReady = true;
     })();
   });
 </script>
@@ -299,19 +312,19 @@
         <div class="chart-grid">
           <div class="chart-card">
             <h3>Cumulative P&L</h3>
-            <div class="chart-container"><canvas bind:this={pnlCanvas}></canvas></div>
+            <div class="chart-container">{#if pnlReady}<canvas bind:this={pnlCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
           </div>
           <div class="chart-card">
             <h3>P&L by Strategy</h3>
-            <div class="chart-container"><canvas bind:this={stratPnlCanvas}></canvas></div>
+            <div class="chart-container">{#if stratPnlReady}<canvas bind:this={stratPnlCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
           </div>
           <div class="chart-card">
             <h3>Win / Loss by Strategy</h3>
-            <div class="chart-container"><canvas bind:this={winlossCanvas}></canvas></div>
+            <div class="chart-container">{#if winlossReady}<canvas bind:this={winlossCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
           </div>
           <div class="chart-card">
             <h3>Entry Price Distribution</h3>
-            <div class="chart-container"><canvas bind:this={priceDistCanvas}></canvas></div>
+            <div class="chart-container">{#if priceDistReady}<canvas bind:this={priceDistCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
           </div>
         </div>
       </CollapsibleSection>

@@ -36,6 +36,11 @@ export function fmtBytes(bytes) {
 }
 
 /** @param {number} n */
+export function fmtPct(n) {
+  return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+}
+
+/** @param {number} n */
 export function fmtNum(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
@@ -52,7 +57,23 @@ export function fmtPnL(n) {
   return (n >= 0 ? '+' : '') + '$' + n.toFixed(2);
 }
 
-/** @param {number} n */
-export function fmtPct(n) {
-  return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+const VIBRANT_PALETTE = [
+  '#60a5fa', '#a78bfa', '#34d399', '#fbbf24', '#f472b0',
+  '#f87171', '#22d3ee', '#c084fc', '#fb923c', '#4ade80',
+  '#e879f9', '#facc15', '#38bdf8', '#fde047', '#2dd4bf',
+  '#f9a8d4', '#a3e635', '#fca5a5', '#d8b4fe', '#7dd3fc',
+];
+
+/** @param {string} name */
+export function vibrantColor(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  }
+  return VIBRANT_PALETTE[Math.abs(hash) % VIBRANT_PALETTE.length];
+}
+
+/** @param {number} index */
+export function vibrantColorByIndex(index) {
+  return VIBRANT_PALETTE[index % VIBRANT_PALETTE.length];
 }

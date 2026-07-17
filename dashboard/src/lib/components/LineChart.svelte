@@ -2,32 +2,33 @@
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
   import { setupChart } from '$lib/chart-init.js';
+  import ChartLoading from '$lib/components/ChartLoading.svelte';
+  import { vibrantColorByIndex } from '$lib/utils.js';
 
   let { title, series, store, maxY = undefined, yUnit = '' } = $props();
 
   /** @type {HTMLCanvasElement | null} */ let canvas = $state(null);
   /** @type {any} */ let chart = null;
   /** @type {(() => void) | null} */ let unsub = null;
+  let ready = $state(false);
 
-  const fallbackColors = ['#60a5fa', '#f472b0', '#34d399', '#fbbf24', '#a78bfa'];
+  const buildDatasets = () =>
+      series.map((/** @type {any} */ s, /** @type {number} */ i) => ({
+        label: s.label,
+        data: [],
+        borderColor: s.color || vibrantColorByIndex(i),
+        backgroundColor: (s.color || vibrantColorByIndex(i)) + '20',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: series.length === 1,
+      }));
 
   onMount(async () => {
     if (!browser) return;
 
     const Chart = await setupChart();
     if (!Chart || !canvas) return;
-
-    const buildDatasets = () =>
-      series.map((/** @type {any} */ s, /** @type {number} */ i) => ({
-        label: s.label,
-        data: [],
-        borderColor: s.color || fallbackColors[i % fallbackColors.length],
-        backgroundColor: (s.color || fallbackColors[i % fallbackColors.length]) + '20',
-        borderWidth: 2,
-        pointRadius: 0,
-        tension: 0.3,
-        fill: series.length === 1,
-      }));
 
     chart = new Chart(canvas, {
       type: 'line',
@@ -81,6 +82,7 @@
       });
       chart.update('none');
     });
+    ready = true;
   });
 
   onDestroy(() => {
@@ -92,6 +94,6 @@
 <div class="chart-card">
   <div class="chart-title">{title}</div>
   <div class="chart-canvas-wrap">
-    <canvas bind:this={canvas}></canvas>
+    {#if ready}<canvas bind:this={canvas}></canvas>{:else}<ChartLoading />{/if}
   </div>
 </div>

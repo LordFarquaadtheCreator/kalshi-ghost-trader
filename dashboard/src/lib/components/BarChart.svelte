@@ -2,11 +2,13 @@
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
   import { setupChart } from '$lib/chart-init.js';
+  import ChartLoading from '$lib/components/ChartLoading.svelte';
 
   let { title, labels, datasets, yLabel = '' } = $props();
 
   /** @type {HTMLCanvasElement | null} */ let canvas = $state(null);
   /** @type {any} */ let chart = null;
+  let ready = $state(false);
 
   onMount(async () => {
     if (!browser) return;
@@ -38,6 +40,7 @@
         },
       },
     });
+    ready = true;
   });
 
   onDestroy(() => {
@@ -48,6 +51,6 @@
 <div class="chart-section">
   {#if title}<h2>{title}</h2>{/if}
   <div style="height: 300px; width: 100%; position: relative;">
-    <canvas bind:this={canvas}></canvas>
+    {#if ready}<canvas bind:this={canvas}></canvas>{:else}<ChartLoading />{/if}
   </div>
 </div>

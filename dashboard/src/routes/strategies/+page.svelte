@@ -7,6 +7,8 @@
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
+  import ChartLoading from '$lib/components/ChartLoading.svelte';
+  import { vibrantColor } from '$lib/utils.js';
 
   /** @type {string[]} */
   let strategies = $state([]);
@@ -35,6 +37,9 @@
   /** @type {any} */ let pnlChart = null;
   /** @type {any} */ let winlossChart = null;
   /** @type {any} */ let priceDistChart = null;
+  let pnlReady = $state(false);
+  let winlossReady = $state(false);
+  let priceDistReady = $state(false);
   /** @type {HTMLCanvasElement | null} */ let pnlCanvas = $state(null);
   /** @type {HTMLCanvasElement | null} */ let winlossCanvas = $state(null);
   /** @type {HTMLCanvasElement | null} */ let priceDistCanvas = $state(null);
@@ -50,7 +55,7 @@
   };
 
   function colorFor(/** @type {string} */ name) {
-    return strategyColors[name] || '#94a3b8';
+    return strategyColors[name] || vibrantColor(name);
   }
 
   async function loadStrategies() {
@@ -116,6 +121,10 @@
     const Chart = await setupChart();
     if (!Chart) return;
 
+    pnlReady = false;
+    winlossReady = false;
+    priceDistReady = false;
+
     const selNames = [...selected];
     /** @type {Record<string, any[]>} */
     const chartOrders = {};
@@ -151,6 +160,7 @@
           },
         },
       });
+      pnlReady = true;
     }
 
     if (winlossChart) { winlossChart.destroy(); winlossChart = null; }
@@ -173,6 +183,7 @@
           },
         },
       });
+      winlossReady = true;
     }
 
     if (priceDistChart) { priceDistChart.destroy(); priceDistChart = null; }
@@ -201,6 +212,7 @@
           },
         },
       });
+      priceDistReady = true;
     }
   }
 
@@ -261,17 +273,17 @@
 
         <div class="chart-section">
           <h2>Cumulative P&L</h2>
-          <div style="height: 300px; width: 100%; position: relative;"><canvas bind:this={pnlCanvas}></canvas></div>
+          <div style="height: 300px; width: 100%; position: relative;">{#if pnlReady}<canvas bind:this={pnlCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
         </div>
 
         <div class="chart-section">
           <h2>Win / Loss Comparison</h2>
-          <div style="height: 300px; width: 100%; position: relative;"><canvas bind:this={winlossCanvas}></canvas></div>
+          <div style="height: 300px; width: 100%; position: relative;">{#if winlossReady}<canvas bind:this={winlossCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
         </div>
 
         <div class="chart-section">
           <h2>Entry Price Distribution</h2>
-          <div style="height: 300px; width: 100%; position: relative;"><canvas bind:this={priceDistCanvas}></canvas></div>
+          <div style="height: 300px; width: 100%; position: relative;">{#if priceDistReady}<canvas bind:this={priceDistCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
         </div>
 
         <div class="orders-section">
