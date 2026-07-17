@@ -117,12 +117,12 @@ func (s *ConvexPoolStrategy) RegisterMarkets(eventTicker string, marketTickers [
 
 func (s *ConvexPoolStrategy) UnregisterMarkets(eventTicker string) {
 	s.mu.Lock()
-	delete(s.markets, eventTicker)
-	delete(s.states, eventTicker)
 	for _, mkt := range s.markets[eventTicker] {
 		delete(s.prices, mkt)
 		delete(s.priceTimes, mkt)
 	}
+	delete(s.markets, eventTicker)
+	delete(s.states, eventTicker)
 	s.mu.Unlock()
 }
 
