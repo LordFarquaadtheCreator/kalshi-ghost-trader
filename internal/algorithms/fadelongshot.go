@@ -50,42 +50,46 @@ func DefaultFadeLongshotConfig() FadeLongshotConfig {
 // RegisterCloseTime. In live mode, close_ts comes from the markets table.
 // In backtest, the backtest engine provides it.
 type FadeLongshotStrategy struct {
-	mu          sync.RWMutex
-	prices      map[string]float64
-	priceTimes  map[string]time.Time
-	markets     map[string][]string
-	closeTimes  map[string]int64
-	fired       map[string]bool
-	closeWarned map[string]bool // warn once per event when close_ts=0
-	emitter     OrderEmitter
-	db          *store.DB // nil in backtest mode
-	log         *slog.Logger
-	cfg         FadeLongshotConfig
-	replayNow   *time.Time
+	mu            sync.RWMutex
+	prices        map[string]float64
+	priceTimes    map[string]time.Time
+	markets       map[string][]string
+	closeTimes    map[string]int64
+	fired         map[string]bool // event_ticker -> fired
+	closeWarned   map[string]bool // warn once per event when close_ts=0
+	emitter       OrderEmitter
+	db            *store.DB // nil in backtest mode
+	log           *slog.Logger
+	cfg           FadeLongshotConfig
+	bankroll      float64
+	kellyFraction float64
+	replayNow     *time.Time
 
 	// Live score state from OnPoints
 	scores map[string]*matchScore // event_ticker -> score
 }
 
-func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLongshotConfig) *FadeLongshotStrategy {
+func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLongshotConfig, bankroll, kellyFraction float64) *FadeLongshotStrategy {
 	return &FadeLongshotStrategy{
-		prices:      make(map[string]float64),
-		priceTimes:  make(map[string]time.Time),
-		markets:     make(map[string][]string),
-		closeTimes:  make(map[string]int64),
-		fired:       make(map[string]bool),
-		closeWarned: make(map[string]bool),
-		scores:      make(map[string]*matchScore),
-		emitter:     emitter,
-		log:         log,
-		cfg:         cfg,
+		prices:        make(map[string]float64),
+		priceTimes:    make(map[string]time.Time),
+		markets:       make(map[string][]string),
+		closeTimes:    make(map[string]int64),
+		fired:         make(map[string]bool),
+		closeWarned:   make(map[string]bool),
+		scores:        make(map[string]*matchScore),
+		emitter:       emitter,
+		log:           log,
+		cfg:           cfg,
+		bankroll:      bankroll,
+		kellyFraction: kellyFraction,
 	}
 }
 
 // NewFadeLongshotStrategyWithDB creates a live-mode fadelongshot that
 // auto-loads close_ts from the markets table on RegisterMarkets.
-func NewFadeLongshotStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg FadeLongshotConfig) *FadeLongshotStrategy {
-	s := NewFadeLongshotStrategy(emitter, log, cfg)
+func NewFadeLongshotStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg FadeLongshotConfig, bankroll, kellyFraction float64) *FadeLongshotStrategy {
+	s := NewFadeLongshotStrategy(emitter, log, cfg, bankroll, kellyFraction)
 	s.db = db
 	return s
 }
@@ -298,10 +302,6 @@ func (s *FadeLongshotStrategy) checkEntry(marketTicker string) {
 
 func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 	s.mu.Lock()
-	if s.fired[marketTicker] {
-		s.mu.Unlock()
-		return
-	}
 
 	eventTicker := ""
 	for et, mkts := range s.markets {
@@ -313,6 +313,11 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		}
 	}
 	if eventTicker == "" {
+		s.mu.Unlock()
+		return
+	}
+
+	if s.fired[eventTicker] {
 		s.mu.Unlock()
 		return
 	}
@@ -377,7 +382,7 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	s.fired[favMkt] = true
+	s.fired[eventTicker] = true
 	s.mu.Unlock()
 
 	convProb := 0.99
@@ -389,7 +394,10 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	size := s.cfg.BaseSize
+	size := kellySize(convProb, favPrice, s.bankroll, s.kellyFraction)
+	if size <= 0 {
+		size = s.cfg.BaseSize
+	}
 
 	payload, _ := json.Marshal(map[string]any{
 		"window_s":    s.cfg.WindowSeconds,
@@ -414,6 +422,8 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		SetNumber:     0,
 		Strategy:      "fadelongshot",
 		Payload:       string(payload),
+		Bankroll:      s.bankroll,
+		KellyFraction: s.kellyFraction,
 	}
 
 	if !s.emitter.EmitOrder(o) {
