@@ -63,5 +63,8 @@ func DefaultFactories() map[string]StrategyFactory {
 		"convexpool": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewConvexPoolStrategy(em, log, algorithms.DefaultConvexPoolConfig())
 		},
+		"comeback040": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewComeback040Strategy(em, log, algorithms.DefaultComeback040Config())
+		},
 	}
 }

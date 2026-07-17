@@ -200,6 +200,9 @@ func main() {
 		"convexpool": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewConvexPoolStrategy(e, log, algorithms.DefaultConvexPoolConfig())
 		},
+		"comeback040": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewComeback040Strategy(e, log, algorithms.DefaultComeback040Config())
+		},
 	})
 	multi.SetDB(db)
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())
