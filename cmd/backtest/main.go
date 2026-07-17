@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -124,19 +125,29 @@ type order struct {
 
 func main() {
 	dbPath := flag.String("db", "kalshi_tennis.db", "path to SQLite DB")
-	strategyName := flag.String("strategy", "matchpoint", "strategy to backtest (available: matchpoint)")
+	strategyName := flag.String("strategy", "all", "strategy to backtest (use 'all' for all strategies)")
 	minPrice := flag.Float64("min-price", 0.0, "skip signals below this market price (0=disabled)")
 	debugMode := flag.Bool("debug", false, "enable debug logging to see strategy filter reasons")
 	flag.Parse()
 
-	factory, ok := strategies[*strategyName]
-	if !ok {
-		available := make([]string, 0, len(strategies))
+	var selected []string
+	if *strategyName == "all" {
 		for name := range strategies {
-			available = append(available, name)
+			selected = append(selected, name)
 		}
-		fmt.Fprintf(os.Stderr, "unknown strategy %q (available: %s)\n", *strategyName, strings.Join(available, ", "))
-		os.Exit(1)
+		sort.Strings(selected)
+	} else {
+		if _, ok := strategies[*strategyName]; !ok {
+			available := make([]string, 0, len(strategies)+1)
+			available = append(available, "all")
+			for name := range strategies {
+				available = append(available, name)
+			}
+			sort.Strings(available)
+			fmt.Fprintf(os.Stderr, "unknown strategy %q (available: %s)\n", *strategyName, strings.Join(available, ", "))
+			os.Exit(1)
+		}
+		selected = []string{*strategyName}
 	}
 
 	logLevel := slog.LevelWarn
@@ -250,7 +261,33 @@ func main() {
 	fmt.Printf("Matches with points: %d\n", len(pointsByMatch))
 	fmt.Printf("Matches with markets: %d\n", len(markets))
 
-	// Backtest — replay historical data through selected strategy
+	for _, name := range selected {
+		fmt.Printf("\n%s\n", strings.Repeat("=", 80))
+		fmt.Printf("STRATEGY: %s\n", name)
+		fmt.Printf("%s\n", strings.Repeat("=", 80))
+		runStrategy(name, strategies[name], log, markets, marketCloseTs, tickPrices, pointsByMatch, *minPrice)
+	}
+
+	// Aggregate summary across all strategies
+	if len(selected) > 1 {
+		printAggregate(allOrders)
+	}
+}
+
+// allOrders collects orders across all strategies for aggregate reporting.
+var allOrders []order
+
+// runStrategy replays historical data through a single strategy and prints results.
+func runStrategy(
+	name string,
+	factory strategyFactory,
+	log *slog.Logger,
+	markets map[string][]marketRow,
+	marketCloseTs map[string]int64,
+	tickPrices map[string][]tickPrice,
+	pointsByMatch map[string][]pointRow,
+	minPrice float64,
+) {
 	var orders []order
 	both := 0
 	for matchTicker, pts := range pointsByMatch {
@@ -296,7 +333,7 @@ func main() {
 		}
 
 		for _, o := range collector.Orders() {
-			if *minPrice > 0 && o.MarketPrice < *minPrice {
+			if minPrice > 0 && o.MarketPrice < minPrice {
 				continue
 			}
 			mktResult := ""
@@ -313,24 +350,27 @@ func main() {
 			} else {
 				pnl = -o.SuggestedSize * o.MarketPrice
 			}
-			orders = append(orders, order{
+			ord := order{
 				match: o.MatchTicker, market: o.MarketTicker, context: o.Context,
 				setNum: o.SetNumber,
 				price:  o.MarketPrice, edgeCents: o.EdgeCents, size: o.SuggestedSize,
 				won: won, pnl: pnl, result: mktResult,
-			})
+			}
+			orders = append(orders, ord)
+			allOrders = append(allOrders, ord)
 		}
 	}
 
-	// Close-time backtest path: for strategies that trade based on price
-	// near market close (e.g. fadelongshot). These don't need points data.
-	closeOrders := runCloseTimeBacktest(factory, log, markets, marketCloseTs, tickPrices, eventTitles, *minPrice)
+	// Close-time backtest path
+	closeOrders := runCloseTimeBacktest(factory, log, markets, marketCloseTs, tickPrices, eventTitles, minPrice)
 	orders = append(orders, closeOrders...)
+	allOrders = append(allOrders, closeOrders...)
 
-	// Summary
-	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
-	fmt.Printf("BACKTEST RESULTS — strategy: %s\n", *strategyName)
-	fmt.Printf("%s\n", strings.Repeat("=", 80))
+	printSummary(name, orders, both)
+}
+
+// printSummary prints backtest results for a single strategy.
+func printSummary(name string, orders []order, both int) {
 	fmt.Printf("Matches with both points and markets: %d\n", both)
 	fmt.Printf("Total signals: %d\n", len(orders))
 
@@ -372,6 +412,48 @@ func main() {
 	fmt.Printf("Avg size: %.1f\n", sumSize/n)
 	fmt.Printf("Avg price: %.3f\n", sumPrice/n)
 
+	// Risk-adjusted metrics
+	var sumSqDev, sumDownside, grossWin, grossLoss float64
+	var cumulative, peak, maxDD float64
+	for _, o := range orders {
+		dev := o.pnl - (totalPnL / n)
+		sumSqDev += dev * dev
+		if o.pnl < 0 {
+			sumDownside += o.pnl * o.pnl
+			grossLoss += -o.pnl
+		} else {
+			grossWin += o.pnl
+		}
+		cumulative += o.pnl
+		if cumulative > peak {
+			peak = cumulative
+		}
+		dd := peak - cumulative
+		if dd > maxDD {
+			maxDD = dd
+		}
+	}
+	stddev := math.Sqrt(sumSqDev / n)
+	downsideDev := math.Sqrt(sumDownside / n)
+	var sharpe, sortino, profitFactor float64
+	if stddev > 0 {
+		sharpe = (totalPnL / n) / stddev
+	}
+	if downsideDev > 0 {
+		sortino = (totalPnL / n) / downsideDev
+	}
+	if grossLoss > 0 {
+		profitFactor = grossWin / grossLoss
+	}
+
+	fmt.Printf("\n--- Risk-Adjusted Metrics ---\n")
+	fmt.Printf("Sharpe (per-trade): %.4f\n", sharpe)
+	fmt.Printf("Sortino (per-trade): %.4f\n", sortino)
+	fmt.Printf("Max drawdown: $%.2f\n", maxDD)
+	fmt.Printf("Profit factor: %.2f\n", profitFactor)
+	fmt.Printf("Std dev per trade: $%.2f\n", stddev)
+	fmt.Printf("Downside dev per trade: $%.2f\n", downsideDev)
+
 	// Per-order detail
 	sort.Slice(orders, func(i, j int) bool {
 		if orders[i].match != orders[j].match {
@@ -389,6 +471,41 @@ func main() {
 		}
 		fmt.Printf("%-45s %-20s %6.3f %5dc %6.1f %4s %8.2f\n",
 			o.match, o.context, o.price, o.edgeCents, o.size, wonStr, o.pnl)
+	}
+}
+
+// printAggregate prints a combined summary across all strategies.
+func printAggregate(orders []order) {
+	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
+	fmt.Printf("AGGREGATE — ALL STRATEGIES\n")
+	fmt.Printf("%s\n", strings.Repeat("=", 80))
+	fmt.Printf("Total signals: %d\n", len(orders))
+
+	if len(orders) == 0 {
+		fmt.Println("No orders would have been emitted.")
+		return
+	}
+
+	wins, losses := 0, 0
+	var totalPnL, totalInvested, totalPayout float64
+	for _, o := range orders {
+		if o.won {
+			wins++
+			totalPayout += o.size
+		} else {
+			losses++
+		}
+		totalPnL += o.pnl
+		totalInvested += o.size * o.price
+	}
+
+	fmt.Printf("Wins: %d (%.1f%%)\n", wins, float64(wins)/float64(len(orders))*100)
+	fmt.Printf("Losses: %d (%.1f%%)\n", losses, float64(losses)/float64(len(orders))*100)
+	fmt.Printf("Total invested: $%.2f\n", totalInvested)
+	fmt.Printf("Total payout: $%.2f\n", totalPayout)
+	fmt.Printf("Net P&L: $%.2f\n", totalPnL)
+	if totalInvested > 0 {
+		fmt.Printf("ROI: %.1f%%\n", totalPnL/totalInvested*100)
 	}
 }
 
