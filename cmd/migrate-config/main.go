@@ -96,6 +96,31 @@ func main() {
 	}
 	log.Info("seeded app_config", "keys", len(pairs))
 
+	// Prune stale keys no longer in the config schema
+	validKeys := make(map[string]bool, len(pairs))
+	for _, p := range pairs {
+		validKeys[p.Key] = true
+	}
+	existing, err := db.GetAllAppConfig(ctx)
+	if err != nil {
+		log.Error("read app_config for prune", "err", err)
+		os.Exit(1)
+	}
+	var stale []string
+	for _, kv := range existing {
+		if !validKeys[kv.Key] {
+			stale = append(stale, kv.Key)
+		}
+	}
+	for _, k := range stale {
+		if err := db.DeleteAppConfig(ctx, k); err != nil {
+			log.Error("prune stale key", "key", k, "err", err)
+		}
+	}
+	if len(stale) > 0 {
+		log.Info("pruned stale keys", "count", len(stale), "keys", stale)
+	}
+
 	// Seed liquidity pool from order_quota_budget_total
 	initialCents := int64(yc.OrderQuotaBudgetTotal * 100)
 	if initialCents > 0 {

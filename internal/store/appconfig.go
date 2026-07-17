@@ -42,6 +42,12 @@ func (d *DB) GetAppConfig(ctx context.Context, key string) (string, error) {
 	return val, err
 }
 
+// DeleteAppConfig removes a key from app_config. No-op if key doesn't exist.
+func (d *DB) DeleteAppConfig(ctx context.Context, key string) error {
+	_, err := d.db.ExecContext(ctx, "DELETE FROM app_config WHERE key = ?", key)
+	return err
+}
+
 // SetAppConfig inserts or updates a key-value pair in app_config.
 func (d *DB) SetAppConfig(ctx context.Context, key, value string) error {
 	_, err := d.db.ExecContext(ctx, `
