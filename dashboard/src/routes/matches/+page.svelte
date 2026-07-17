@@ -22,7 +22,7 @@
   /** @type {Record<string, number>} */
   let orderCounts = $derived($countsStore.data?.counts || {});
   let pendingCounts = $derived($pendingStore.data?.counts || {});
-  let netPnl = $derived(ordersStore.data?.summary?.net_pnl ?? 0);
+  let netPnl = $derived($ordersStore.data?.summary?.net_pnl ?? 0);
   let paperOrders = $derived(Object.values(orderCounts).reduce((/** @type {number} */ a, /** @type {number} */ b) => a + b, 0));
   let liveOrders = $derived(Object.values(pendingCounts).reduce((/** @type {number} */ a, /** @type {number} */ b) => a + b, 0));
 
