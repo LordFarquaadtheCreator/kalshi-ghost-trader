@@ -61,6 +61,9 @@ type Config struct {
 	// Scheduler poll interval (seconds)
 	SchedulerPollSecs int `yaml:"scheduler_poll_secs"`
 
+	// Reconciler poll interval (seconds) — fills settlement gaps via REST
+	ReconcilerIntervalSecs int `yaml:"reconciler_interval_secs"`
+
 	// pprof/metrics HTTP server port (0 = disabled)
 	MetricsPort int `yaml:"metrics_port"`
 
@@ -200,6 +203,9 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	}
 	if c.CloseTimerSize == 0 {
 		c.CloseTimerSize = 50
+	}
+	if c.ReconcilerIntervalSecs == 0 {
+		c.ReconcilerIntervalSecs = 300
 	}
 }
 

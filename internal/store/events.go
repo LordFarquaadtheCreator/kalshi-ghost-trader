@@ -90,6 +90,40 @@ func (d *DB) GetCoverage(ctx context.Context, eventTicker string) (string, error
 	return cov.String, nil
 }
 
+// FinalizeEventIfNeeded runs post-settlement logic for an event if both
+// markets are finalized. Extracted from ApplyLifecycleEvent "settled" case
+// so the reconciler can trigger the same cleanup via REST.
+//
+// Skips pruning for events that have orders — orders are valuable even with
+// no tick/point data (P6 protection).
+func (d *DB) FinalizeEventIfNeeded(ctx context.Context, eventTicker string) error {
+	var pending int
+	err := d.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM markets WHERE event_ticker = ? AND status != 'finalized'", eventTicker).Scan(&pending)
+	if err != nil || pending > 0 {
+		return err
+	}
+
+	_ = d.SetCoverage(ctx, eventTicker)
+
+	cov, _ := d.GetCoverage(ctx, eventTicker)
+	if cov == "none" {
+		// Check for orders before pruning — don't delete events with order data
+		var orderCount int
+		d.db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM orders WHERE match_ticker = ?", eventTicker).Scan(&orderCount)
+		if orderCount == 0 {
+			_, _ = d.db.ExecContext(ctx, "DELETE FROM events WHERE event_ticker = ?", eventTicker)
+		}
+		return nil
+	}
+
+	if cov != "full" && cov != "" {
+		_ = d.DropOrphanPayloads(ctx, eventTicker)
+	}
+	return nil
+}
+
 // GetAllEventsForMatching returns all events for FlashScore name matching.
 // Ordered by last_updated descending so recent events are matched first.
 func (d *DB) GetAllEventsForMatching(ctx context.Context) ([]Event, error) {

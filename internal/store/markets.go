@@ -90,6 +90,45 @@ func (d *DB) GetActiveMarkets(ctx context.Context) ([]Market, error) {
 	return markets, rows.Err()
 }
 
+// GetUnresolvedMarkets returns markets that need REST reconciliation:
+//   - Has orders but no result (missed WS settled event)
+//   - Status active/open but close_ts + grace period elapsed (should have settled)
+//
+// Deduplicated by market_ticker. Ordered by close_ts ascending (oldest first).
+func (d *DB) GetUnresolvedMarkets(ctx context.Context, graceMS int64) ([]Market, error) {
+	now := nowMillis()
+	rows, err := d.db.QueryContext(ctx, `
+SELECT m.market_ticker, m.event_ticker, m.series_ticker, m.player_name, m.tennis_competitor,
+    m.status, m.occurrence_ts, m.open_ts, m.close_ts, m.result, m.settlement_ts, m.settlement_value
+FROM markets m
+WHERE (
+    -- Has orders but no result
+    (m.result IS NULL OR m.result = '')
+    AND EXISTS (SELECT 1 FROM orders o WHERE o.market_ticker = m.market_ticker)
+)
+OR (
+    -- Active/open past close_ts + grace
+    m.status IN ('open', 'active')
+    AND m.close_ts > 0
+    AND m.close_ts + ? < ?
+)
+ORDER BY m.close_ts ASC`, graceMS, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var markets []Market
+	for rows.Next() {
+		m, err := scanMarket(rows)
+		if err != nil {
+			return nil, err
+		}
+		markets = append(markets, m)
+	}
+	return markets, rows.Err()
+}
+
 // GetMarketsByEvent returns all markets for a given event.
 func (d *DB) GetMarketsByEvent(ctx context.Context, eventTicker string) ([]Market, error) {
 	rows, err := d.db.QueryContext(ctx,

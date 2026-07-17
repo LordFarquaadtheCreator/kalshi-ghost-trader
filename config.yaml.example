@@ -64,6 +64,10 @@ apitennis_enabled: true
 apitennis_api_key: your-api-tennis-key-here
 apitennis_timezone: "+00:00"
 
+# Reconciler — fills settlement gaps by polling REST for unresolved markets
+# Markets with orders but no result (missed WS settled event) get fetched and updated
+reconciler_interval_secs: 300
+
 # Close timer strategy — buys the favorite N minutes before market close.
 # Backtest: favorite ≥85c at T-10min won 100% (Sharpe 1.01).
 close_timer_enabled: false
