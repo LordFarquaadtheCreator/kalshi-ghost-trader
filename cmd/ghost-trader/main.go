@@ -181,6 +181,18 @@ func main() {
 		},
 		"fadelongshot": func(e algorithms.OrderEmitter) algorithms.Strategy { return fadeLongshot },
 		"nofade":       func(e algorithms.OrderEmitter) algorithms.Strategy { return noFade },
+		"breakback": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewBreakBackStrategy(e, log, algorithms.DefaultBreakBackConfig())
+		},
+		"setdown": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewSetDownStrategy(e, log, algorithms.DefaultSetDownConfig())
+		},
+		"server1530": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewServer1530Strategy(e, log, algorithms.DefaultServer1530Config())
+		},
+		"tiebreak": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewTiebreakStrategy(e, log, algorithms.DefaultTiebreakConfig())
+		},
 	})
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())
 

@@ -1,10 +1,13 @@
 package algorithms
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
 // SetPointConfig controls set-point strategy behavior.
@@ -54,24 +57,28 @@ func DefaultSetPointConfig() SetPointConfig {
 // match-deciding ones. Data shows set points have 91% conversion
 // but market prices them at 56c avg — a 33c edge.
 type SetPointStrategy struct {
-	mu         sync.RWMutex
-	prices     map[string]float64
-	priceTimes map[string]time.Time
-	markets    map[string][]string
-	emitter    OrderEmitter
-	log        *slog.Logger
-	cfg        SetPointConfig
-	replayNow  *time.Time
+	mu          sync.RWMutex
+	prices      map[string]float64
+	priceTimes  map[string]time.Time
+	markets     map[string][]string
+	matchStates map[string]*matchState
+	seenPoints  map[string]map[string]bool
+	emitter     OrderEmitter
+	log         *slog.Logger
+	cfg         SetPointConfig
+	replayNow   *time.Time
 }
 
 func NewSetPointStrategy(emitter OrderEmitter, log *slog.Logger, cfg SetPointConfig) *SetPointStrategy {
 	return &SetPointStrategy{
-		prices:     make(map[string]float64),
-		priceTimes: make(map[string]time.Time),
-		markets:    make(map[string][]string),
-		emitter:    emitter,
-		log:        log,
-		cfg:        cfg,
+		prices:      make(map[string]float64),
+		priceTimes:  make(map[string]time.Time),
+		markets:     make(map[string][]string),
+		matchStates: make(map[string]*matchState),
+		seenPoints:  make(map[string]map[string]bool),
+		emitter:     emitter,
+		log:         log,
+		cfg:         cfg,
 	}
 }
 
@@ -88,6 +95,8 @@ func (s *SetPointStrategy) UnregisterMarkets(eventTicker string) {
 		delete(s.priceTimes, mkt)
 	}
 	delete(s.markets, eventTicker)
+	delete(s.matchStates, eventTicker)
+	delete(s.seenPoints, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -123,6 +132,205 @@ func (s *SetPointStrategy) now() time.Time {
 	return time.Now()
 }
 
+func (s *SetPointStrategy) OnPoint(eventTicker string, p store.Point) {
+	s.updateMatchState(eventTicker, p)
+	s.processPoint(eventTicker, p)
+}
+
+func (s *SetPointStrategy) updateMatchState(eventTicker string, p store.Point) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ms, ok := s.matchStates[eventTicker]
+	if !ok {
+		ms = &matchState{}
+		s.matchStates[eventTicker] = ms
+	}
+	if p.SetNumber > ms.lastSetNum && ms.lastSetNum > 0 {
+		if ms.lastHomeGames > ms.lastAwayGames {
+			ms.setsHome++
+		} else if ms.lastAwayGames > ms.lastHomeGames {
+			ms.setsAway++
+		} else if ms.lastScorer != 0 {
+			if ms.lastScorer == 1 {
+				ms.setsHome++
+			} else {
+				ms.setsAway++
+			}
+		}
+	}
+	ms.lastSetNum = p.SetNumber
+	ms.lastHomeGames = p.HomeGames
+	ms.lastAwayGames = p.AwayGames
+	ms.lastScorer = p.Scorer
+}
+
+func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
+	pointKey := fmt.Sprintf("%d:%d:%d", p.SetNumber, p.GameNumber, p.PointNumber)
+	s.mu.Lock()
+	if s.seenPoints[eventTicker] == nil {
+		s.seenPoints[eventTicker] = make(map[string]bool)
+	}
+	if s.seenPoints[eventTicker][pointKey] {
+		s.mu.Unlock()
+		return
+	}
+	s.seenPoints[eventTicker][pointKey] = true
+	s.mu.Unlock()
+
+	sp := s.detectSetPoint(eventTicker, p)
+	if sp == nil {
+		return
+	}
+
+	isServing := (sp.winner == 1 && p.Server == 1) || (sp.winner == 2 && p.Server == 2)
+	if !isServing && !s.cfg.IncludeReturning {
+		return
+	}
+
+	s.mu.RLock()
+	mktTickers, ok := s.markets[eventTicker]
+	s.mu.RUnlock()
+	if !ok || len(mktTickers) < 2 {
+		return
+	}
+
+	var marketTicker string
+	if sp.winner == 1 {
+		marketTicker = mktTickers[0]
+	} else {
+		marketTicker = mktTickers[1]
+	}
+
+	convProb := s.cfg.ServeConvProb
+	if !isServing {
+		convProb = s.cfg.ReturnConvProb
+	}
+
+	s.mu.RLock()
+	mktPrice := s.prices[marketTicker]
+	priceTime := s.priceTimes[marketTicker]
+	s.mu.RUnlock()
+	if mktPrice <= 0 {
+		return
+	}
+	if mktPrice < s.cfg.MinMarketPrice {
+		return
+	}
+	if s.cfg.MaxMarketPrice > 0 && mktPrice > s.cfg.MaxMarketPrice {
+		return
+	}
+	age := s.now().Sub(priceTime)
+	if age > priceStaleTTL {
+		return
+	}
+
+	edgeCents := int((convProb-mktPrice)*100 + 1e-9)
+	if edgeCents < s.cfg.MinEdgeCents {
+		return
+	}
+
+	size := suggestedSize(edgeCents)
+
+	payload, _ := json.Marshal(map[string]any{
+		"home_games": p.HomeGames, "away_games": p.AwayGames,
+		"home_points": p.HomePoints, "away_points": p.AwayPoints,
+		"server": p.Server, "scorer": p.Scorer,
+		"set": p.SetNumber, "game": p.GameNumber,
+		"serving": isServing,
+		"is_mp":   sp.isMatchPoint,
+	})
+
+	o := store.Order{
+		TS:            s.now().UnixMilli(),
+		MatchTicker:   eventTicker,
+		MarketTicker:  marketTicker,
+		Action:        "buy",
+		Context:       sp.context,
+		ConvProb:      convProb,
+		MarketPrice:   mktPrice,
+		EdgeCents:     edgeCents,
+		SuggestedSize: size,
+		SetNumber:     p.SetNumber,
+		Strategy:      s.cfg.Label,
+		Payload:       string(payload),
+	}
+
+	if !s.emitter.EmitOrder(o) {
+		s.log.Warn("setpoint: order dropped", "match", eventTicker, "market", marketTicker)
+		return
+	}
+	s.log.Info("setpoint: order emitted",
+		"match", eventTicker, "market", marketTicker,
+		"action", "buy", "edge_cents", edgeCents, "conv_prob", convProb,
+		"mkt_price", mktPrice, "size", size, "context", sp.context,
+		"serving", isServing, "is_mp", sp.isMatchPoint)
+}
+
+type setPointSignal struct {
+	winner       int
+	context      string
+	isMatchPoint bool
+}
+
+func (s *SetPointStrategy) detectSetPoint(eventTicker string, p store.Point) *setPointSignal {
+	s.mu.RLock()
+	ms := s.matchStates[eventTicker]
+	var setsHome, setsAway int
+	if ms != nil {
+		setsHome = ms.setsHome
+		setsAway = ms.setsAway
+	}
+	s.mu.RUnlock()
+
+	if p.IsTiebreak {
+		return nil
+	}
+
+	homeNeedsSet := setsToWin - setsHome
+	awayNeedsSet := setsToWin - setsAway
+	if homeNeedsSet <= 0 || awayNeedsSet <= 0 {
+		return nil
+	}
+
+	homeOneSetAway := homeNeedsSet == 1
+	awayOneSetAway := awayNeedsSet == 1
+
+	homeCanWinGame := canWinGame(p.HomePoints, p.AwayPoints, p.Server, 1)
+	awayCanWinGame := canWinGame(p.HomePoints, p.AwayPoints, p.Server, 2)
+
+	homeCanWinSet := homeCanWinGame && p.HomeGames >= gamesPerSet-1 && p.HomeGames > p.AwayGames
+	awayCanWinSet := awayCanWinGame && p.AwayGames >= gamesPerSet-1 && p.AwayGames > p.HomeGames
+
+	if !homeCanWinSet && !awayCanWinSet {
+		return nil
+	}
+
+	homeIsMP := homeCanWinSet && homeOneSetAway
+	awayIsMP := awayCanWinSet && awayOneSetAway
+
+	if !s.cfg.IncludeSetPoints && !homeIsMP && !awayIsMP {
+		return nil
+	}
+
+	winner := 2
+	ctx := "away_set_point"
+	if homeCanWinSet {
+		winner = 1
+		ctx = "home_set_point"
+	}
+	if homeIsMP {
+		ctx = "home_match_point"
+	} else if awayIsMP {
+		ctx = "away_match_point"
+	}
+
+	return &setPointSignal{
+		winner:       winner,
+		context:      ctx,
+		isMatchPoint: homeIsMP || awayIsMP,
+	}
+}
+
 func (s *SetPointStrategy) DeletePrice(marketTicker string) {
 	s.mu.Lock()
 	delete(s.prices, marketTicker)
@@ -149,6 +357,6 @@ func (s *SetPointStrategy) GetPriceAge(marketTicker string) time.Duration {
 func (s *SetPointStrategy) String() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return fmt.Sprintf("SetPointStrategy{%s: markets=%d, prices=%d}",
-		s.cfg.Label, len(s.markets), len(s.prices))
+	return fmt.Sprintf("SetPointStrategy{%s: markets=%d, prices=%d, states=%d}",
+		s.cfg.Label, len(s.markets), len(s.prices), len(s.matchStates))
 }

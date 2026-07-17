@@ -45,5 +45,17 @@ func DefaultFactories() map[string]StrategyFactory {
 		"nofade": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewNoFadeStrategy(em, log, algorithms.DefaultNoFadeConfig())
 		},
+		"breakback": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewBreakBackStrategy(em, log, algorithms.DefaultBreakBackConfig())
+		},
+		"setdown": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewSetDownStrategy(em, log, algorithms.DefaultSetDownConfig())
+		},
+		"server1530": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewServer1530Strategy(em, log, algorithms.DefaultServer1530Config())
+		},
+		"tiebreak": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewTiebreakStrategy(em, log, algorithms.DefaultTiebreakConfig())
+		},
 	}
 }

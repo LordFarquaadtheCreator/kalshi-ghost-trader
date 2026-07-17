@@ -1,32 +1,48 @@
 package algorithms
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
 const (
 	minEdgeCents   = 1
 	baseSize       = 10.0
 	maxSize        = 100.0
+	setsToWin      = 2
+	gamesPerSet    = 6
 	priceStaleTTL  = 60 * time.Second
 	minMarketPrice = 0.05
+
+	serveConvProb = 0.97
 )
 
 // MatchPointStrategy tracks market prices and emits buy orders when
 // edge exceeds threshold. Implements both Strategy and PriceLookup.
-type MatchPointStrategy struct {
-	mu         sync.RWMutex
-	prices     map[string]float64   // market_ticker -> latest YES price (0-1)
-	priceTimes map[string]time.Time // market_ticker -> last price update
-	markets    map[string][]string  // event_ticker -> [home_ticker, away_ticker]
-	emitter    OrderEmitter
-	log        *slog.Logger
+type matchState struct {
+	setsHome      int
+	setsAway      int
+	lastSetNum    int
+	lastHomeGames int
+	lastAwayGames int
+	lastScorer    int
+}
 
-	// replayNow, when non-nil, overrides time.Now() for staleness checks.
-	// Set by backtest to the timestamp of the tick being processed.
+type MatchPointStrategy struct {
+	mu          sync.RWMutex
+	prices      map[string]float64         // market_ticker -> latest YES price (0-1)
+	priceTimes  map[string]time.Time       // market_ticker -> last price update
+	markets     map[string][]string        // event_ticker -> [home_ticker, away_ticker]
+	matchStates map[string]*matchState     // event_ticker -> set tracking state
+	seenPoints  map[string]map[string]bool // event_ticker -> dedup set ("set:game:point")
+	emitter     OrderEmitter
+	log         *slog.Logger
+
 	replayNow *time.Time
 }
 
@@ -35,11 +51,13 @@ type MatchPointStrategy struct {
 // or OrderCollector for backtest.
 func NewMatchPointStrategy(emitter OrderEmitter, log *slog.Logger) *MatchPointStrategy {
 	return &MatchPointStrategy{
-		prices:     make(map[string]float64),
-		priceTimes: make(map[string]time.Time),
-		markets:    make(map[string][]string),
-		emitter:    emitter,
-		log:        log,
+		prices:      make(map[string]float64),
+		priceTimes:  make(map[string]time.Time),
+		markets:     make(map[string][]string),
+		matchStates: make(map[string]*matchState),
+		seenPoints:  make(map[string]map[string]bool),
+		emitter:     emitter,
+		log:         log,
 	}
 }
 
@@ -58,6 +76,8 @@ func (s *MatchPointStrategy) UnregisterMarkets(eventTicker string) {
 		delete(s.priceTimes, mkt)
 	}
 	delete(s.markets, eventTicker)
+	delete(s.matchStates, eventTicker)
+	delete(s.seenPoints, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -98,6 +118,205 @@ func (s *MatchPointStrategy) now() time.Time {
 	return time.Now()
 }
 
+func (s *MatchPointStrategy) OnPoint(eventTicker string, p store.Point) {
+	s.updateMatchState(eventTicker, p)
+	s.processPoint(eventTicker, p)
+}
+
+func (s *MatchPointStrategy) updateMatchState(eventTicker string, p store.Point) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ms, ok := s.matchStates[eventTicker]
+	if !ok {
+		ms = &matchState{}
+		s.matchStates[eventTicker] = ms
+	}
+	if p.SetNumber > ms.lastSetNum && ms.lastSetNum > 0 {
+		if ms.lastHomeGames > ms.lastAwayGames {
+			ms.setsHome++
+		} else if ms.lastAwayGames > ms.lastHomeGames {
+			ms.setsAway++
+		} else if ms.lastScorer != 0 {
+			if ms.lastScorer == 1 {
+				ms.setsHome++
+			} else {
+				ms.setsAway++
+			}
+		}
+	}
+	ms.lastSetNum = p.SetNumber
+	ms.lastHomeGames = p.HomeGames
+	ms.lastAwayGames = p.AwayGames
+	ms.lastScorer = p.Scorer
+}
+
+func (s *MatchPointStrategy) processPoint(eventTicker string, p store.Point) {
+	pointKey := fmt.Sprintf("%d:%d:%d", p.SetNumber, p.GameNumber, p.PointNumber)
+	s.mu.Lock()
+	if s.seenPoints[eventTicker] == nil {
+		s.seenPoints[eventTicker] = make(map[string]bool)
+	}
+	if s.seenPoints[eventTicker][pointKey] {
+		s.mu.Unlock()
+		return
+	}
+	s.seenPoints[eventTicker][pointKey] = true
+	s.mu.Unlock()
+
+	mp := s.detectMatchPoint(eventTicker, p)
+	if mp == nil {
+		return
+	}
+
+	isServing := (mp.winner == 1 && p.Server == 1) || (mp.winner == 2 && p.Server == 2)
+	if !isServing {
+		return
+	}
+
+	s.mu.RLock()
+	mktTickers, ok := s.markets[eventTicker]
+	s.mu.RUnlock()
+	if !ok || len(mktTickers) < 2 {
+		return
+	}
+
+	var marketTicker string
+	if mp.winner == 1 {
+		marketTicker = mktTickers[0]
+	} else {
+		marketTicker = mktTickers[1]
+	}
+
+	convProb := serveConvProb
+
+	s.mu.RLock()
+	mktPrice := s.prices[marketTicker]
+	priceTime := s.priceTimes[marketTicker]
+	s.mu.RUnlock()
+	if mktPrice <= 0 {
+		return
+	}
+	if mktPrice < minMarketPrice {
+		return
+	}
+	age := s.now().Sub(priceTime)
+	if age > priceStaleTTL {
+		return
+	}
+
+	edgeCents := int((convProb-mktPrice)*100 + 1e-9)
+	if edgeCents < minEdgeCents {
+		return
+	}
+
+	size := suggestedSize(edgeCents)
+
+	payload, _ := json.Marshal(map[string]any{
+		"home_games": p.HomeGames, "away_games": p.AwayGames,
+		"home_points": p.HomePoints, "away_points": p.AwayPoints,
+		"server": p.Server, "scorer": p.Scorer,
+		"set": p.SetNumber, "game": p.GameNumber,
+		"serving": true,
+	})
+
+	o := store.Order{
+		TS:            s.now().UnixMilli(),
+		MatchTicker:   eventTicker,
+		MarketTicker:  marketTicker,
+		Action:        "buy",
+		Context:       mp.context,
+		ConvProb:      convProb,
+		MarketPrice:   mktPrice,
+		EdgeCents:     edgeCents,
+		SuggestedSize: size,
+		SetNumber:     p.SetNumber,
+		Strategy:      "matchpoint",
+		Payload:       string(payload),
+	}
+
+	if !s.emitter.EmitOrder(o) {
+		s.log.Warn("matchpoint: order dropped", "match", eventTicker, "market", marketTicker)
+		return
+	}
+	s.log.Info("matchpoint: order emitted",
+		"match", eventTicker, "market", marketTicker,
+		"action", "buy", "edge_cents", edgeCents, "conv_prob", convProb,
+		"mkt_price", mktPrice, "size", size, "context", mp.context)
+}
+
+type matchPoint struct {
+	winner  int
+	context string
+}
+
+func (s *MatchPointStrategy) detectMatchPoint(eventTicker string, p store.Point) *matchPoint {
+	s.mu.RLock()
+	ms := s.matchStates[eventTicker]
+	var setsHome, setsAway int
+	if ms != nil {
+		setsHome = ms.setsHome
+		setsAway = ms.setsAway
+	}
+	s.mu.RUnlock()
+	gamesHome, gamesAway := p.HomeGames, p.AwayGames
+
+	homeNeedsSet := setsToWin - setsHome
+	awayNeedsSet := setsToWin - setsAway
+	if homeNeedsSet <= 0 || awayNeedsSet <= 0 {
+		return nil
+	}
+
+	homeOneSetAway := homeNeedsSet == 1
+	awayOneSetAway := awayNeedsSet == 1
+
+	var homeMatchPoint, awayMatchPoint bool
+
+	if p.IsTiebreak {
+		return nil
+	}
+
+	homeCanWinGame := canWinGame(p.HomePoints, p.AwayPoints, p.Server, 1)
+	awayCanWinGame := canWinGame(p.HomePoints, p.AwayPoints, p.Server, 2)
+
+	if homeOneSetAway && homeCanWinGame && gamesHome >= gamesPerSet-1 && gamesHome > gamesAway {
+		homeMatchPoint = true
+	}
+	if awayOneSetAway && awayCanWinGame && gamesAway >= gamesPerSet-1 && gamesAway > gamesHome {
+		awayMatchPoint = true
+	}
+
+	if !homeMatchPoint && !awayMatchPoint {
+		return nil
+	}
+
+	winner := 2
+	ctx := "away_match_point"
+	if homeMatchPoint {
+		winner = 1
+		ctx = "home_match_point"
+	}
+
+	return &matchPoint{winner: winner, context: ctx}
+}
+
+func canWinGame(homePts, awayPts string, server, player int) bool {
+	h := normalizeScore(homePts)
+	a := normalizeScore(awayPts)
+	if player == 1 {
+		return h == "A" || (h == "40" && a != "40" && a != "A")
+	}
+	return a == "A" || (a == "40" && h != "40" && h != "A")
+}
+
+func normalizeScore(s string) string {
+	switch s {
+	case "0", "15", "30", "40", "A":
+		return s
+	default:
+		return ""
+	}
+}
+
 func suggestedSize(absEdgeCents int) float64 {
 	size := baseSize * float64(absEdgeCents) / float64(minEdgeCents)
 	if size > maxSize {
@@ -136,6 +355,6 @@ func (s *MatchPointStrategy) GetPriceAge(marketTicker string) time.Duration {
 func (s *MatchPointStrategy) String() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return fmt.Sprintf("MatchPointStrategy{markets=%d, prices=%d}",
-		len(s.markets), len(s.prices))
+	return fmt.Sprintf("MatchPointStrategy{markets=%d, prices=%d, states=%d}",
+		len(s.markets), len(s.prices), len(s.matchStates))
 }

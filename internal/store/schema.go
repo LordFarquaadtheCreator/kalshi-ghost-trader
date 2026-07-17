@@ -159,6 +159,35 @@ CREATE TABLE IF NOT EXISTS fired_events (
     PRIMARY KEY (event_ticker, strategy)
 );
 
+-- Point-by-point score data from FlashScore/API-Tennis scraper.
+-- No FK to events: score data may arrive before event is stored.
+CREATE TABLE IF NOT EXISTS points (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_ticker    TEXT NOT NULL,          -- Kalshi event_ticker
+    fs_match_id     TEXT NOT NULL,          -- FlashScore match ID
+    ts_ms           INTEGER,                -- unix ms of point (NULL if historical)
+    recv_ts         INTEGER NOT NULL,       -- when we stored it
+    set_number      INTEGER NOT NULL,       -- which set (1-based)
+    game_number     INTEGER NOT NULL,       -- which game within set (1-based)
+    point_number    INTEGER NOT NULL,       -- which point within game (1-based)
+    server          INTEGER NOT NULL,       -- 1 = home serves, 2 = away serves
+    scorer          INTEGER NOT NULL,       -- 1 = home won point, 2 = away won point
+    home_points     TEXT NOT NULL,          -- "0", "15", "30", "40", "A"
+    away_points     TEXT NOT NULL,
+    home_games      INTEGER NOT NULL,       -- games won by home in this set at this point
+    away_games      INTEGER NOT NULL,
+    home_set_games  INTEGER,                -- final games in completed sets before this one
+    away_set_games  INTEGER,
+    is_tiebreak     INTEGER NOT NULL DEFAULT 0,
+    is_break_point  INTEGER NOT NULL DEFAULT 0,
+    is_set_point    INTEGER NOT NULL DEFAULT 0,
+    is_match_point  INTEGER NOT NULL DEFAULT 0,
+    payload         TEXT                    -- raw HL field for debugging
+);
+CREATE INDEX IF NOT EXISTS idx_points_match_ts ON points(match_ticker, ts_ms);
+CREATE INDEX IF NOT EXISTS idx_points_match_set ON points(match_ticker, set_number, game_number, point_number);
+CREATE INDEX IF NOT EXISTS idx_points_fs_match ON points(fs_match_id);
+
 -- Flattened cascade triggers. Delete child rows directly instead of relying
 -- on recursive trigger chaining (which requires connection-level PRAGMA).
 -- Deletes happen from events outward — markets fire their own cleanup first,
@@ -180,5 +209,6 @@ BEGIN
     DELETE FROM event_lifecycle_events WHERE event_ticker = OLD.event_ticker;
     DELETE FROM orders WHERE match_ticker = OLD.event_ticker;
     DELETE FROM fired_events WHERE event_ticker = OLD.event_ticker;
+    DELETE FROM points WHERE match_ticker = OLD.event_ticker;
 END;
 `

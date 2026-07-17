@@ -96,6 +96,7 @@ type Engine struct {
 	markets       map[string][]MarketRow
 	marketCloseTs map[string]int64
 	tickPrices    map[string][]TickPrice
+	points        map[string][]store.Point
 	eventTitles   map[string]string
 	factories     map[string]StrategyFactory
 }
@@ -114,6 +115,7 @@ func NewEngine(dbPath string, log *slog.Logger) (*Engine, error) {
 		markets:       make(map[string][]MarketRow),
 		marketCloseTs: make(map[string]int64),
 		tickPrices:    make(map[string][]TickPrice),
+		points:        make(map[string][]store.Point),
 		eventTitles:   make(map[string]string),
 		factories:     DefaultFactories(),
 	}
@@ -307,6 +309,41 @@ func (e *Engine) load() error {
 	}
 	tRows.Close()
 
+	// Load point-by-point score data
+	pRows, err := e.db.QueryContext(ctx, `
+		SELECT match_ticker, ts_ms, set_number, game_number, point_number,
+		       server, scorer, home_points, away_points,
+		       home_games, away_games,
+		       COALESCE(home_set_games, 0), COALESCE(away_set_games, 0),
+		       is_tiebreak, is_break_point, is_set_point, is_match_point
+		FROM points WHERE ts_ms IS NOT NULL
+		ORDER BY match_ticker, ts_ms
+	`)
+	if err != nil {
+		return fmt.Errorf("query points: %w", err)
+	}
+	for pRows.Next() {
+		var mt string
+		var p store.Point
+		var isTB, isBP, isSP, isMP int
+		if err := pRows.Scan(
+			&mt, &p.TS, &p.SetNumber, &p.GameNumber, &p.PointNumber,
+			&p.Server, &p.Scorer, &p.HomePoints, &p.AwayPoints,
+			&p.HomeGames, &p.AwayGames,
+			&p.HomeSetGames, &p.AwaySetGames,
+			&isTB, &isBP, &isSP, &isMP,
+		); err != nil {
+			pRows.Close()
+			return err
+		}
+		p.IsTiebreak = isTB != 0
+		p.IsBreakPoint = isBP != 0
+		p.IsSetPoint = isSP != 0
+		p.IsMatchPoint = isMP != 0
+		e.points[mt] = append(e.points[mt], p)
+	}
+	pRows.Close()
+
 	return nil
 }
 
@@ -333,13 +370,7 @@ func (e *Engine) RunStrategy(name string, minPrice float64) (*StrategyResult, er
 		strat := factory(collector, e.log)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
 
-		for _, mkt := range []string{homeMkt, awayMkt} {
-			ticks := e.tickPrices[mkt]
-			for _, t := range ticks {
-				strat.SetReplayTime(time.UnixMilli(t.TS))
-				strat.OnPriceAt(mkt, t.Price, time.UnixMilli(t.TS))
-			}
-		}
+		e.replayInterleaved(strat, matchTicker, homeMkt, awayMkt)
 
 		orders = append(orders, e.resolveOrders(collector.Orders(), mkts, minPrice)...)
 	}
@@ -471,6 +502,46 @@ func (e *Engine) resolveOrders(raw []store.Order, mkts []MarketRow, minPrice flo
 		})
 	}
 	return orders
+}
+
+// replayInterleaved feeds price ticks and score events to a strategy in
+// timestamp order. Price ticks from both markets are merged with point-by-point
+// score data, then replayed chronologically. Score events are only fed to
+// strategies implementing ScoreObserver.
+func (e *Engine) replayInterleaved(strat ReplayStrategy, matchTicker, homeMkt, awayMkt string) {
+	type event struct {
+		ts    int64
+		kind  int // 0=price, 1=score
+		mkt   string
+		price float64
+		point store.Point
+	}
+
+	var events []event
+
+	for _, mkt := range []string{homeMkt, awayMkt} {
+		for _, t := range e.tickPrices[mkt] {
+			events = append(events, event{ts: t.TS, kind: 0, mkt: mkt, price: t.Price})
+		}
+	}
+
+	for _, p := range e.points[matchTicker] {
+		events = append(events, event{ts: p.TS, kind: 1, point: p})
+	}
+
+	sort.Slice(events, func(i, j int) bool { return events[i].ts < events[j].ts })
+
+	scoreObs, _ := strat.(algorithms.ScoreObserver)
+
+	for _, ev := range events {
+		ts := time.UnixMilli(ev.ts)
+		strat.SetReplayTime(ts)
+		if ev.kind == 0 {
+			strat.OnPriceAt(ev.mkt, ev.price, ts)
+		} else if scoreObs != nil {
+			scoreObs.OnPoint(matchTicker, ev.point)
+		}
+	}
 }
 
 func (e *Engine) orderMarketsByTitle(eventTicker string, mkts []MarketRow) (home, away string) {

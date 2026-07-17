@@ -95,6 +95,26 @@ type OrderbookEvent struct {
 	Payload      string
 }
 
+// Point maps a single point-by-point score entry from the points table.
+type Point struct {
+	TS           int64  // unix ms (may be 0 if historical)
+	SetNumber    int    // 1-based
+	GameNumber   int    // 1-based within set
+	PointNumber  int    // 1-based within game
+	Server       int    // 1 = home, 2 = away
+	Scorer       int    // 1 = home won point, 2 = away won point
+	HomePoints   string // "0", "15", "30", "40", "A"
+	AwayPoints   string
+	HomeGames    int // games won by home in this set at this point
+	AwayGames    int // games won by away in this set at this point
+	HomeSetGames int // final games in completed sets before this one
+	AwaySetGames int
+	IsTiebreak   bool
+	IsBreakPoint bool
+	IsSetPoint   bool
+	IsMatchPoint bool
+}
+
 // Order maps a simulated buy order from the match point signal algorithm.
 // Traceable to the match via match_ticker (event_ticker) and market_ticker.
 type Order struct {

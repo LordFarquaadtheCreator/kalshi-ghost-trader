@@ -40,6 +40,17 @@ type Strategy interface {
 	DeletePrice(marketTicker string)
 }
 
+// ScoreObserver is implemented by strategies that want point-by-point
+// score updates during backtest replay. The backtest engine checks if
+// a strategy implements this interface and calls OnPoint for each
+// historical score event, interleaved with price ticks by timestamp.
+//
+// In live mode, the API-Tennis scraper can call OnPoint when WSEvents
+// arrive with point-by-point data.
+type ScoreObserver interface {
+	OnPoint(eventTicker string, p store.Point)
+}
+
 // TickWriterEmitter adapts store.TickWriter to the OrderEmitter interface.
 type TickWriterEmitter struct {
 	tw *store.TickWriter

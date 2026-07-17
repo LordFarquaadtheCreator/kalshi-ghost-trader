@@ -175,10 +175,6 @@ func (s *NoFadeStrategy) checkEntry(marketTicker string) {
 
 func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 	s.mu.Lock()
-	if s.fired[marketTicker] {
-		s.mu.Unlock()
-		return
-	}
 
 	eventTicker := ""
 	for et, mkts := range s.markets {
@@ -190,6 +186,11 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		}
 	}
 	if eventTicker == "" {
+		s.mu.Unlock()
+		return
+	}
+
+	if s.fired[eventTicker] {
 		s.mu.Unlock()
 		return
 	}
@@ -247,11 +248,8 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		underdogPrice = price
 	}
 
-	// Underdog NO price = 1 - underdog YES
-	noPrice := 1.0 - underdogPrice
-
-	// Filter: underdog NO must be <= MaxNoPrice
-	if noPrice > s.cfg.MaxNoPrice {
+	// Underdog YES must be <= MaxNoPrice (underdog very cheap = favorite dominant)
+	if underdogPrice > s.cfg.MaxNoPrice {
 		s.mu.Unlock()
 		return
 	}
@@ -262,12 +260,10 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	s.fired[favMkt] = true
+	s.fired[eventTicker] = true
 	s.mu.Unlock()
 
-	// convProb derived from MaxNoPrice: if underdog NO <= 0.05,
-	// favorite conversion >= 0.95
-	convProb := 1.0 - s.cfg.MaxNoPrice
+	convProb := 0.99
 	edgeCents := int((convProb-favPrice)*100 + 1e-9)
 	if edgeCents < 1 {
 		return
@@ -281,7 +277,7 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		"entry_ts":     ts.UnixMilli(),
 		"fav_price":    favPrice,
 		"underdog_yes": underdogPrice,
-		"underdog_no":  noPrice,
+		"underdog_no":  1.0 - underdogPrice,
 		"max_no_price": s.cfg.MaxNoPrice,
 		"conv_prob":    convProb,
 	})
@@ -307,7 +303,7 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 	}
 	s.log.Info("nofade: order emitted",
 		"match", eventTicker, "market", favMkt,
-		"price", favPrice, "no_price", noPrice,
+		"price", favPrice, "underdog_yes", underdogPrice,
 		"edge_cents", edgeCents, "size", size)
 }
 
