@@ -140,11 +140,10 @@ func (m *MarkovModel) setWinProb(gamesHome, gamesAway int, pHomeGame float64, se
 	if gamesAway >= 6 && gamesAway-gamesHome >= 2 {
 		return 0.0
 	}
-	if gamesHome == 6 && gamesAway == 6 {
-		// Tiebreak: model as single game with alternating serve
-		// Approximate: use average serve probability
+	if gamesHome >= 6 && gamesAway >= 6 && gamesHome == gamesAway {
+		// Tiebreak or extended deuce set: 50-50 approximation
 		pTB := 0.5*m.pServe + 0.5*m.pReturn
-		return pTB // simplified: 50-50 at start of tiebreak
+		return pTB
 	}
 	if isTiebreak {
 		// Already in tiebreak — pHomeGame already computed
