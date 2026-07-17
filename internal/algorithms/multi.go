@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
@@ -42,6 +41,7 @@ type MultiStrategyRuntime struct {
 	db           *store.DB
 	occurrenceTS map[string]int64  // event_ticker → match start time (ms)
 	marketEvent  map[string]string // market_ticker → event_ticker
+	matchStarted map[string]bool   // event_ticker → true after first OnPoint
 }
 
 // NewMultiStrategyFromFactories creates strategies from factory functions.
@@ -54,6 +54,7 @@ func NewMultiStrategyFromFactories(shared OrderEmitter, log *slog.Logger,
 		log:          log,
 		occurrenceTS: make(map[string]int64),
 		marketEvent:  make(map[string]string),
+		matchStarted: make(map[string]bool),
 	}
 	for name, factory := range factories {
 		te := &tagEmitter{inner: shared, strategy: name}
@@ -66,7 +67,7 @@ func NewMultiStrategyFromFactories(shared OrderEmitter, log *slog.Logger,
 func (m *MultiStrategyRuntime) OnPrice(marketTicker string, price float64) {
 	m.mu.RLock()
 	if eventTicker, ok := m.marketEvent[marketTicker]; ok {
-		if occTS, has := m.occurrenceTS[eventTicker]; has && time.Now().UnixMilli() < occTS {
+		if !m.matchStarted[eventTicker] {
 			m.mu.RUnlock()
 			return
 		}
@@ -104,6 +105,7 @@ func (m *MultiStrategyRuntime) RegisterMarkets(eventTicker string, marketTickers
 func (m *MultiStrategyRuntime) UnregisterMarkets(eventTicker string) {
 	m.mu.Lock()
 	delete(m.occurrenceTS, eventTicker)
+	delete(m.matchStarted, eventTicker)
 	for mkt, ev := range m.marketEvent {
 		if ev == eventTicker {
 			delete(m.marketEvent, mkt)
@@ -128,6 +130,13 @@ func (m *MultiStrategyRuntime) DeletePrice(marketTicker string) {
 
 // OnPoint fans out score updates to strategies implementing ScoreObserver.
 func (m *MultiStrategyRuntime) OnPoint(eventTicker string, p store.Point) {
+	m.mu.Lock()
+	if !m.matchStarted[eventTicker] {
+		m.matchStarted[eventTicker] = true
+		m.log.Info("match started (first point received)", "event", eventTicker)
+	}
+	m.mu.Unlock()
+
 	for _, ns := range m.strategies {
 		if obs, ok := ns.Strat.(ScoreObserver); ok {
 			obs.OnPoint(eventTicker, p)
@@ -135,11 +144,43 @@ func (m *MultiStrategyRuntime) OnPoint(eventTicker string, p store.Point) {
 	}
 }
 
-// SetDB enables pre-match order gating. When set, OnPrice calls are dropped
-// for markets whose occurrence_ts hasn't been reached yet.
+// SetDB enables schedule refresh support. The DB is used by RefreshOccurrenceTS
+// to keep the scheduler's occurrence_ts fresh. Order gating is now handled by
+// the first-point guard in OnPrice — orders are blocked until OnPoint fires.
 func (m *MultiStrategyRuntime) SetDB(db *store.DB) {
 	m.mu.Lock()
 	m.db = db
+	m.mu.Unlock()
+}
+
+// RefreshOccurrenceTS re-reads occurrence_ts from DB for a registered event.
+// Called by the schedule checker when Kalshi updates match start times.
+func (m *MultiStrategyRuntime) RefreshOccurrenceTS(eventTicker string) {
+	if m.db == nil {
+		return
+	}
+	mkts, err := m.db.GetMarketsByEvent(context.Background(), eventTicker)
+	if err != nil {
+		return
+	}
+	var occTS int64
+	for _, mk := range mkts {
+		if mk.OccurrenceTS > 0 {
+			occTS = mk.OccurrenceTS
+			break
+		}
+	}
+	if occTS == 0 {
+		return
+	}
+	m.mu.Lock()
+	if old, has := m.occurrenceTS[eventTicker]; has && old != occTS {
+		m.log.Info("occurrence_ts updated",
+			"event", eventTicker,
+			"old_ts", old,
+			"new_ts", occTS)
+	}
+	m.occurrenceTS[eventTicker] = occTS
 	m.mu.Unlock()
 }
 

@@ -149,6 +149,29 @@ func (d *DB) GetMarketsByEvent(ctx context.Context, eventTicker string) ([]Marke
 	return markets, rows.Err()
 }
 
+// GetUpcomingMarkets returns active markets whose occurrence_ts is in the future.
+// Used by the schedule checker to refresh stale schedule data from REST.
+func (d *DB) GetUpcomingMarkets(ctx context.Context) ([]Market, error) {
+	now := nowMillis()
+	rows, err := d.db.QueryContext(ctx,
+		marketSelectColumns+` WHERE status IN ('open', 'active') AND result != 'scalar' AND occurrence_ts > ? ORDER BY occurrence_ts`,
+		now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var markets []Market
+	for rows.Next() {
+		m, err := scanMarket(rows)
+		if err != nil {
+			return nil, err
+		}
+		markets = append(markets, m)
+	}
+	return markets, rows.Err()
+}
+
 // GetMarketsClosingWithin returns active markets whose close_ts falls within
 // [now, now+withinSecs]. Used by the close-timer strategy to find markets
 // approaching their close window.

@@ -59,6 +59,11 @@ apitennis_timezone: "+00:00"
 # Markets with orders but no result (missed WS settled event) get fetched and updated
 reconciler_interval_secs: 300
 
+# Schedule checker — refreshes stale occurrence_ts from REST
+# Kalshi can update match start times after market creation (rain delays, etc).
+# This polls upcoming markets and updates the DB + strategy runtime cache.
+schedule_checker_interval_secs: 120
+
 # Close timer strategy — buys the favorite N minutes before market close.
 # Backtest: favorite ≥85c at T-10min won 100% (Sharpe 1.01).
 close_timer_enabled: false

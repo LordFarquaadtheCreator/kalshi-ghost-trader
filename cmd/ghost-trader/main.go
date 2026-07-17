@@ -37,6 +37,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
+	"github.com/farquaad/kalshi-ghost-trader/internal/schedulechecker"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scheduler"
 	sigpkg "github.com/farquaad/kalshi-ghost-trader/internal/signal"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
@@ -321,6 +322,13 @@ func main() {
 	reconInterval := time.Duration(cfg.ReconcilerIntervalSecs) * time.Second
 	g.Go(func() error {
 		return recon.Run(ctx, reconInterval)
+	})
+
+	// 4c. Schedule checker loop (refresh stale occurrence_ts from REST)
+	schedChk := schedulechecker.New(restClient, db, multi, log)
+	schedChkInterval := time.Duration(cfg.ScheduleCheckerIntervalSecs) * time.Second
+	g.Go(func() error {
+		return schedChk.Run(ctx, schedChkInterval)
 	})
 
 	// 5. API-Tennis scraper goroutine (optional — WS real-time push)
