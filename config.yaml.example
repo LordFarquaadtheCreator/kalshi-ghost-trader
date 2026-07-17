@@ -1,3 +1,9 @@
+# THIS FILE IS INPUT FOR THE ONE-TIME MIGRATION SCRIPT ONLY.
+# The main app never reads config.yaml. Run:
+#   go run ./cmd/migrate-config
+# to seed app_config, liquidity_pool, and strategy_config tables.
+# Then delete config.yaml.
+#
 # Kalshi API credentials (required)
 api_key_id: your-key-id-here
 private_key_path: /path/to/private_key.pem

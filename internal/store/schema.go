@@ -145,10 +145,20 @@ CREATE TABLE IF NOT EXISTS orders (
     suggested_size  REAL NOT NULL,          -- suggested buy size (shares)
     set_number      INTEGER NOT NULL,       -- set when signal fired
     strategy        TEXT NOT NULL DEFAULT '', -- which strategy generated this order
-    payload         TEXT                    -- extra debug info (JSON)
+    payload         TEXT,                   -- extra debug info (JSON)
+    bankroll        REAL NOT NULL DEFAULT 0, -- bankroll used for Kelly sizing
+    kelly_fraction  REAL NOT NULL DEFAULT 0, -- Kelly fraction used for sizing
+    is_real            INTEGER NOT NULL DEFAULT 0,
+    kalshi_order_id    TEXT,
+    fill_count         REAL,
+    order_status       TEXT,                -- 'submitted','filled','partial','failed','resolved'
+    resolved_pnl_cents INTEGER,
+    pool_balance_before_cents INTEGER,
+    pool_balance_after_cents  INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_orders_match_ts ON orders(match_ticker, ts);
 CREATE INDEX IF NOT EXISTS idx_orders_market ON orders(market_ticker);
+CREATE INDEX IF NOT EXISTS idx_orders_real ON orders(is_real) WHERE is_real = 1;
 
 -- Fired events: tracks which event_tickers a strategy has already fired on.
 -- Survives restarts so strategies don't re-fire on the same match.
@@ -187,6 +197,43 @@ CREATE TABLE IF NOT EXISTS points (
 CREATE INDEX IF NOT EXISTS idx_points_match_ts ON points(match_ticker, ts_ms);
 CREATE INDEX IF NOT EXISTS idx_points_match_set ON points(match_ticker, set_number, game_number, point_number);
 CREATE INDEX IF NOT EXISTS idx_points_fs_match ON points(fs_match_id);
+
+-- App config: key-value store replacing config.yaml
+CREATE TABLE IF NOT EXISTS app_config (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_ts INTEGER NOT NULL
+);
+
+-- Liquidity pool: singleton row (id=1), all values in cents
+CREATE TABLE IF NOT EXISTS liquidity_pool (
+    id                    INTEGER PRIMARY KEY CHECK (id = 1),
+    balance_cents         INTEGER NOT NULL,
+    initial_balance_cents INTEGER NOT NULL,
+    total_spent_cents     INTEGER NOT NULL DEFAULT 0,
+    total_pnl_cents       INTEGER NOT NULL DEFAULT 0,
+    updated_ts            INTEGER NOT NULL
+);
+
+-- Per-strategy real trading config
+CREATE TABLE IF NOT EXISTS strategy_config (
+    strategy    TEXT PRIMARY KEY,
+    enabled     INTEGER NOT NULL DEFAULT 0,
+    updated_ts  INTEGER NOT NULL
+);
+
+-- Price bands per strategy for real order triggering
+CREATE TABLE IF NOT EXISTS strategy_trigger_ranges (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy   TEXT NOT NULL,
+    min_price  REAL NOT NULL,
+    max_price  REAL NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'manual',  -- 'peak' or 'manual'
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    created_ts INTEGER NOT NULL,
+    FOREIGN KEY (strategy) REFERENCES strategy_config(strategy) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_trigger_ranges_strategy ON strategy_trigger_ranges(strategy);
 
 -- Flattened cascade triggers. Delete child rows directly instead of relying
 -- on recursive trigger chaining (which requires connection-level PRAGMA).

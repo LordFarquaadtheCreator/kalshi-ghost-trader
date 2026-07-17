@@ -121,18 +121,26 @@ type Point struct {
 // Order maps a simulated buy order from the match point signal algorithm.
 // Traceable to the match via match_ticker (event_ticker) and market_ticker.
 type Order struct {
-	TS            int64
-	MatchTicker   string  // Kalshi event_ticker
-	MarketTicker  string  // Kalshi market_ticker (YES side)
-	Action        string  // "buy"
-	Context       string  // match point context description
-	ConvProb      float64 // converted probability (0-1)
-	MarketPrice   float64 // market YES price (0-1)
-	EdgeCents     int     // edge in cents
-	SuggestedSize float64 // suggested buy size (shares)
-	SetNumber     int     // set when signal fired
-	Strategy      string  // strategy name that generated this order
-	Payload       string  // extra debug info (JSON)
-	Bankroll      float64 // bankroll used for Kelly sizing
-	KellyFraction float64 // Kelly fraction used for sizing
+	ID                     int64
+	TS                     int64
+	MatchTicker            string  // Kalshi event_ticker
+	MarketTicker           string  // Kalshi market_ticker (YES side)
+	Action                 string  // "buy"
+	Context                string  // match point context description
+	ConvProb               float64 // converted probability (0-1)
+	MarketPrice            float64 // market YES price (0-1)
+	EdgeCents              int     // edge in cents
+	SuggestedSize          float64 // suggested buy size (shares)
+	SetNumber              int     // set when signal fired
+	Strategy               string  // strategy name that generated this order
+	Payload                string  // extra debug info (JSON)
+	Bankroll               float64 // bankroll used for Kelly sizing
+	KellyFraction          float64 // Kelly fraction used for sizing
+	IsReal                 bool    // true if real order submitted to Kalshi
+	KalshiOrderID          string  // Kalshi order ID from REST response
+	FillCount              float64 // contracts filled (IOC may partial fill)
+	OrderStatus            string  // 'submitted','filled','partial','failed','resolved'
+	ResolvedPNLCents       int64   // P&L in cents at resolution
+	PoolBalanceBeforeCents int64   // liquidity pool balance before resolution
+	PoolBalanceAfterCents  int64   // liquidity pool balance after resolution
 }

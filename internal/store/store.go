@@ -92,6 +92,33 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := addColumnIfMissing(ctx, db, "orders", "strategy", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate orders.strategy: %w", err)
 	}
+	if err := addColumnIfMissing(ctx, db, "orders", "bankroll", "REAL NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate orders.bankroll: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "orders", "kelly_fraction", "REAL NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate orders.kelly_fraction: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "orders", "is_real", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate orders.is_real: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "orders", "kalshi_order_id", "TEXT"); err != nil {
+		return fmt.Errorf("migrate orders.kalshi_order_id: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "orders", "fill_count", "REAL"); err != nil {
+		return fmt.Errorf("migrate orders.fill_count: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "orders", "order_status", "TEXT"); err != nil {
+		return fmt.Errorf("migrate orders.order_status: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "orders", "resolved_pnl_cents", "INTEGER"); err != nil {
+		return fmt.Errorf("migrate orders.resolved_pnl_cents: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "orders", "pool_balance_before_cents", "INTEGER"); err != nil {
+		return fmt.Errorf("migrate orders.pool_balance_before_cents: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "orders", "pool_balance_after_cents", "INTEGER"); err != nil {
+		return fmt.Errorf("migrate orders.pool_balance_after_cents: %w", err)
+	}
 
 	return nil
 }

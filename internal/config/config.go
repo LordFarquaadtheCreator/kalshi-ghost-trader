@@ -1,116 +1,138 @@
-// Package config loads runtime configuration from a YAML file (config.yaml).
+// Package config loads runtime configuration from the SQLite database.
 //
 // The Config struct holds all tunable parameters for the ghost-trader service:
 // Kalshi API credentials, environment selection (demo/prod), SQLite path,
 // tennis series tickers, scanner/scheduler intervals, WebSocket backoff,
 // batch sizes, rate limits, metrics port, and API-Tennis scraper settings.
 //
-// Configuration is loaded via [Load], which reads config.yaml (or the path
-// specified by the CONFIG_PATH environment variable), applies defaults for
-// unset fields, and derives REST/WebSocket URLs from the environment.
+// Configuration is loaded via [LoadFromDB], which reads all keys from the
+// `app_config` table, applies defaults for unset fields, and derives
+// REST/WebSocket URLs from the environment.
+//
+// The migration tool (cmd/migrate-config) reads config.yaml once and seeds
+// the app_config table. The main app never reads config.yaml.
 package config
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
+	"strings"
+	"sync"
 
-	"gopkg.in/yaml.v3"
+	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
-// Config holds all runtime configuration loaded from config.yaml.
+// Config holds all runtime configuration loaded from the app_config DB table.
 type Config struct {
 	// Kalshi API credentials
-	APIKeyID       string `yaml:"api_key_id"`
-	PrivateKeyPath string `yaml:"private_key_path"`
+	APIKeyID       string
+	PrivateKeyPath string
 
 	// Environment: "demo" or "prod"
-	Environment string `yaml:"environment"`
+	Environment string
 
 	// REST base URL (derived from Environment)
-	RESTBaseURL string `yaml:"-"`
+	RESTBaseURL string
 	// WebSocket URL (derived from Environment)
-	WSURL string `yaml:"-"`
+	WSURL string
 
 	// SQLite database path
-	DBPath string `yaml:"db_path"`
+	DBPath string
 
 	// Tennis series to scan
-	SeriesTickers []string `yaml:"series_tickers"`
+	SeriesTickers []string
 
 	// Scanner interval for daily scan (hours)
-	ScanIntervalHours int `yaml:"scan_interval_hours"`
+	ScanIntervalHours int
 
 	// How early before occurrence_datetime to start tracking (minutes)
-	TrackLeadMinutes int `yaml:"track_lead_minutes"`
+	TrackLeadMinutes int
 
 	// WebSocket reconnection backoff
-	WSMinBackoffSecs int `yaml:"ws_min_backoff_secs"`
-	WSMaxBackoffSecs int `yaml:"ws_max_backoff_secs"`
+	WSMinBackoffSecs int
+	WSMaxBackoffSecs int
 
 	// SQLite batch settings
-	BatchSize      int `yaml:"batch_size"`
-	FlushTimeoutMS int `yaml:"flush_timeout_ms"`
+	BatchSize      int
+	FlushTimeoutMS int
 
 	// REST client timeout (seconds)
-	HTTPTimeoutSecs int `yaml:"http_timeout_secs"`
+	HTTPTimeoutSecs int
 
 	// REST client max requests per second (0 = use client default)
-	RateLimitRPS int `yaml:"rate_limit_rps"`
+	RateLimitRPS int
 
 	// Scheduler poll interval (seconds)
-	SchedulerPollSecs int `yaml:"scheduler_poll_secs"`
+	SchedulerPollSecs int
 
 	// Reconciler poll interval (seconds) — fills settlement gaps via REST
-	ReconcilerIntervalSecs int `yaml:"reconciler_interval_secs"`
+	ReconcilerIntervalSecs int
 
 	// Schedule checker poll interval (seconds) — refreshes stale occurrence_ts from REST
-	ScheduleCheckerIntervalSecs int `yaml:"schedule_checker_interval_secs"`
+	ScheduleCheckerIntervalSecs int
 
 	// pprof/metrics HTTP server port (0 = disabled)
-	MetricsPort int `yaml:"metrics_port"`
+	MetricsPort int
 
 	// API-Tennis scraper settings (WebSocket real-time push)
-	APITennisEnabled  bool   `yaml:"apitennis_enabled"`
-	APITennisAPIKey   string `yaml:"apitennis_api_key"`
-	APITennisTimezone string `yaml:"apitennis_timezone"` // e.g. "+00:00", "-05:00"
+	APITennisEnabled  bool
+	APITennisAPIKey   string
+	APITennisTimezone string
 
 	// Close timer strategy: buy the favorite N minutes before market close.
-	// Empirical edge: favorite priced ≥85c at T-10min won 100% in backtest.
-	CloseTimerEnabled  bool    `yaml:"close_timer_enabled"`
-	CloseTimerLeadMin  int     `yaml:"close_timer_lead_minutes"` // fire this many min before close
-	CloseTimerMinPrice float64 `yaml:"close_timer_min_price"`    // only buy favorites ≥ this price
-	CloseTimerPollSecs int     `yaml:"close_timer_poll_secs"`    // DB poll interval
-	CloseTimerSize     float64 `yaml:"close_timer_size"`         // shares per order
+	CloseTimerEnabled  bool
+	CloseTimerLeadMin  int
+	CloseTimerMinPrice float64
+	CloseTimerPollSecs int
+	CloseTimerSize     float64
 
 	// Order quota — throttles order emission to prevent exhausting API quota.
-	// When disabled, all orders are paper trades only (current behavior).
-	OrderQuotaEnabled      bool    `yaml:"order_quota_enabled"`
-	OrderQuotaCooldownSecs int     `yaml:"order_quota_cooldown_secs"` // per-market cooldown window
-	OrderQuotaMaxPerSec    int     `yaml:"order_quota_max_per_sec"`   // global rate limit (0 = unlimited)
-	OrderQuotaDailyLimit   int     `yaml:"order_quota_daily_limit"`   // hard daily ceiling (0 = unlimited)
-	OrderQuotaBudgetTotal  float64 `yaml:"order_quota_budget_total"`  // starting budget in dollars (0 = no tracking)
-	OrderQuotaBudgetFloor  float64 `yaml:"order_quota_budget_floor"`  // stop when remaining drops below this
+	OrderQuotaEnabled      bool
+	OrderQuotaCooldownSecs int
+	OrderQuotaMaxPerSec    int
+	OrderQuotaDailyLimit   int
+	OrderQuotaBudgetTotal  float64
+	OrderQuotaBudgetFloor  float64
+
+	// Per-strategy cooldown (seconds) — prevents same strategy firing too fast across markets
+	PerStrategyCooldownSecs int
+
+	// Real trading
+	RealTradingEnabled bool
+	KellyFraction      float64
+	PaperBankroll      float64
+
+	// Real order config
+	RealOrderMaxContracts int
+	RealOrderTimeInForce  string
+	RealOrderTimeoutS     int
 }
 
-// Load reads config from config.yaml in the working directory.
-// Path can be overridden via CONFIG_PATH env var.
-func Load() (*Config, error) {
-	log := slog.Default()
-
-	path := envOr("CONFIG_PATH", "config.yaml")
-	data, err := os.ReadFile(path)
+// LoadFromDB reads all configuration from the app_config table in the SQLite DB.
+// Returns error if app_config is empty (migration not run yet).
+func LoadFromDB(db *store.DB) (*Config, error) {
+	ctx := context.Background()
+	pairs, err := db.GetAllAppConfig(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("read config %s: %w", path, err)
+		return nil, fmt.Errorf("read app_config: %w", err)
+	}
+	if len(pairs) == 0 {
+		return nil, fmt.Errorf("app_config table is empty — run migrate-config first")
+	}
+
+	m := make(map[string]string, len(pairs))
+	for _, kv := range pairs {
+		m[kv.Key] = kv.Value
 	}
 
 	cfg := &Config{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
-	}
-
-	// Apply defaults for unset fields
-	cfg.applyDefaults(log)
+	cfg.applyFromMap(m)
+	cfg.applyDefaults(slog.Default())
+	cfg.applyNewDefaults()
 
 	switch cfg.Environment {
 	case "demo":
@@ -136,6 +158,107 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// ConfigCache provides thread-safe access to Config with refresh capability.
+// Dashboard updates call Refresh() after writing to app_config.
+type ConfigCache struct {
+	mu  sync.RWMutex
+	cfg *Config
+	db  *store.DB
+}
+
+// NewConfigCache creates a cache wrapping the current config.
+func NewConfigCache(db *store.DB, cfg *Config) *ConfigCache {
+	return &ConfigCache{cfg: cfg, db: db}
+}
+
+// Get returns the current config (thread-safe snapshot).
+func (c *ConfigCache) Get() *Config {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg
+}
+
+// Refresh reloads config from the DB and swaps the cached copy.
+func (c *ConfigCache) Refresh() error {
+	cfg, err := LoadFromDB(c.db)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.cfg = cfg
+	c.mu.Unlock()
+	return nil
+}
+
+// Update writes a single key to app_config and refreshes the cache.
+func (c *ConfigCache) Update(key, value string) error {
+	ctx := context.Background()
+	if err := c.db.SetAppConfig(ctx, key, value); err != nil {
+		return err
+	}
+	return c.Refresh()
+}
+
+// UpdateBatch writes multiple keys and refreshes the cache.
+func (c *ConfigCache) UpdateBatch(pairs []store.AppConfigKV) error {
+	ctx := context.Background()
+	if err := c.db.SetAppConfigBatch(ctx, pairs); err != nil {
+		return err
+	}
+	return c.Refresh()
+}
+
+// applyFromMap populates Config fields from a key-value map.
+func (c *Config) applyFromMap(m map[string]string) {
+	c.APIKeyID = m["api_key_id"]
+	c.PrivateKeyPath = m["private_key_path"]
+	c.Environment = m["environment"]
+	c.DBPath = getEnv("DB_PATH", "kalshi_tennis.db")
+
+	c.SeriesTickers = parseJSONStringArray(m["series_tickers"])
+
+	c.ScanIntervalHours = atoi(m["scan_interval_hours"])
+	c.TrackLeadMinutes = atoi(m["track_lead_minutes"])
+	c.WSMinBackoffSecs = atoi(m["ws_min_backoff_secs"])
+	c.WSMaxBackoffSecs = atoi(m["ws_max_backoff_secs"])
+	c.BatchSize = atoi(m["batch_size"])
+	c.FlushTimeoutMS = atoi(m["flush_timeout_ms"])
+	c.HTTPTimeoutSecs = atoi(m["http_timeout_secs"])
+	c.RateLimitRPS = atoi(m["rate_limit_rps"])
+	c.SchedulerPollSecs = atoi(m["scheduler_poll_secs"])
+	c.MetricsPort = atoi(m["metrics_port"])
+
+	c.APITennisEnabled = atob(m["apitennis_enabled"])
+	c.APITennisAPIKey = m["apitennis_api_key"]
+	c.APITennisTimezone = m["apitennis_timezone"]
+
+	c.CloseTimerEnabled = atob(m["close_timer_enabled"])
+	c.CloseTimerLeadMin = atoi(m["close_timer_lead_min"])
+	c.CloseTimerMinPrice = atof(m["close_timer_min_price"])
+	c.CloseTimerPollSecs = atoi(m["close_timer_poll_secs"])
+	c.CloseTimerSize = atof(m["close_timer_size"])
+
+	c.ReconcilerIntervalSecs = atoi(m["reconciler_interval_secs"])
+	c.ScheduleCheckerIntervalSecs = atoi(m["schedule_checker_interval_secs"])
+
+	c.OrderQuotaEnabled = atob(m["order_quota_enabled"])
+	c.OrderQuotaCooldownSecs = atoi(m["order_quota_cooldown_secs"])
+	c.OrderQuotaMaxPerSec = atoi(m["order_quota_max_per_sec"])
+	c.OrderQuotaDailyLimit = atoi(m["order_quota_daily_limit"])
+	c.OrderQuotaBudgetTotal = atof(m["order_quota_budget_total"])
+	c.OrderQuotaBudgetFloor = atof(m["order_quota_budget_floor"])
+
+	c.PerStrategyCooldownSecs = atoi(m["per_strategy_cooldown_secs"])
+
+	c.RealTradingEnabled = atob(m["real_trading_enabled"])
+	c.KellyFraction = atof(m["kelly_fraction"])
+	c.PaperBankroll = atof(m["paper_bankroll"])
+
+	c.RealOrderMaxContracts = atoi(m["real_order_max_contracts"])
+	c.RealOrderTimeInForce = m["real_order_time_in_force"]
+	c.RealOrderTimeoutS = atoi(m["real_order_timeout_s"])
 }
 
 // applyDefaults fills zero-valued fields with sensible defaults.
@@ -221,9 +344,76 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	}
 }
 
-func envOr(key, def string) string {
+// addDefaults for new fields not in the old applyDefaults
+func (c *Config) applyNewDefaults() {
+	if c.PerStrategyCooldownSecs == 0 {
+		c.PerStrategyCooldownSecs = 60
+	}
+	if c.KellyFraction == 0 {
+		c.KellyFraction = 0.25
+	}
+	if c.PaperBankroll == 0 {
+		c.PaperBankroll = 1000
+	}
+	if c.RealOrderMaxContracts == 0 {
+		c.RealOrderMaxContracts = 50
+	}
+	if c.RealOrderTimeInForce == "" {
+		c.RealOrderTimeInForce = "immediate_or_cancel"
+	}
+	if c.RealOrderTimeoutS == 0 {
+		c.RealOrderTimeoutS = 10
+	}
+}
+
+// --- helpers ---
+
+func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return def
+}
+
+func atoi(s string) int {
+	if s == "" {
+		return 0
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func atof(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func atob(s string) bool {
+	return s == "true" || s == "1"
+}
+
+func parseJSONStringArray(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal([]byte(s), &arr); err != nil {
+		// fallback: comma-separated
+		for _, p := range strings.Split(s, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				arr = append(arr, p)
+			}
+		}
+	}
+	return arr
 }

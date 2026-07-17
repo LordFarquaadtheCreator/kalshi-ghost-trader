@@ -1,8 +1,8 @@
 // Command ghost-trader is the main entrypoint for the Kalshi Ghost Trader service.
 //
-// It loads configuration from config.yaml, initializes an RSA signer for Kalshi
-// API authentication, opens a SQLite database with WAL mode, and launches all
-// core goroutines via errgroup:
+// It loads configuration from the SQLite database (app_config table), initializes
+// an RSA signer for Kalshi API authentication, opens a SQLite database with WAL
+// mode, and launches all core goroutines via errgroup:
 //
 //   - TickWriter — single SQLite writer for batched tick/orderbook/lifecycle/points inserts
 //   - WebSocket Manager — auto-reconnecting connection to Kalshi's real-time feed
@@ -59,19 +59,10 @@ func main() {
 	}))
 	slog.SetDefault(log)
 
-	// Load config
-	cfg, err := config.Load()
-	if err != nil {
-		log.Error("config load failed", "err", err)
-		os.Exit(1)
-	}
-	log.Info("config loaded", "env", cfg.Environment, "db", cfg.DBPath, "series_count", len(cfg.SeriesTickers))
-
-	// Load signer
-	signer, err := kalshiauth.NewSignerFromFile(cfg.APIKeyID, cfg.PrivateKeyPath)
-	if err != nil {
-		log.Error("signer init failed", "err", err)
-		os.Exit(1)
+	// Bootstrap: DB path from env, open SQLite, load config from app_config table
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "kalshi_tennis.db"
 	}
 
 	// Root context cancelled on SIGINT/SIGTERM
@@ -80,12 +71,29 @@ func main() {
 	defer stop()
 
 	// Open SQLite store
-	db, err := store.New(ctx, cfg.DBPath, log)
+	db, err := store.New(ctx, dbPath, log)
 	if err != nil {
 		log.Error("store init failed", "err", err)
 		os.Exit(1)
 	}
 	defer db.Close()
+
+	// Load config from DB
+	cfg, err := config.LoadFromDB(db)
+	if err != nil {
+		log.Error("config load from DB failed", "err", err)
+		os.Exit(1)
+	}
+	_ = config.NewConfigCache(db, cfg) // used in Phase 3 for real order pipeline
+	algorithms.SetSizingParams(cfg.PaperBankroll, cfg.KellyFraction)
+	log.Info("config loaded from DB", "env", cfg.Environment, "db", cfg.DBPath, "series_count", len(cfg.SeriesTickers), "bankroll", cfg.PaperBankroll, "kelly", cfg.KellyFraction)
+
+	// Load signer
+	signer, err := kalshiauth.NewSignerFromFile(cfg.APIKeyID, cfg.PrivateKeyPath)
+	if err != nil {
+		log.Error("signer init failed", "err", err)
+		os.Exit(1)
+	}
 
 	// Tick writer (single writer goroutine for batch inserts)
 	tickWriter := db.NewTickWriter(cfg.BatchSize, cfg.FlushTimeoutMS, log)
@@ -250,11 +258,10 @@ func main() {
 	var closeTimer *sigpkg.CloseTimer
 	if cfg.CloseTimerEnabled {
 		closeTimer = sigpkg.NewCloseTimer(db, matchPoint, tickWriter,
-			cfg.CloseTimerLeadMin, cfg.CloseTimerMinPrice, cfg.CloseTimerSize, log)
+			cfg.CloseTimerLeadMin, cfg.CloseTimerMinPrice, log)
 		log.Info("close timer strategy enabled",
 			"lead_min", cfg.CloseTimerLeadMin,
-			"min_price", cfg.CloseTimerMinPrice,
-			"size", cfg.CloseTimerSize)
+			"min_price", cfg.CloseTimerMinPrice)
 	}
 
 	// WebSocket manager
