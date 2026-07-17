@@ -72,17 +72,83 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 		return false
 	}
 
-	// re-size using real bankroll via Kelly (no $5 paper cap)
+	ctx := context.Background()
+
+	// Guard 1: strategy must be enabled in strategy_config
+	enabled, err := e.db.IsStrategyEnabled(ctx, o.Strategy)
+	if err != nil {
+		e.log.Error("real: failed to check strategy enabled",
+			"strategy", o.Strategy, "error", err)
+		return false
+	}
+	if !enabled {
+		e.log.Warn("real: strategy not enabled, skipping",
+			"strategy", o.Strategy, "market", o.MarketTicker)
+		return false
+	}
+
+	// Guard 2: price must fall within an enabled trigger range (if any bands configured)
+	hasBands, err := e.db.HasTriggerRanges(ctx, o.Strategy)
+	if err != nil {
+		e.log.Error("real: failed to check trigger ranges",
+			"strategy", o.Strategy, "error", err)
+		return false
+	}
+	if hasBands {
+		inRange, err := e.db.IsPriceInTriggerRange(ctx, o.Strategy, o.MarketPrice)
+		if err != nil {
+			e.log.Error("real: failed to check price in trigger range",
+				"strategy", o.Strategy, "price", o.MarketPrice, "error", err)
+			return false
+		}
+		if !inRange {
+			e.log.Info("real: price outside trigger ranges, skipping",
+				"strategy", o.Strategy, "market", o.MarketTicker, "price", o.MarketPrice)
+			return false
+		}
+	}
+
+	// Guard 3: Kelly size from real bankroll
 	count := kellySizeRaw(o.ConvProb, o.MarketPrice, e.cfg.Bankroll, kellyFractionP)
 	if count <= 0 {
 		e.log.Warn("real: skipped zero-size order", "market", o.MarketTicker)
 		return false
 	}
 
+	// Guard 4: clamp spend to available liquidity pool balance
+	spendCents := int64(count * o.MarketPrice * 100)
+	lp, err := e.db.GetLiquidityPool(ctx)
+	if err != nil {
+		e.log.Error("real: failed to get liquidity pool balance",
+			"market", o.MarketTicker, "error", err)
+		return false
+	}
+	if lp.BalanceCents <= 0 {
+		e.log.Warn("real: liquidity pool empty, skipping",
+			"market", o.MarketTicker, "balance_cents", lp.BalanceCents)
+		return false
+	}
+	if spendCents > lp.BalanceCents {
+		// clamp to what's available
+		maxCount := float64(lp.BalanceCents) / (o.MarketPrice * 100)
+		e.log.Warn("real: clamping order to available pool balance",
+			"market", o.MarketTicker,
+			"original_count", count, "clamped_count", maxCount,
+			"spend_cents", spendCents, "balance_cents", lp.BalanceCents)
+		count = maxCount
+		spendCents = int64(count * o.MarketPrice * 100)
+		if count <= 0 {
+			e.log.Warn("real: clamped count is zero, skipping",
+				"market", o.MarketTicker, "balance_cents", lp.BalanceCents)
+			return false
+		}
+	}
+
 	// persist order to DB as real before submission
 	o.IsReal = true
 	o.OrderStatus = "pending"
-	orderID, err := e.db.InsertRealOrder(context.Background(), o)
+	o.SuggestedSize = count
+	orderID, err := e.db.InsertRealOrder(ctx, o)
 	if err != nil {
 		e.log.Error("real: failed to persist order to DB",
 			"market", o.MarketTicker, "error", err)
@@ -91,14 +157,16 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	o.ID = orderID
 
 	// deduct from liquidity pool (cost = count * price * 100 cents)
-	spendCents := int64(count * o.MarketPrice * 100)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(e.cfg.OrderTimeoutS)*time.Second)
+	orderCtx, cancel := context.WithTimeout(ctx, time.Duration(e.cfg.OrderTimeoutS)*time.Second)
 	defer cancel()
 
-	newBalance, err := e.db.DeductLiquidityPool(ctx, spendCents)
+	newBalance, err := e.db.DeductLiquidityPool(orderCtx, spendCents)
 	if err != nil {
 		e.log.Error("real: failed to deduct liquidity pool",
 			"market", o.MarketTicker, "spend_cents", spendCents, "error", err)
+		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID); dbErr != nil {
+			e.log.Error("real: failed to mark order as failed after pool deduction error", "error", dbErr)
+		}
 		return false
 	}
 
@@ -116,7 +184,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	}
 
 	var resp createOrderV2Response
-	err = e.client.Post(ctx, "/portfolio/events/orders", req, &resp)
+	err = e.client.Post(orderCtx, "/portfolio/events/orders", req, &resp)
 	if err != nil {
 		e.log.Error("real: order submission FAILED",
 			"market", o.MarketTicker, "strategy", o.Strategy,

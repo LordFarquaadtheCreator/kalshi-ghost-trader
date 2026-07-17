@@ -158,6 +158,21 @@ ON CONFLICT(strategy) DO UPDATE SET enabled = excluded.enabled, updated_ts = exc
 	return err
 }
 
+// IsStrategyEnabled returns whether a strategy is enabled for real trading.
+// Returns false if the strategy has no config row (default disabled).
+func (d *DB) IsStrategyEnabled(ctx context.Context, strategy string) (bool, error) {
+	var enabled int
+	err := d.db.QueryRowContext(ctx,
+		"SELECT enabled FROM strategy_config WHERE strategy = ?", strategy).Scan(&enabled)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return enabled != 0, nil
+}
+
 // EnsureStrategyConfig inserts a strategy_config row if it doesn't exist (disabled by default).
 func (d *DB) EnsureStrategyConfig(ctx context.Context, strategy string) error {
 	_, err := d.db.ExecContext(ctx, `
@@ -237,6 +252,17 @@ WHERE strategy = ? AND enabled = 1 AND ? >= min_price AND ? <= max_price`,
 	return count > 0, nil
 }
 
+// HasTriggerRanges returns true if a strategy has any trigger ranges configured (enabled or not).
+func (d *DB) HasTriggerRanges(ctx context.Context, strategy string) (bool, error) {
+	var count int
+	err := d.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM strategy_trigger_ranges WHERE strategy = ?", strategy).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func boolToInt(b bool) int {
 	if b {
 		return 1
@@ -246,6 +272,7 @@ func boolToInt(b bool) int {
 
 // DeductLiquidityPool atomically deducts spendCents from the pool balance
 // and adds to total_spent_cents. Returns new balance in cents.
+// Fails if insufficient balance (prevents going negative under concurrent access).
 func (d *DB) DeductLiquidityPool(ctx context.Context, spendCents int64) (int64, error) {
 	var newBalance int64
 	err := d.db.QueryRowContext(ctx, `
@@ -253,9 +280,12 @@ UPDATE liquidity_pool
 SET balance_cents = balance_cents - ?,
     total_spent_cents = total_spent_cents + ?,
     updated_ts = ?
-WHERE id = 1
+WHERE id = 1 AND balance_cents >= ?
 RETURNING balance_cents`,
-		spendCents, spendCents, time.Now().UnixMilli()).Scan(&newBalance)
+		spendCents, spendCents, time.Now().UnixMilli(), spendCents).Scan(&newBalance)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("insufficient liquidity pool balance for spend of %d cents", spendCents)
+	}
 	return newBalance, err
 }
 
