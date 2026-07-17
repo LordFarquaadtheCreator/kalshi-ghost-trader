@@ -21,6 +21,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 // pprof endpoints available at /debug/pprof/*.
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache")
 
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -51,6 +52,7 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 func trackedHandler(tr *tracker.Tracker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=2")
 		subs := tr.ActiveSubs()
 		events := tr.ActiveEvents()
 		json.NewEncoder(w).Encode(map[string]any{

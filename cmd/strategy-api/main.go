@@ -55,6 +55,7 @@ func main() {
 
 	mux.HandleFunc("/api/strategies", corsHandler(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=300")
 		json.NewEncoder(w).Encode(map[string]any{
 			"strategies": engine.AvailableStrategies(),
 		})
@@ -95,6 +96,58 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]any{
 			"results": results,
 		})
+	}))
+
+	mux.HandleFunc("/api/ticks", corsHandler(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=3")
+
+		eventTicker := r.URL.Query().Get("event")
+		if eventTicker == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "missing event param"})
+			return
+		}
+
+		data, err := engine.GetEventTickPrices(r.Context(), eventTicker)
+		if err != nil {
+			log.Error("get event ticks", "event", eventTicker, "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(data)
+	}))
+
+	mux.HandleFunc("/api/orders", corsHandler(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=5")
+
+		data, err := engine.GetAllPaperOrders(r.Context())
+		if err != nil {
+			log.Error("get paper orders", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(data)
+	}))
+
+	mux.HandleFunc("/api/order-counts", corsHandler(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=5")
+
+		counts, err := engine.GetOrderCountsByEvent(r.Context())
+		if err != nil {
+			log.Error("get order counts", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{"counts": counts})
 	}))
 
 	addr := fmt.Sprintf("127.0.0.1:%d", *port)

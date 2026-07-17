@@ -147,6 +147,119 @@ func (e *Engine) Close() {
 	e.db.Close()
 }
 
+// MarketTick is a single price point for a market, returned by GetEventTickPrices.
+type MarketTick struct {
+	TS    int64   `json:"ts"`
+	Price float64 `json:"price"`
+}
+
+// MarketTickData holds tick data for one market in an event.
+type MarketTickData struct {
+	MarketTicker string       `json:"market_ticker"`
+	PlayerName   string       `json:"player_name"`
+	Ticks        []MarketTick `json:"ticks"`
+}
+
+// OrderRow is a single order for an event, returned by GetEventTickPrices.
+type OrderRow struct {
+	TS            int64   `json:"ts"`
+	MarketTicker  string  `json:"market_ticker"`
+	Context       string  `json:"context"`
+	MarketPrice   float64 `json:"market_price"`
+	EdgeCents     int     `json:"edge_cents"`
+	SuggestedSize float64 `json:"suggested_size"`
+	Strategy      string  `json:"strategy"`
+}
+
+// EventTickData holds tick data for all markets in an event.
+type EventTickData struct {
+	EventTicker string           `json:"event_ticker"`
+	Title       string           `json:"title"`
+	Markets     []MarketTickData `json:"markets"`
+	Orders      []OrderRow       `json:"orders"`
+}
+
+// GetEventTickPrices queries live tick prices for all markets in an event.
+// Queries the DB directly so data is fresh even while ghost-trader is writing.
+func (e *Engine) GetEventTickPrices(ctx context.Context, eventTicker string) (*EventTickData, error) {
+	title := e.eventTitles[eventTicker]
+
+	// Get markets for this event
+	mkts, ok := e.markets[eventTicker]
+	if !ok {
+		// Not in cache — query DB directly
+		rows, err := e.db.QueryContext(ctx,
+			`SELECT market_ticker, player_name FROM markets WHERE event_ticker = ? ORDER BY market_ticker`,
+			eventTicker)
+		if err != nil {
+			return nil, fmt.Errorf("query markets: %w", err)
+		}
+		for rows.Next() {
+			var mt, pn string
+			if err := rows.Scan(&mt, &pn); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			mkts = append(mkts, MarketRow{MarketTicker: mt, PlayerName: pn})
+		}
+		rows.Close()
+		if len(mkts) == 0 {
+			return &EventTickData{EventTicker: eventTicker, Title: title}, nil
+		}
+	}
+
+	result := &EventTickData{
+		EventTicker: eventTicker,
+		Title:       title,
+		Markets:     make([]MarketTickData, 0, len(mkts)),
+	}
+
+	// Query orders for this event
+	orderRows, err := e.db.QueryContext(ctx,
+		`SELECT ts, market_ticker, context, market_price, edge_cents, suggested_size, strategy
+		 FROM orders WHERE match_ticker = ? ORDER BY ts`, eventTicker)
+	if err != nil {
+		return nil, fmt.Errorf("query orders: %w", err)
+	}
+	for orderRows.Next() {
+		var o OrderRow
+		if err := orderRows.Scan(&o.TS, &o.MarketTicker, &o.Context, &o.MarketPrice,
+			&o.EdgeCents, &o.SuggestedSize, &o.Strategy); err != nil {
+			orderRows.Close()
+			return nil, err
+		}
+		result.Orders = append(result.Orders, o)
+	}
+	orderRows.Close()
+
+	for _, m := range mkts {
+		rows, err := e.db.QueryContext(ctx,
+			`SELECT ts, price FROM ticks WHERE market_ticker = ? AND price IS NOT NULL AND price > 0 ORDER BY ts`,
+			m.MarketTicker)
+		if err != nil {
+			return nil, fmt.Errorf("query ticks: %w", err)
+		}
+		var ticks []MarketTick
+		for rows.Next() {
+			var ts int64
+			var price float64
+			if err := rows.Scan(&ts, &price); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			ticks = append(ticks, MarketTick{TS: ts, Price: price})
+		}
+		rows.Close()
+		result.Markets = append(result.Markets, MarketTickData{
+			MarketTicker: m.MarketTicker,
+			PlayerName:   m.PlayerName,
+			Ticks:        ticks,
+		})
+	}
+
+	return result, nil
+}
+
 // AvailableStrategies returns the names of registered strategies.
 func (e *Engine) AvailableStrategies() []string {
 	names := make([]string, 0, len(e.factories))
@@ -540,4 +653,120 @@ func sqrt(x float64) float64 {
 		return 0
 	}
 	return math.Sqrt(x)
+}
+
+// PaperOrder is a simulated order with resolved P&L, for the dashboard.
+type PaperOrder struct {
+	TS            int64   `json:"ts"`
+	MatchTicker   string  `json:"match_ticker"`
+	MarketTicker  string  `json:"market_ticker"`
+	PlayerName    string  `json:"player_name"`
+	Context       string  `json:"context"`
+	MarketPrice   float64 `json:"market_price"`
+	EdgeCents     int     `json:"edge_cents"`
+	SuggestedSize float64 `json:"suggested_size"`
+	Strategy      string  `json:"strategy"`
+	Result        string  `json:"result"`
+	Won           bool    `json:"won"`
+	PnL           float64 `json:"pnl"`
+}
+
+// PaperOrderSummary holds aggregate stats for paper orders.
+type PaperOrderSummary struct {
+	TotalOrders   int     `json:"total_orders"`
+	Resolved      int     `json:"resolved"`
+	Wins          int     `json:"wins"`
+	Losses        int     `json:"losses"`
+	Pending       int     `json:"pending"`
+	WinRate       float64 `json:"win_rate"`
+	TotalInvested float64 `json:"total_invested"`
+	NetPnL        float64 `json:"net_pnl"`
+	ROI           float64 `json:"roi"`
+}
+
+// PaperOrderResponse is the full API response for /api/orders.
+type PaperOrderResponse struct {
+	Orders  []PaperOrder      `json:"orders"`
+	Summary PaperOrderSummary `json:"summary"`
+}
+
+// GetAllPaperOrders queries all orders from the DB, joins with markets for
+// result/P&L, and returns them sorted by ts descending.
+func (e *Engine) GetAllPaperOrders(ctx context.Context) (*PaperOrderResponse, error) {
+	rows, err := e.db.QueryContext(ctx, `
+SELECT o.ts, o.match_ticker, o.market_ticker, o.context,
+       o.market_price, o.edge_cents, o.suggested_size, o.strategy,
+       m.player_name, m.result
+FROM orders o
+LEFT JOIN markets m ON o.market_ticker = m.market_ticker
+ORDER BY o.ts DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("query orders: %w", err)
+	}
+	defer rows.Close()
+
+	var orders []PaperOrder
+	s := PaperOrderSummary{}
+
+	for rows.Next() {
+		var o PaperOrder
+		var playerName, result sql.NullString
+		if err := rows.Scan(&o.TS, &o.MatchTicker, &o.MarketTicker, &o.Context,
+			&o.MarketPrice, &o.EdgeCents, &o.SuggestedSize, &o.Strategy,
+			&playerName, &result); err != nil {
+			return nil, err
+		}
+		o.PlayerName = playerName.String
+		o.Result = result.String
+		o.Won = result.String == "yes"
+
+		s.TotalOrders++
+		s.TotalInvested += o.SuggestedSize * o.MarketPrice
+
+		if result.Valid && result.String != "" {
+			s.Resolved++
+			if o.Won {
+				s.Wins++
+				o.PnL = o.SuggestedSize * (1.0 - o.MarketPrice)
+			} else {
+				s.Losses++
+				o.PnL = -o.SuggestedSize * o.MarketPrice
+			}
+			s.NetPnL += o.PnL
+		} else {
+			s.Pending++
+		}
+
+		orders = append(orders, o)
+	}
+
+	if s.Resolved > 0 {
+		s.WinRate = float64(s.Wins) / float64(s.Resolved) * 100
+	}
+	if s.TotalInvested > 0 {
+		s.ROI = s.NetPnL / s.TotalInvested * 100
+	}
+
+	return &PaperOrderResponse{Orders: orders, Summary: s}, nil
+}
+
+// GetOrderCountsByEvent returns a map of event_ticker → simulated order count.
+func (e *Engine) GetOrderCountsByEvent(ctx context.Context) (map[string]int, error) {
+	rows, err := e.db.QueryContext(ctx,
+		`SELECT match_ticker, COUNT(*) FROM orders GROUP BY match_ticker`)
+	if err != nil {
+		return nil, fmt.Errorf("query order counts: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var ticker string
+		var count int
+		if err := rows.Scan(&ticker, &count); err != nil {
+			return nil, err
+		}
+		counts[ticker] = count
+	}
+	return counts, nil
 }
