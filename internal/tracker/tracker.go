@@ -36,27 +36,40 @@ type PriceCleaner interface {
 	DeletePrice(marketTicker string)
 }
 
+// MarketRegistrar registers/unregisters markets with strategies. Implemented
+// by MultiStrategyRuntime. Called when both markets for an event are tracked
+// (RegisterMarkets) or when the last market for an event is untracked
+// (UnregisterMarkets). Ensures strategies fire even without score scrapers.
+type MarketRegistrar interface {
+	RegisterMarkets(eventTicker string, marketTickers []string)
+	UnregisterMarkets(eventTicker string)
+}
+
 // Tracker manages active market subscriptions. Each tracked market has
 // a WS subscription; stopping removes it. No per-match goroutine —
 // ticks are stored directly by the WS manager's tick writer.
 type Tracker struct {
 	ws  *wsclient.Manager
-	sp  ScorePoller  // nil if no score source enabled
-	pc  PriceCleaner // nil if no signal generator
+	sp  ScorePoller     // nil if no score source enabled
+	pc  PriceCleaner    // nil if no signal generator
+	mr  MarketRegistrar // nil if no strategy wired
 	log *slog.Logger
 	mu  sync.Mutex
 	// subs maps market_ticker → event_ticker for all tracked markets.
 	// event_ticker is used to drive score polling.
 	subs map[string]string
+	// registered tracks events already registered with strategies
+	registered map[string]bool
 }
 
 // New creates a Tracker. sp may be nil to disable score polling coupling.
 func New(ws *wsclient.Manager, sp ScorePoller, log *slog.Logger) *Tracker {
 	return &Tracker{
-		ws:   ws,
-		sp:   sp,
-		log:  log,
-		subs: make(map[string]string),
+		ws:         ws,
+		sp:         sp,
+		log:        log,
+		subs:       make(map[string]string),
+		registered: make(map[string]bool),
 	}
 }
 
@@ -64,6 +77,10 @@ func New(ws *wsclient.Manager, sp ScorePoller, log *slog.Logger) *Tracker {
 // price tracking state when markets are unsubscribed.
 func (t *Tracker) SetPriceCleaner(pc PriceCleaner) {
 	t.pc = pc
+}
+
+func (t *Tracker) SetMarketRegistrar(mr MarketRegistrar) {
+	t.mr = mr
 }
 
 // StartMatch begins tracking a market. Idempotent — already-tracked returns nil.
@@ -87,6 +104,25 @@ func (t *Tracker) StartMatch(ctx context.Context, market, eventTicker string) er
 	// Start score polling for this event (if not already active)
 	if t.sp != nil {
 		t.sp.StartPolling(eventTicker)
+	}
+
+	// Register markets with strategies once both markets for the event are tracked
+	if t.mr != nil {
+		t.mu.Lock()
+		var eventMarkets []string
+		for m, ev := range t.subs {
+			if ev == eventTicker {
+				eventMarkets = append(eventMarkets, m)
+			}
+		}
+		alreadyRegistered := t.registered[eventTicker]
+		if len(eventMarkets) >= 2 && !alreadyRegistered {
+			t.registered[eventTicker] = true
+		}
+		t.mu.Unlock()
+		if len(eventMarkets) >= 2 && !alreadyRegistered {
+			t.mr.RegisterMarkets(eventTicker, eventMarkets)
+		}
 	}
 
 	t.log.Info("started match", "market", market, "event", eventTicker)
@@ -123,6 +159,14 @@ func (t *Tracker) StopMatch(market string) {
 	// Stop score polling only if no other market for this event is tracked
 	if t.sp != nil && !eventStillTracked {
 		t.sp.StopPolling(eventTicker)
+	}
+
+	// Unregister markets with strategies when last market for event is removed
+	if t.mr != nil && !eventStillTracked {
+		t.mu.Lock()
+		delete(t.registered, eventTicker)
+		t.mu.Unlock()
+		t.mr.UnregisterMarkets(eventTicker)
 	}
 
 	t.log.Info("stopped match", "market", market)

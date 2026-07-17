@@ -36,6 +36,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/flashscore"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
+	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scheduler"
 	sigpkg "github.com/farquaad/kalshi-ghost-trader/internal/signal"
@@ -99,6 +100,12 @@ func main() {
 	// matchPoint is the primary strategy and also serves as PriceLookup for CloseTimer
 	matchPoint := algorithms.NewMatchPointStrategy(sharedEmitter, log)
 
+	// FadeLongshot: buy favorite at T-10min before close. Highest Sharpe (1.01).
+	// Created outside factory because it needs DB for live close_ts loading.
+	// All orders are paper trades — TickWriterEmitter writes to orders table, no real execution.
+	fadeLongshot := algorithms.NewFadeLongshotStrategyWithDB(sharedEmitter, db, log,
+		algorithms.DefaultFadeLongshotConfig())
+
 	// Multi-strategy runtime: all point-based strategies run simultaneously.
 	// Each strategy's orders are tagged with its name in the orders table.
 	multi := algorithms.NewMultiStrategyFromFactories(sharedEmitter, log, map[string]algorithms.StrategyFactoryFn{
@@ -148,6 +155,7 @@ func main() {
 				Label:            "setpoint-cheap",
 			})
 		},
+		"fadelongshot": func(e algorithms.OrderEmitter) algorithms.Strategy { return fadeLongshot },
 	})
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())
 
@@ -202,6 +210,7 @@ func main() {
 	}
 	tr := tracker.New(wsMgr, scorePoller, log)
 	tr.SetPriceCleaner(multi)
+	tr.SetMarketRegistrar(multi)
 
 	// Scanner
 	sc := scanner.New(restClient, db, cfg.SeriesTickers, log)
@@ -259,6 +268,13 @@ func main() {
 	schedPoll := time.Duration(cfg.SchedulerPollSecs) * time.Second
 	g.Go(func() error {
 		return sched.Run(ctx, schedPoll)
+	})
+
+	// 4b. Reconciler loop (fill settlement gaps via REST for unresolved markets)
+	recon := reconciler.New(restClient, db, log)
+	reconInterval := time.Duration(cfg.ReconcilerIntervalSecs) * time.Second
+	g.Go(func() error {
+		return recon.Run(ctx, reconInterval)
 	})
 
 	// 5. FlashScore scraper goroutine (optional — polls tennis point-by-point data)

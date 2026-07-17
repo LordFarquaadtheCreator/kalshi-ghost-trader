@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -51,6 +52,7 @@ type FadeLongshotStrategy struct {
 	closeTimes map[string]int64
 	fired      map[string]bool
 	emitter    OrderEmitter
+	db         *store.DB // nil in backtest mode
 	log        *slog.Logger
 	cfg        FadeLongshotConfig
 	replayNow  *time.Time
@@ -69,10 +71,42 @@ func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLon
 	}
 }
 
+// NewFadeLongshotStrategyWithDB creates a live-mode fadelongshot that
+// auto-loads close_ts from the markets table on RegisterMarkets.
+func NewFadeLongshotStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg FadeLongshotConfig) *FadeLongshotStrategy {
+	s := NewFadeLongshotStrategy(emitter, log, cfg)
+	s.db = db
+	return s
+}
+
 func (s *FadeLongshotStrategy) RegisterMarkets(eventTicker string, marketTickers []string) {
 	s.mu.Lock()
 	s.markets[eventTicker] = marketTickers
 	s.mu.Unlock()
+
+	// Live mode: auto-load close_ts from DB so we don't need external wiring
+	if s.db != nil {
+		s.loadCloseTime(eventTicker)
+	}
+}
+
+// loadCloseTime queries close_ts from the markets table. Called on
+// RegisterMarkets in live mode. In backtest, RegisterCloseTime is used instead.
+func (s *FadeLongshotStrategy) loadCloseTime(eventTicker string) {
+	mkts, err := s.db.GetMarketsByEvent(context.Background(), eventTicker)
+	if err != nil {
+		s.log.Error("fadelongshot: load close_ts", "event", eventTicker, "err", err)
+		return
+	}
+	for _, m := range mkts {
+		if m.CloseTS > 0 {
+			s.mu.Lock()
+			s.closeTimes[eventTicker] = m.CloseTS
+			s.mu.Unlock()
+			s.log.Debug("fadelongshot: loaded close_ts", "event", eventTicker, "close_ts", m.CloseTS)
+			return
+		}
+	}
 }
 
 // RegisterCloseTime sets the close timestamp for an event.
