@@ -30,6 +30,15 @@ type FadeLongshotConfig struct {
 	// (set/game lead, match/set point) received via OnPoint. Falls back to
 	// fixed 0.99 when no score data is available.
 	DynamicConvProb bool
+	// SeriesFilter: if non-empty, only fire on events matching one of these
+	// series tickers. Used for RQ3 (series-tier stratification) and RQ13
+	// (doubles-only variant). Empty = no filter (all series).
+	SeriesFilter []string
+	// UTCHourStart / UTCHourEnd: if non-zero, only fire when close_ts UTC hour
+	// falls in [Start, End). Used for RQ10 (time-of-day stratification).
+	// UTCHourEnd=0 means no end limit. Both 0 = no filter.
+	UTCHourStart int
+	UTCHourEnd   int
 }
 
 func DefaultFadeLongshotConfig() FadeLongshotConfig {
@@ -73,6 +82,7 @@ type FadeLongshotStrategy struct {
 	fired       map[string]bool
 	closeWarned map[string]bool // warn once per event when close_ts=0
 	scores      map[string]*fadeScoreState
+	series      map[string]string // event_ticker -> series_ticker
 	emitter     OrderEmitter
 	db          *store.DB // nil in backtest mode
 	log         *slog.Logger
@@ -89,6 +99,7 @@ func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLon
 		fired:       make(map[string]bool),
 		closeWarned: make(map[string]bool),
 		scores:      make(map[string]*fadeScoreState),
+		series:      make(map[string]string),
 		emitter:     emitter,
 		log:         log,
 		cfg:         cfg,
@@ -108,10 +119,28 @@ func (s *FadeLongshotStrategy) RegisterMarkets(eventTicker string, marketTickers
 	s.markets[eventTicker] = marketTickers
 	s.mu.Unlock()
 
-	// Live mode: auto-load close_ts from DB so we don't need external wiring
+	// Live mode: auto-load close_ts + series from DB
 	if s.db != nil {
 		s.loadCloseTime(eventTicker)
+		s.loadSeriesTicker(eventTicker)
 	}
+}
+
+func (s *FadeLongshotStrategy) loadSeriesTicker(eventTicker string) {
+	series, err := s.db.GetSeriesTicker(context.Background(), eventTicker)
+	if err == nil && series != "" {
+		s.mu.Lock()
+		s.series[eventTicker] = series
+		s.mu.Unlock()
+	}
+}
+
+// SetSeriesTicker maps event_ticker to series_ticker for series filtering.
+// Called by backtest engine or live wiring.
+func (s *FadeLongshotStrategy) SetSeriesTicker(eventTicker, seriesTicker string) {
+	s.mu.Lock()
+	s.series[eventTicker] = seriesTicker
+	s.mu.Unlock()
 }
 
 // loadCloseTime queries close_ts from the markets table. Called on
@@ -162,6 +191,7 @@ func (s *FadeLongshotStrategy) UnregisterMarkets(eventTicker string) {
 	delete(s.fired, eventTicker)
 	delete(s.closeWarned, eventTicker)
 	delete(s.scores, eventTicker)
+	delete(s.series, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -324,6 +354,47 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 	if ts.UnixMilli() < entryTs {
 		s.mu.Unlock()
 		return
+	}
+
+	// Series filter: skip events not in SeriesFilter list
+	if len(s.cfg.SeriesFilter) > 0 {
+		series := s.series[eventTicker]
+		if series == "" {
+			s.mu.Unlock()
+			return
+		}
+		matched := false
+		for _, sf := range s.cfg.SeriesFilter {
+			if series == sf {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			s.mu.Unlock()
+			return
+		}
+	}
+
+	// UTC hour filter: skip events outside [UTCHourStart, UTCHourEnd)
+	if s.cfg.UTCHourStart > 0 || s.cfg.UTCHourEnd > 0 {
+		closeUTC := time.UnixMilli(closeTs).UTC().Hour()
+		start := s.cfg.UTCHourStart
+		end := s.cfg.UTCHourEnd
+		if end == 0 {
+			end = 24
+		}
+		// Handle wraparound (e.g. 18-4 = evening through early morning)
+		inWindow := false
+		if start <= end {
+			inWindow = closeUTC >= start && closeUTC < end
+		} else {
+			inWindow = closeUTC >= start || closeUTC < end
+		}
+		if !inWindow {
+			s.mu.Unlock()
+			return
+		}
 	}
 
 	mkts := s.markets[eventTicker]

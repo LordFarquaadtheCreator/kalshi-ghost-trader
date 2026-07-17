@@ -57,3 +57,17 @@ FROM ticks WHERE market_ticker = ? ORDER BY ts`, marketTicker)
 	}
 	return ticks, rows.Err()
 }
+
+// GetLatestDollarVolume returns the most recent dollar_volume for a market.
+// Used by volratio strategy in live mode.
+func (d *DB) GetLatestDollarVolume(ctx context.Context, marketTicker string) (float64, error) {
+	var vol sql.NullFloat64
+	err := d.db.QueryRowContext(ctx,
+		`SELECT dollar_volume FROM ticks
+		 WHERE market_ticker = ? AND dollar_volume IS NOT NULL AND dollar_volume > 0
+		 ORDER BY ts DESC LIMIT 1`, marketTicker).Scan(&vol)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return vol.Float64, err
+}

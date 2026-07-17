@@ -37,6 +37,19 @@ func (d *DB) GetSeriesTicker(ctx context.Context, eventTicker string) (string, e
 	return series, err
 }
 
+// GetSurface returns the court surface for an event by joining flashscore_matches.
+// Returns empty string if no flashscore match is mapped or surface is null.
+func (d *DB) GetSurface(ctx context.Context, eventTicker string) (string, error) {
+	var surface sql.NullString
+	err := d.db.QueryRowContext(ctx,
+		`SELECT surface FROM flashscore_matches WHERE event_ticker = ? AND surface IS NOT NULL LIMIT 1`,
+		eventTicker).Scan(&surface)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return surface.String, err
+}
+
 // SetCoverage computes and stores the coverage tag for an event's markets.
 // Called after settlement in ApplyLifecycleEvent. Classification:
 //
