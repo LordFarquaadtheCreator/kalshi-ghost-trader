@@ -121,7 +121,6 @@ func (s *SetDownStrategy) OnPriceAt(marketTicker string, price float64, ts time.
 		return
 	}
 
-	s.fired[eventTicker] = true
 	s.mu.Unlock()
 
 	edgeCents := int((s.cfg.ConvProb-price)*100 + 1e-9)
@@ -155,6 +154,9 @@ func (s *SetDownStrategy) OnPriceAt(marketTicker string, price float64, ts time.
 		s.log.Warn("setdown: order dropped", "match", eventTicker, "market", marketTicker)
 		return
 	}
+	s.mu.Lock()
+	s.fired[eventTicker] = true
+	s.mu.Unlock()
 	s.log.Info("setdown: order emitted",
 		"match", eventTicker, "market", marketTicker,
 		"price", price, "max_price", maxPrice,
@@ -208,7 +210,6 @@ func (s *SetDownStrategy) OnPoint(eventTicker string, p store.Point) {
 
 	maxPrice := s.maxPrices[targetMkt]
 	price := s.prices[targetMkt]
-	s.fired[eventTicker] = true
 	s.mu.Unlock()
 
 	if maxPrice < s.cfg.MinFavPrice {
@@ -253,6 +254,9 @@ func (s *SetDownStrategy) OnPoint(eventTicker string, p store.Point) {
 		s.log.Warn("setdown: order dropped", "match", eventTicker, "market", targetMkt)
 		return
 	}
+	s.mu.Lock()
+	s.fired[eventTicker] = true
+	s.mu.Unlock()
 	s.log.Info("setdown: order emitted (score-based)",
 		"match", eventTicker, "market", targetMkt,
 		"set_lost", p.SetNumber-1,
@@ -312,3 +316,7 @@ func (s *SetDownStrategy) String() string {
 	return fmt.Sprintf("SetDownStrategy{%s: markets=%d, fired=%d}",
 		s.cfg.Label, len(s.markets), len(s.fired))
 }
+
+// PreMatchGated prevents pre-match price movements from triggering
+// the price-based set-down path before real score data arrives.
+func (s *SetDownStrategy) PreMatchGated() {}

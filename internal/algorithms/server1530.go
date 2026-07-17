@@ -135,7 +135,6 @@ func (s *Server1530Strategy) OnPriceAt(marketTicker string, price float64, ts ti
 		return
 	}
 
-	s.fired[eventTicker] = true
 	s.mu.Unlock()
 
 	edgeCents := int((s.cfg.ConvProb-price)*100 + 1e-9)
@@ -170,6 +169,9 @@ func (s *Server1530Strategy) OnPriceAt(marketTicker string, price float64, ts ti
 		s.log.Warn("server1530: order dropped", "match", eventTicker, "market", marketTicker)
 		return
 	}
+	s.mu.Lock()
+	s.fired[eventTicker] = true
+	s.mu.Unlock()
 	s.log.Info("server1530: order emitted",
 		"match", eventTicker, "market", marketTicker,
 		"price", price, "prev_price", prevPrice,
@@ -212,7 +214,6 @@ func (s *Server1530Strategy) OnPoint(eventTicker string, p store.Point) {
 
 	maxPrice := s.maxPrices[serverMkt]
 	price := s.prices[serverMkt]
-	s.fired[eventTicker] = true
 	s.mu.Unlock()
 
 	if maxPrice < s.cfg.MinFavPrice {
@@ -259,6 +260,9 @@ func (s *Server1530Strategy) OnPoint(eventTicker string, p store.Point) {
 		s.log.Warn("server1530: order dropped", "match", eventTicker, "market", serverMkt)
 		return
 	}
+	s.mu.Lock()
+	s.fired[eventTicker] = true
+	s.mu.Unlock()
 	s.log.Info("server1530: order emitted (score-based)",
 		"match", eventTicker, "market", serverMkt,
 		"set", p.SetNumber, "game", p.GameNumber,
@@ -319,3 +323,7 @@ func (s *Server1530Strategy) String() string {
 	return fmt.Sprintf("Server1530Strategy{%s: markets=%d, fired=%d}",
 		s.cfg.Label, len(s.markets), len(s.fired))
 }
+
+// PreMatchGated prevents pre-match price movements from triggering
+// the price-based 15-30 path before real score data arrives.
+func (s *Server1530Strategy) PreMatchGated() {}

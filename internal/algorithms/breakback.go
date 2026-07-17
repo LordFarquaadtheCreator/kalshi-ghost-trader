@@ -124,7 +124,6 @@ func (s *BreakBackStrategy) OnPriceAt(marketTicker string, price float64, ts tim
 		return
 	}
 
-	s.fired[eventTicker] = true
 	s.mu.Unlock()
 
 	edgeCents := int((s.cfg.ConvProb-price)*100 + 1e-9)
@@ -158,6 +157,9 @@ func (s *BreakBackStrategy) OnPriceAt(marketTicker string, price float64, ts tim
 		s.log.Warn("breakback: order dropped", "match", eventTicker, "market", marketTicker)
 		return
 	}
+	s.mu.Lock()
+	s.fired[eventTicker] = true
+	s.mu.Unlock()
 	s.log.Info("breakback: order emitted",
 		"match", eventTicker, "market", marketTicker,
 		"price", price, "max_price", maxPrice,
@@ -188,7 +190,6 @@ func (s *BreakBackStrategy) OnPoint(eventTicker string, p store.Point) {
 		}
 		price := s.prices[brokenMkt]
 		maxPrice := s.maxPrices[brokenMkt]
-		s.fired[eventTicker] = true
 		s.mu.Unlock()
 
 		if price <= 0 || price > s.cfg.MaxEntryPrice {
@@ -234,6 +235,9 @@ func (s *BreakBackStrategy) OnPoint(eventTicker string, p store.Point) {
 			s.log.Warn("breakback: order dropped", "match", eventTicker, "market", brokenMkt)
 			return
 		}
+		s.mu.Lock()
+		s.fired[eventTicker] = true
+		s.mu.Unlock()
 		s.log.Info("breakback: order emitted (score-based)",
 			"match", eventTicker, "market", brokenMkt,
 			"set", p.SetNumber, "game", p.GameNumber,
@@ -293,3 +297,7 @@ func (s *BreakBackStrategy) String() string {
 	return fmt.Sprintf("BreakBackStrategy{%s: markets=%d, fired=%d}",
 		s.cfg.Label, len(s.markets), len(s.fired))
 }
+
+// PreMatchGated prevents pre-match price movements from triggering
+// the price-based break-back path before real score data arrives.
+func (s *BreakBackStrategy) PreMatchGated() {}

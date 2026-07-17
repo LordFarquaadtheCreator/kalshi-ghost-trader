@@ -126,7 +126,6 @@ func (s *TiebreakStrategy) OnPriceAt(marketTicker string, price float64, ts time
 		return
 	}
 
-	s.fired[eventTicker] = true
 	s.mu.Unlock()
 
 	edgeCents := int((s.cfg.ConvProb-price)*100 + 1e-9)
@@ -160,6 +159,9 @@ func (s *TiebreakStrategy) OnPriceAt(marketTicker string, price float64, ts time
 		s.log.Warn("tiebreak: order dropped", "match", eventTicker, "market", marketTicker)
 		return
 	}
+	s.mu.Lock()
+	s.fired[eventTicker] = true
+	s.mu.Unlock()
 	s.log.Info("tiebreak: order emitted",
 		"match", eventTicker, "market", marketTicker,
 		"price", price, "max_price", maxPrice,
@@ -197,7 +199,6 @@ func (s *TiebreakStrategy) OnPoint(eventTicker string, p store.Point) {
 
 	maxPrice := s.maxPrices[brokenMkt]
 	price := s.prices[brokenMkt]
-	s.fired[eventTicker] = true
 	s.mu.Unlock()
 
 	if maxPrice < s.cfg.MinPeakPrice {
@@ -246,6 +247,9 @@ func (s *TiebreakStrategy) OnPoint(eventTicker string, p store.Point) {
 		s.log.Warn("tiebreak: order dropped", "match", eventTicker, "market", brokenMkt)
 		return
 	}
+	s.mu.Lock()
+	s.fired[eventTicker] = true
+	s.mu.Unlock()
 	s.log.Info("tiebreak: order emitted (score-based)",
 		"match", eventTicker, "market", brokenMkt,
 		"set", p.SetNumber, "score", p.HomePoints+"-"+p.AwayPoints,
@@ -304,3 +308,7 @@ func (s *TiebreakStrategy) String() string {
 	return fmt.Sprintf("TiebreakStrategy{%s: markets=%d, fired=%d}",
 		s.cfg.Label, len(s.markets), len(s.fired))
 }
+
+// PreMatchGated prevents pre-match price movements from triggering
+// the price-based tiebreak path before real score data arrives.
+func (s *TiebreakStrategy) PreMatchGated() {}
