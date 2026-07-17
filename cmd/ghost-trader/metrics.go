@@ -54,11 +54,14 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 
 // trackedHandler returns live tracker state — markets currently subscribed via WS.
 // GET /api/tracked — returns active market→event mappings.
-func trackedHandler(tr *tracker.Tracker) http.HandlerFunc {
+func trackedHandler(tr *tracker.Tracker, e *backtest.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "public, max-age=2")
 		subs := tr.ActiveSubs()
+		for i := range subs {
+			subs[i].Title = e.EventTitle(subs[i].EventTicker)
+		}
 		events := tr.ActiveEvents()
 		json.NewEncoder(w).Encode(map[string]any{
 			"subs":         subs,

@@ -4,6 +4,7 @@
   import { fmtTime, fmtTicker, seriesFromTicker, fmtPnL, fmtPct } from '$lib/utils.js';
   import { setupChart } from '$lib/chart-init.js';
   import { browser } from '$app/environment';
+  import { goto } from '$app/navigation';
   import PageHeader from '$lib/components/PageHeader.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
@@ -336,7 +337,7 @@
             </thead>
             <tbody>
               {#each pendingOrders as o}
-                <tr class="row-pending">
+                <tr class="row-pending clickable" onclick={() => goto(`/matches/${o.match_ticker}`)}>
                   <td class="mono">{fmtTime(o.ts)}</td>
                   <td>{fmtTicker(o.match_ticker)}</td>
                   <td class="series">{seriesFromTicker(o.match_ticker)}</td>
@@ -376,7 +377,7 @@
             </thead>
             <tbody>
               {#each settledOrders as o}
-                <tr class={o.won ? 'row-win' : 'row-loss'}>
+                <tr class={`${o.won ? 'row-win' : 'row-loss'} clickable`} onclick={() => goto(`/matches/${o.match_ticker}`)}>
                   <td class="mono">{fmtTime(o.ts)}</td>
                   <td>{fmtTicker(o.match_ticker)}</td>
                   <td class="series">{seriesFromTicker(o.match_ticker)}</td>
@@ -412,4 +413,6 @@
   .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
   .chart-card h3 { font-size: 13px; font-weight: 600; color: var(--text-bright); margin: 0 0 10px; }
   .chart-container { height: 240px; position: relative; }
+  .clickable { cursor: pointer; }
+  .clickable:hover { background: var(--surface-hover); }
 </style>

@@ -176,6 +176,7 @@ func (t *Tracker) StopMatch(market string) {
 type ActiveSub struct {
 	MarketTicker string `json:"market_ticker"`
 	EventTicker  string `json:"event_ticker"`
+	Title        string `json:"title"`
 }
 
 // ActiveSubs returns all tracked market→event pairs.

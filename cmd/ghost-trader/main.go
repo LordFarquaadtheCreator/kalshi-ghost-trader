@@ -257,7 +257,7 @@ func main() {
 	if cfg.MetricsPort > 0 {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/metrics", metricsHandler)
-		mux.HandleFunc("/api/tracked", trackedHandler(tr))
+		mux.HandleFunc("/api/tracked", trackedHandler(tr, btEngine))
 		mux.HandleFunc("/api/strategies", corsHandler(strategyListHandler(btEngine)))
 		mux.HandleFunc("/api/backtest", corsHandler(backtestHandler(btEngine, log)))
 		mux.HandleFunc("/api/ticks", corsHandler(ticksHandler(btEngine, log)))

@@ -23,7 +23,7 @@
 
   const columns = [
     { key: 'event_ticker', label: 'Event Ticker', class: 'mono' },
-    { key: 'match', label: 'Match' },
+    { key: 'title', label: 'Match' },
     { key: 'series', label: 'Series', class: 'series' },
     { key: 'market_ticker', label: 'Market Ticker', class: 'mono' },
     { key: 'sim_orders', label: 'Sim Orders', align: 'right' },
@@ -32,7 +32,7 @@
 
   let rows = $derived(subs.map((/** @type {any} */ s) => ({
     ...s,
-    match: fmtTicker(s.event_ticker),
+    title: s.title || fmtTicker(s.event_ticker),
     series: seriesFromTicker(s.event_ticker),
     sim_orders: orderCounts[s.event_ticker] || 0,
     real_orders: 0,

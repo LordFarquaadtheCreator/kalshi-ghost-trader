@@ -8,12 +8,14 @@
   import PageHeader from '$lib/components/PageHeader.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
+  import ChartLoading from '$lib/components/ChartLoading.svelte';
 
   const POLL_MS = 3000;
 
-  /** @type {{event_ticker: string, title: string, markets: {market_ticker: string, player_name: string, ticks: {ts: number, price: number}[]}[], orders: {ts: number, market_ticker: string, context: string, market_price: number, edge_cents: number, suggested_size: number, strategy: string}[]} | null} */
+  /** @type {{event_ticker: string, title: string, markets: {market_ticker: string, player_name: string, ticks: {ts: number, price: number}[]}[], orders: {ts: number, market_ticker: string, player_name: string, context: string, market_price: number, edge_cents: number, suggested_size: number, strategy: string}[]} | null} */
   let data = $state(null);
   let loading = $state(true);
+  let chartReady = $state(false);
   let error = $state('');
   /** @type {ReturnType<typeof setInterval> | null} */
   let timer = null;
@@ -26,10 +28,12 @@
 
   async function loadTicks() {
     try {
+      chartReady = false;
       data = await api.getTicks(eventTicker);
       loading = false;
       error = '';
       await renderChart();
+      chartReady = true;
     } catch (err) {
       loading = false;
       error = err instanceof Error ? err.message : String(err);
@@ -234,7 +238,11 @@
     <EmptyState text="No tick data for this event." />
   {:else}
     <div class="chart-container">
-      <canvas bind:this={canvas}></canvas>
+      {#if !chartReady}
+        <ChartLoading />
+      {:else}
+        <canvas bind:this={canvas}></canvas>
+      {/if}
     </div>
 
     <div class="markets-grid">
@@ -259,7 +267,7 @@
             <thead>
               <tr>
                 <th>Time</th>
-                <th>Market</th>
+                <th>Player</th>
                 <th>Context</th>
                 <th>Price</th>
                 <th>Edge</th>
@@ -271,7 +279,7 @@
               {#each data.orders as o}
                 <tr>
                   <td class="mono">{fmtTime(o.ts)}</td>
-                  <td class="mono">{o.market_ticker}</td>
+                  <td>{o.player_name || o.market_ticker}</td>
                   <td>{o.context}</td>
                   <td>{(o.market_price * 100).toFixed(0)}c</td>
                   <td>{o.edge_cents}c</td>

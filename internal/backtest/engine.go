@@ -132,6 +132,11 @@ func (e *Engine) Close() {
 	e.db.Close()
 }
 
+// EventTitle returns the cached title for an event, or empty string if unknown.
+func (e *Engine) EventTitle(eventTicker string) string {
+	return e.eventTitles[eventTicker]
+}
+
 // MarketTick is a single price point for a market, returned by GetEventTickPrices.
 type MarketTick struct {
 	TS    int64   `json:"ts"`
@@ -149,6 +154,7 @@ type MarketTickData struct {
 type OrderRow struct {
 	TS            int64   `json:"ts"`
 	MarketTicker  string  `json:"market_ticker"`
+	PlayerName    string  `json:"player_name"`
 	Context       string  `json:"context"`
 	MarketPrice   float64 `json:"market_price"`
 	EdgeCents     int     `json:"edge_cents"`
@@ -201,18 +207,21 @@ func (e *Engine) GetEventTickPrices(ctx context.Context, eventTicker string) (*E
 
 	// Query orders for this event
 	orderRows, err := e.db.QueryContext(ctx,
-		`SELECT ts, market_ticker, context, market_price, edge_cents, suggested_size, strategy
-		 FROM orders WHERE match_ticker = ? ORDER BY ts`, eventTicker)
+		`SELECT o.ts, o.market_ticker, m.player_name, o.context, o.market_price, o.edge_cents, o.suggested_size, o.strategy
+		 FROM orders o LEFT JOIN markets m ON o.market_ticker = m.market_ticker
+		 WHERE o.match_ticker = ? ORDER BY o.ts`, eventTicker)
 	if err != nil {
 		return nil, fmt.Errorf("query orders: %w", err)
 	}
 	for orderRows.Next() {
 		var o OrderRow
-		if err := orderRows.Scan(&o.TS, &o.MarketTicker, &o.Context, &o.MarketPrice,
+		var playerName sql.NullString
+		if err := orderRows.Scan(&o.TS, &o.MarketTicker, &playerName, &o.Context, &o.MarketPrice,
 			&o.EdgeCents, &o.SuggestedSize, &o.Strategy); err != nil {
 			orderRows.Close()
 			return nil, err
 		}
+		o.PlayerName = playerName.String
 		result.Orders = append(result.Orders, o)
 	}
 	orderRows.Close()
