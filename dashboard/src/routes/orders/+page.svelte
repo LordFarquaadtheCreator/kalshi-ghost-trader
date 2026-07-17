@@ -56,12 +56,14 @@
 
   let strategies = $derived.by(() => {
     if (!data || !data.orders) return [];
-    return [...new Set(data.orders.map((/** @type {any} */ o) => o.strategy))].sort();
+    return [...new Set(data.orders.map((/** @type {any} */ o) => o.strategy).filter(Boolean))].sort();
   });
 
-  // Initialize selection once strategies are first available.
+  // Initialize selection once when strategies first appear.
+  let strategiesInitialized = false;
   $effect(() => {
-    if (strategies.length > 0 && selectedStrategies.size === 0) {
+    if (!strategiesInitialized && strategies.length > 0) {
+      strategiesInitialized = true;
       selectedStrategies = new Set(strategies);
     }
   });

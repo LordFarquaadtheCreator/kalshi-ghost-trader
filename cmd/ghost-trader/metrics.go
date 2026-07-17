@@ -358,6 +358,71 @@ func strategyConfigHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
+func triggerRangesHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.Method {
+		case http.MethodGet:
+			strategy := r.URL.Query().Get("strategy")
+			if strategy != "" {
+				ranges, err := db.GetTriggerRanges(r.Context(), strategy)
+				if err != nil {
+					log.Error("get trigger ranges", "strategy", strategy, "err", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]any{"ranges": ranges})
+			} else {
+				entries, err := db.GetAllStrategyConfig(r.Context())
+				if err != nil {
+					log.Error("get strategy config for trigger ranges", "err", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+					return
+				}
+				result := make(map[string]any)
+				for _, e := range entries {
+					ranges, err := db.GetTriggerRanges(r.Context(), e.Strategy)
+					if err != nil {
+						log.Error("get trigger ranges", "strategy", e.Strategy, "err", err)
+						continue
+					}
+					result[e.Strategy] = ranges
+				}
+				json.NewEncoder(w).Encode(map[string]any{"ranges": result})
+			}
+
+		case http.MethodPut:
+			var body struct {
+				Strategy string               `json:"strategy"`
+				Ranges   []store.TriggerRange `json:"ranges"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
+				return
+			}
+			if body.Strategy == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": "strategy is required"})
+				return
+			}
+			if err := db.ReplaceTriggerRanges(r.Context(), body.Strategy, body.Ranges); err != nil {
+				log.Error("replace trigger ranges", "strategy", body.Strategy, "err", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}
+}
+
 func appConfigHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

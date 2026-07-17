@@ -164,5 +164,24 @@ export const api = {
     return res.json();
   },
 
+  /** @param {string} [strategy] */
+  async getTriggerRanges(strategy) {
+    const url = strategy
+      ? `${GHOST_TRADER_URL}/api/trigger-ranges?strategy=${encodeURIComponent(strategy)}`
+      : `${GHOST_TRADER_URL}/api/trigger-ranges`;
+    return cachedFetch(url, TTL.strategies);
+  },
+
+  async replaceTriggerRanges(/** @type {string} */ strategy, /** @type {Array<{min_price: number, max_price: number, source?: string, enabled?: boolean}>} */ ranges) {
+    if (!browser) return null;
+    const res = await fetch(`${GHOST_TRADER_URL}/api/trigger-ranges`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ strategy, ranges }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
   get pollInterval() { return pollInterval; },
 };
