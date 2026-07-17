@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -25,15 +26,19 @@ type FadeLongshotConfig struct {
 	BaseSize float64
 	// Label: strategy name for logging.
 	Label string
+	// DynamicConvProb: if true, convProb is derived from live score context
+	// instead of using fixed 0.99. Requires point data.
+	DynamicConvProb bool
 }
 
 func DefaultFadeLongshotConfig() FadeLongshotConfig {
 	return FadeLongshotConfig{
-		WindowSeconds: 600,
-		MinPrice:      0.50,
-		MaxPrice:      0.0,
-		BaseSize:      10.0,
-		Label:         "fadelongshot",
+		WindowSeconds:   900,
+		MinPrice:        0.50,
+		MaxPrice:        0.0,
+		BaseSize:        10.0,
+		Label:           "fadelongshot",
+		DynamicConvProb: true,
 	}
 }
 
@@ -57,6 +62,9 @@ type FadeLongshotStrategy struct {
 	log         *slog.Logger
 	cfg         FadeLongshotConfig
 	replayNow   *time.Time
+
+	// Live score state from OnPoints
+	scores map[string]*matchScore // event_ticker -> score
 }
 
 func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLongshotConfig) *FadeLongshotStrategy {
@@ -67,6 +75,7 @@ func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLon
 		closeTimes:  make(map[string]int64),
 		fired:       make(map[string]bool),
 		closeWarned: make(map[string]bool),
+		scores:      make(map[string]*matchScore),
 		emitter:     emitter,
 		log:         log,
 		cfg:         cfg,
@@ -139,6 +148,7 @@ func (s *FadeLongshotStrategy) UnregisterMarkets(eventTicker string) {
 	delete(s.closeTimes, eventTicker)
 	delete(s.fired, eventTicker)
 	delete(s.closeWarned, eventTicker)
+	delete(s.scores, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -176,7 +186,111 @@ func (s *FadeLongshotStrategy) now() time.Time {
 	return time.Now()
 }
 
-func (s *FadeLongshotStrategy) OnPoints([]store.Point) {}
+// matchScore tracks the latest known score for an event from point data.
+// Used to compute dynamic conversion probability.
+type matchScore struct {
+	setNumber    int
+	homeGames    int // games in current set
+	awayGames    int
+	homeSetWins  int // sets won
+	awaySetWins  int
+	server       int // 1=home, 2=away
+	isMatchPoint bool
+	isSetPoint   bool
+}
+
+func (s *FadeLongshotStrategy) OnPoints(pts []store.Point) {
+	for _, p := range pts {
+		s.mu.Lock()
+		ms, ok := s.scores[p.MatchTicker]
+		if !ok {
+			ms = &matchScore{}
+			s.scores[p.MatchTicker] = ms
+		}
+		ms.setNumber = p.SetNumber
+		ms.homeGames = p.HomeGames
+		ms.awayGames = p.AwayGames
+		ms.server = p.Server
+		ms.isMatchPoint = p.IsMatchPoint
+		ms.isSetPoint = p.IsSetPoint
+		// Derive set wins from set number + game leader
+		if p.SetNumber > 0 {
+			if p.HomeGames > p.AwayGames {
+				ms.homeSetWins = p.SetNumber - 1
+				ms.awaySetWins = 0
+			} else if p.AwayGames > p.HomeGames {
+				ms.awaySetWins = p.SetNumber - 1
+				ms.homeSetWins = 0
+			}
+		}
+		s.mu.Unlock()
+	}
+	// Re-check entry after score update — convProb may have changed
+	for _, p := range pts {
+		s.mu.RLock()
+		mkts, ok := s.markets[p.MatchTicker]
+		s.mu.RUnlock()
+		if !ok {
+			continue
+		}
+		for _, mkt := range mkts {
+			s.mu.RLock()
+			pr := s.prices[mkt]
+			s.mu.RUnlock()
+			if pr > 0 {
+				s.checkEntry(mkt)
+			}
+		}
+	}
+}
+
+// dynamicConvProb estimates conversion probability from live score context.
+// Higher when favorite has set/game lead, serving, or at match/set point.
+func (s *FadeLongshotStrategy) dynamicConvProb(eventTicker string, favPrice float64) float64 {
+	s.mu.RLock()
+	ms, ok := s.scores[eventTicker]
+	s.mu.RUnlock()
+	if !ok || ms == nil {
+		// No score data — fall back to price-implied probability with small edge
+		return favPrice + 0.02
+	}
+
+	prob := 0.90 // base for favorite in final minutes
+
+	// Set lead: +3c per set lead
+	setLead := ms.homeSetWins - ms.awaySetWins
+	if setLead < 0 {
+		setLead = -setLead
+	}
+	prob += float64(setLead) * 0.03
+
+	// Game lead in current set: +1c per game
+	gameLead := ms.homeGames - ms.awayGames
+	if gameLead < 0 {
+		gameLead = -gameLead
+	}
+	prob += float64(gameLead) * 0.01
+
+	// Match point: near-certain conversion
+	if ms.isMatchPoint {
+		prob = 0.995
+	}
+
+	// Set point: high conversion
+	if ms.isSetPoint && !ms.isMatchPoint {
+		prob = math.Max(prob, 0.97)
+	}
+
+	// Clamp: must stay above favPrice to have edge, cap at 0.999
+	if prob <= favPrice {
+		prob = favPrice + 0.01
+	}
+	if prob > 0.999 {
+		prob = 0.999
+	}
+
+	return prob
+}
 
 func (s *FadeLongshotStrategy) checkEntry(marketTicker string) {
 	s.checkEntryAt(marketTicker, s.now())
@@ -267,6 +381,9 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 	s.mu.Unlock()
 
 	convProb := 0.99
+	if s.cfg.DynamicConvProb {
+		convProb = s.dynamicConvProb(eventTicker, favPrice)
+	}
 	edgeCents := int((convProb-favPrice)*100 + 1e-9)
 	if edgeCents < 1 {
 		return
@@ -280,6 +397,8 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		"entry_ts":    ts.UnixMilli(),
 		"fav_price":   favPrice,
 		"other_price": otherPrice,
+		"conv_prob":   convProb,
+		"dynamic":     s.cfg.DynamicConvProb,
 	})
 
 	o := store.Order{
