@@ -76,11 +76,11 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_ts = excluded.upd
 
 // LiquidityPool is the singleton row from liquidity_pool.
 type LiquidityPool struct {
-	BalanceCents         int64
-	InitialBalanceCents  int64
-	TotalSpentCents      int64
-	TotalPNLCents        int64
-	UpdatedTS            int64
+	BalanceCents        int64
+	InitialBalanceCents int64
+	TotalSpentCents     int64
+	TotalPNLCents       int64
+	UpdatedTS           int64
 }
 
 // GetLiquidityPool returns the liquidity pool state. Returns error if not initialized.
@@ -242,4 +242,19 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// DeductLiquidityPool atomically deducts spendCents from the pool balance
+// and adds to total_spent_cents. Returns new balance in cents.
+func (d *DB) DeductLiquidityPool(ctx context.Context, spendCents int64) (int64, error) {
+	var newBalance int64
+	err := d.db.QueryRowContext(ctx, `
+UPDATE liquidity_pool
+SET balance_cents = balance_cents - ?,
+    total_spent_cents = total_spent_cents + ?,
+    updated_ts = ?
+WHERE id = 1
+RETURNING balance_cents`,
+		spendCents, spendCents, time.Now().UnixMilli()).Scan(&newBalance)
+	return newBalance, err
 }

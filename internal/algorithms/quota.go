@@ -212,3 +212,10 @@ func (q *QuotaGuard) RemainingBudget() float64 {
 func (q *QuotaGuard) Close() {
 	q.closed.Do(func() { close(q.stop) })
 }
+
+// SetInner replaces the inner emitter. Used to wire realGuard after construction.
+func (q *QuotaGuard) SetInner(inner OrderEmitter) {
+	q.mu.Lock()
+	q.inner = inner
+	q.mu.Unlock()
+}

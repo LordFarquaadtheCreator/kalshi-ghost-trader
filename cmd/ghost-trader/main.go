@@ -102,27 +102,68 @@ func main() {
 	restClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
 		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
 
-	// Paper emitter — all strategies write orders directly to the orders table.
-	// No quota throttle in paper mode: every strategy fires independently so the
-	// paper trail captures the full signal surface for backtesting. QuotaGuard
-	// is reserved for the real-trading path (not yet wired).
+	// Order emission pipeline:
+	//   strategies → paperGuard → paperEmitter (TickWriter, ALWAYS)
+	//                    ↓ (inner, if paper quota approved)
+	//                 realGuard → KalshiOrderEmitter (if real_trading_enabled)
+	//                    ↓ (if real quota approved)
+	//                 NoopEmitter (if real trading disabled)
 	paperEmitter := algorithms.NewTickWriterEmitter(tickWriter)
 
+	// Paper guard — always active. When quota disabled, passes all through.
+	paperGuard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{}, algorithms.QuotaConfig{
+		Enabled:      cfg.OrderQuotaEnabled,
+		CooldownSecs: cfg.OrderQuotaCooldownSecs,
+		MaxPerSec:    cfg.OrderQuotaMaxPerSec,
+		DailyLimit:   cfg.OrderQuotaDailyLimit,
+		BudgetTotal:  cfg.OrderQuotaBudgetTotal,
+		BudgetFloor:  cfg.OrderQuotaBudgetFloor,
+	}, log)
+	defer paperGuard.Close()
+
+	// Real order pipeline — only wired when real_trading_enabled
+	var realGuard *algorithms.QuotaGuard
+	if cfg.RealTradingEnabled {
+		log.Warn("REAL TRADING ENABLED — live orders will be submitted to Kalshi",
+			"environment", cfg.Environment, "max_contracts", cfg.RealOrderMaxContracts)
+
+		realEmitter := algorithms.NewKalshiOrderEmitter(restClient, db, algorithms.RealOrderConfig{
+			Enabled:       true,
+			MaxContracts:  cfg.RealOrderMaxContracts,
+			Environment:   cfg.Environment,
+			TimeInForce:   cfg.RealOrderTimeInForce,
+			OrderTimeoutS: cfg.RealOrderTimeoutS,
+		}, log)
+
+		realGuard = algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter, algorithms.QuotaConfig{
+			Enabled:      cfg.OrderQuotaEnabled,
+			CooldownSecs: cfg.OrderQuotaCooldownSecs,
+			MaxPerSec:    cfg.OrderQuotaMaxPerSec,
+			DailyLimit:   cfg.OrderQuotaDailyLimit,
+			BudgetTotal:  cfg.OrderQuotaBudgetTotal,
+			BudgetFloor:  cfg.OrderQuotaBudgetFloor,
+		}, log)
+		defer realGuard.Close()
+
+		// Wire realGuard as inner of paperGuard
+		paperGuard.SetInner(realGuard)
+	}
+
 	// matchPoint is the primary strategy and also serves as PriceLookup for CloseTimer
-	matchPoint := algorithms.NewMatchPointStrategy(paperEmitter, log)
+	matchPoint := algorithms.NewMatchPointStrategy(paperGuard, log)
 
 	// FadeLongshot: buy favorite at T-10min before close. Highest Sharpe (1.01).
 	// Created outside factory because it needs DB for live close_ts loading.
 	// All orders are paper trades — TickWriterEmitter writes to orders table, no real execution.
-	fadeLongshot := algorithms.NewFadeLongshotStrategyWithDB(paperEmitter, db, log,
+	fadeLongshot := algorithms.NewFadeLongshotStrategyWithDB(paperGuard, db, log,
 		algorithms.DefaultFadeLongshotConfig())
 
-	noFade := algorithms.NewNoFadeStrategyWithDB(paperEmitter, db, log,
+	noFade := algorithms.NewNoFadeStrategyWithDB(paperGuard, db, log,
 		algorithms.DefaultNoFadeConfig())
 
 	// Multi-strategy runtime: all point-based strategies run simultaneously.
 	// Each strategy's orders are tagged with its name in the orders table.
-	multi := algorithms.NewMultiStrategyFromFactories(paperEmitter, log, map[string]algorithms.StrategyFactoryFn{
+	multi := algorithms.NewMultiStrategyFromFactories(paperGuard, log, map[string]algorithms.StrategyFactoryFn{
 		"matchpoint": func(e algorithms.OrderEmitter) algorithms.Strategy { return matchPoint },
 		"matchpoint-aggro": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{

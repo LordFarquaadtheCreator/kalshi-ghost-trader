@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
@@ -13,10 +14,10 @@ import (
 // RealOrderConfig controls real order submission to Kalshi.
 type RealOrderConfig struct {
 	Enabled       bool
-	MaxContracts  int     // hard cap on contracts per order
-	Environment   string  // "demo" or "prod" — logged for safety
-	TimeInForce   string  // "immediate_or_cancel" or "good_till_canceled"
-	OrderTimeoutS int     // per-order HTTP timeout
+	MaxContracts  int    // hard cap on contracts per order
+	Environment   string // "demo" or "prod" — logged for safety
+	TimeInForce   string // "immediate_or_cancel" or "good_till_canceled"
+	OrderTimeoutS int    // per-order HTTP timeout
 }
 
 // createOrderV2Request maps to Kalshi's POST /portfolio/events/orders body.
@@ -48,11 +49,12 @@ type createOrderV2Response struct {
 //   - Never blocks — errors logged, not propagated to strategies
 type KalshiOrderEmitter struct {
 	client *kalshiclient.Client
+	db     *store.DB
 	cfg    RealOrderConfig
 	log    *slog.Logger
 }
 
-func NewKalshiOrderEmitter(client *kalshiclient.Client, cfg RealOrderConfig, log *slog.Logger) *KalshiOrderEmitter {
+func NewKalshiOrderEmitter(client *kalshiclient.Client, db *store.DB, cfg RealOrderConfig, log *slog.Logger) *KalshiOrderEmitter {
 	if cfg.MaxContracts <= 0 {
 		cfg.MaxContracts = 50
 	}
@@ -62,7 +64,7 @@ func NewKalshiOrderEmitter(client *kalshiclient.Client, cfg RealOrderConfig, log
 	if cfg.OrderTimeoutS <= 0 {
 		cfg.OrderTimeoutS = 10
 	}
-	return &KalshiOrderEmitter{client: client, cfg: cfg, log: log}
+	return &KalshiOrderEmitter{client: client, db: db, cfg: cfg, log: log}
 }
 
 func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
@@ -82,6 +84,27 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 		return false
 	}
 
+	// persist order to DB as real before submission
+	o.IsReal = true
+	o.OrderStatus = "pending"
+	if err := e.db.InsertOrdersBatch(context.Background(), []store.Order{o}); err != nil {
+		e.log.Error("real: failed to persist order to DB",
+			"market", o.MarketTicker, "error", err)
+		return false
+	}
+
+	// deduct from liquidity pool (cost = count * price * 100 cents)
+	spendCents := int64(count * o.MarketPrice * 100)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(e.cfg.OrderTimeoutS)*time.Second)
+	defer cancel()
+
+	newBalance, err := e.db.DeductLiquidityPool(ctx, spendCents)
+	if err != nil {
+		e.log.Error("real: failed to deduct liquidity pool",
+			"market", o.MarketTicker, "spend_cents", spendCents, "error", err)
+		return false
+	}
+
 	// format price as fixed-point dollars (Kalshi expects string like "0.6500")
 	priceStr := fmt.Sprintf("%.4f", o.MarketPrice)
 	countStr := fmt.Sprintf("%.2f", count)
@@ -95,17 +118,31 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 		SelfTradePreventionType: "taker_at_cross",
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(e.cfg.OrderTimeoutS)*time.Second)
-	defer cancel()
-
 	var resp createOrderV2Response
-	err := e.client.Post(ctx, "/portfolio/events/orders", req, &resp)
+	err = e.client.Post(ctx, "/portfolio/events/orders", req, &resp)
 	if err != nil {
 		e.log.Error("real: order submission FAILED",
 			"market", o.MarketTicker, "strategy", o.Strategy,
 			"side", "bid", "count", countStr, "price", priceStr,
 			"error", err)
+		// mark order as failed in DB
+		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID); dbErr != nil {
+			e.log.Error("real: failed to mark order as failed", "error", dbErr)
+		}
 		return false
+	}
+
+	fillCount, _ := strconv.ParseFloat(resp.FillCount, 64)
+	status := "submitted"
+	if resp.RemainingCount == "0" && fillCount > 0 {
+		status = "filled"
+	} else if fillCount > 0 {
+		status = "partial"
+	}
+
+	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status); err != nil {
+		e.log.Error("real: failed to update order in DB",
+			"order_id", resp.OrderID, "error", err)
 	}
 
 	e.log.Info("real: order submitted",
@@ -114,7 +151,8 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 		"fill_count", resp.FillCount,
 		"remaining_count", resp.RemainingCount,
 		"count", countStr, "price", priceStr,
-		"environment", e.cfg.Environment)
+		"environment", e.cfg.Environment,
+		"pool_balance_cents", newBalance)
 
 	return true
 }
