@@ -97,9 +97,18 @@ type Engine struct {
 	markets       map[string][]MarketRow
 	marketCloseTs map[string]int64
 	tickPrices    map[string][]TickPrice
+	tickVolumes   map[string][]TickVolume
 	points        map[string][]store.Point
 	eventTitles   map[string]string
+	eventSeries   map[string]string
+	eventSurface  map[string]string
 	factories     map[string]StrategyFactory
+}
+
+// TickVolume is a timestamped dollar_volume sample for backtest replay.
+type TickVolume struct {
+	TS           int64
+	DollarVolume float64
 }
 
 // NewEngine creates a backtest engine from a read-only SQLite DB.
@@ -116,8 +125,11 @@ func NewEngine(dbPath string, log *slog.Logger) (*Engine, error) {
 		markets:       make(map[string][]MarketRow),
 		marketCloseTs: make(map[string]int64),
 		tickPrices:    make(map[string][]TickPrice),
+		tickVolumes:   make(map[string][]TickVolume),
 		points:        make(map[string][]store.Point),
 		eventTitles:   make(map[string]string),
+		eventSeries:   make(map[string]string),
+		eventSurface:  make(map[string]string),
 		factories:     DefaultFactories(),
 	}
 
@@ -382,20 +394,37 @@ func (e *Engine) AvailableStrategies() []string {
 func (e *Engine) load() error {
 	ctx := context.Background()
 
-	// Load event titles
-	rows, err := e.db.QueryContext(ctx, `SELECT event_ticker, title FROM events`)
+	// Load event titles + series
+	rows, err := e.db.QueryContext(ctx, `SELECT event_ticker, title, series_ticker FROM events`)
 	if err != nil {
 		return fmt.Errorf("query events: %w", err)
 	}
 	for rows.Next() {
-		var et, title string
-		if err := rows.Scan(&et, &title); err != nil {
+		var et, title, series string
+		if err := rows.Scan(&et, &title, &series); err != nil {
 			rows.Close()
 			return err
 		}
 		e.eventTitles[et] = title
+		e.eventSeries[et] = series
 	}
 	rows.Close()
+
+	// Load surface from flashscore_matches
+	fsRows, err := e.db.QueryContext(ctx,
+		`SELECT event_ticker, surface FROM flashscore_matches WHERE event_ticker IS NOT NULL AND surface IS NOT NULL`)
+	if err != nil {
+		return fmt.Errorf("query flashscore surfaces: %w", err)
+	}
+	for fsRows.Next() {
+		var et, surface string
+		if err := fsRows.Scan(&et, &surface); err != nil {
+			fsRows.Close()
+			return err
+		}
+		e.eventSurface[et] = surface
+	}
+	fsRows.Close()
 
 	// Load markets
 	mRows, err := e.db.QueryContext(ctx, `SELECT event_ticker, market_ticker, player_name, result, status, close_ts FROM markets ORDER BY event_ticker, market_ticker`)
@@ -432,6 +461,26 @@ func (e *Engine) load() error {
 		e.tickPrices[mt] = append(e.tickPrices[mt], TickPrice{ts, price})
 	}
 	tRows.Close()
+
+	// Load dollar_volume time series per market (for volratio strategy)
+	vRows, err := e.db.QueryContext(ctx,
+		`SELECT market_ticker, ts, dollar_volume FROM ticks
+		 WHERE dollar_volume IS NOT NULL AND dollar_volume > 0
+		 ORDER BY market_ticker, ts`)
+	if err != nil {
+		return fmt.Errorf("query tick volumes: %w", err)
+	}
+	for vRows.Next() {
+		var mt string
+		var ts int64
+		var dv float64
+		if err := vRows.Scan(&mt, &ts, &dv); err != nil {
+			vRows.Close()
+			return err
+		}
+		e.tickVolumes[mt] = append(e.tickVolumes[mt], TickVolume{ts, dv})
+	}
+	vRows.Close()
 
 	// Load point-by-point score data
 	pRows, err := e.db.QueryContext(ctx, `
@@ -471,6 +520,53 @@ func (e *Engine) load() error {
 	return nil
 }
 
+// SeriesSetter is implemented by strategies that need series_ticker.
+type SeriesSetter interface {
+	SetSeriesTicker(eventTicker, seriesTicker string)
+}
+
+// SurfaceSetter is implemented by strategies that need court surface.
+type SurfaceSetter interface {
+	SetSurface(eventTicker, surface string)
+}
+
+// VolumeSetter is implemented by strategies that need dollar_volume series.
+type VolumeSetter interface {
+	SetVolumeSeries(marketTicker string, vols []algorithms.TickVolume)
+}
+
+// wireStrategyContext sets series, surface, and volume data on strategies
+// that implement the corresponding setter interfaces.
+func (e *Engine) wireStrategyContext(strat ReplayStrategy, matchTicker, homeMkt, awayMkt string) {
+	if ss, ok := strat.(SeriesSetter); ok {
+		if series := e.eventSeries[matchTicker]; series != "" {
+			ss.SetSeriesTicker(matchTicker, series)
+		}
+	}
+	if ss, ok := strat.(SurfaceSetter); ok {
+		if surface := e.eventSurface[matchTicker]; surface != "" {
+			ss.SetSurface(matchTicker, surface)
+		}
+	}
+	if vs, ok := strat.(VolumeSetter); ok {
+		if vols := e.tickVolumes[homeMkt]; len(vols) > 0 {
+			vs.SetVolumeSeries(homeMkt, toAlgoVolumes(vols))
+		}
+		if vols := e.tickVolumes[awayMkt]; len(vols) > 0 {
+			vs.SetVolumeSeries(awayMkt, toAlgoVolumes(vols))
+		}
+	}
+}
+
+// toAlgoVolumes converts engine TickVolume slice to algorithms.TickVolume slice.
+func toAlgoVolumes(vols []TickVolume) []algorithms.TickVolume {
+	out := make([]algorithms.TickVolume, len(vols))
+	for i, v := range vols {
+		out[i] = algorithms.TickVolume{TS: v.TS, DollarVolume: v.DollarVolume}
+	}
+	return out
+}
+
 // RunStrategy runs a single strategy and returns its results.
 func (e *Engine) RunStrategy(name string, minPrice float64) (*StrategyResult, error) {
 	factory, ok := e.factories[name]
@@ -493,6 +589,7 @@ func (e *Engine) RunStrategy(name string, minPrice float64) (*StrategyResult, er
 		collector := algorithms.NewOrderCollector()
 		strat := factory(collector, e.log)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
+		e.wireStrategyContext(strat, matchTicker, homeMkt, awayMkt)
 
 		e.replayInterleaved(strat, matchTicker, homeMkt, awayMkt)
 
@@ -557,6 +654,7 @@ func (e *Engine) runCloseTimeBacktest(factory StrategyFactory, minPrice float64)
 		homeMkt, awayMkt := e.orderMarketsByTitle(matchTicker, mkts)
 		cts.RegisterCloseTime(matchTicker, closeTs)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
+		e.wireStrategyContext(strat, matchTicker, homeMkt, awayMkt)
 
 		for _, mkt := range []string{homeMkt, awayMkt} {
 			ticks := e.tickPrices[mkt]

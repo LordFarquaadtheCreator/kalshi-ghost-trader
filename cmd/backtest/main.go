@@ -121,6 +121,52 @@ var strategies = map[string]strategyFactory{
 	"set1winner": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		return algorithms.NewSet1WinnerStrategy(em, log, algorithms.DefaultSet1WinnerConfig())
 	},
+	"volratio": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewVolumeRatioStrategy(em, log, algorithms.DefaultVolumeRatioConfig())
+	},
+	"surface-markov": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewSurfaceMarkovStrategy(em, log, algorithms.DefaultSurfaceMarkovConfig())
+	},
+	"spike-fade": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewSpikeFadeStrategy(em, log, algorithms.DefaultSpikeFadeConfig())
+	},
+	"fadelongshot-itf": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		cfg := algorithms.DefaultFadeLongshotConfig()
+		cfg.Label = "fadelongshot-itf"
+		cfg.SeriesFilter = []string{"KXITFMATCH", "KXITFWMATCH", "KXITFDOUBLES", "KXITFWDOUBLES"}
+		return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+	},
+	"fadelongshot-challenger": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		cfg := algorithms.DefaultFadeLongshotConfig()
+		cfg.Label = "fadelongshot-challenger"
+		cfg.SeriesFilter = []string{"KXATPCHALLENGERMATCH", "KXWTACHALLENGERMATCH"}
+		return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+	},
+	"fadelongshot-atp": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		cfg := algorithms.DefaultFadeLongshotConfig()
+		cfg.Label = "fadelongshot-atp"
+		cfg.SeriesFilter = []string{"KXATPMATCH", "KXATPDOUBLES"}
+		return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+	},
+	"fadelongshot-wta": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		cfg := algorithms.DefaultFadeLongshotConfig()
+		cfg.Label = "fadelongshot-wta"
+		cfg.SeriesFilter = []string{"KXWTAMATCH", "KXWTADOUBLES"}
+		return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+	},
+	"fadelongshot-doubles": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		cfg := algorithms.DefaultFadeLongshotConfig()
+		cfg.Label = "fadelongshot-doubles"
+		cfg.SeriesFilter = []string{"KXATPDOUBLES", "KXWTADOUBLES", "KXITFDOUBLES", "KXITFWDOUBLES"}
+		return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+	},
+	"fadelongshot-evening": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		cfg := algorithms.DefaultFadeLongshotConfig()
+		cfg.Label = "fadelongshot-evening"
+		cfg.UTCHourStart = 18
+		cfg.UTCHourEnd = 4
+		return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+	},
 }
 
 type marketRow struct {
@@ -155,6 +201,7 @@ func main() {
 	dbPath := flag.String("db", "kalshi_tennis.db", "path to SQLite DB")
 	strategyName := flag.String("strategy", "all", "strategy to backtest (use 'all' for all strategies)")
 	minPrice := flag.Float64("min-price", 0.0, "skip signals below this market price (0=disabled)")
+	maxPrice := flag.Float64("max-price", 0.0, "skip signals above this market price (0=disabled)")
 	debugMode := flag.Bool("debug", false, "enable debug logging to see strategy filter reasons")
 	flag.Parse()
 
@@ -196,6 +243,7 @@ func main() {
 	// Load event titles for home/away market ordering
 	// eventSeries maps event_ticker -> series_ticker for ML strategies
 	eventSeries := make(map[string]string)
+	eventSurface := make(map[string]string)
 	eventRows, err := db.QueryContext(ctx, `SELECT event_ticker, title, series_ticker FROM events`)
 	if err != nil {
 		log.Error("query events", "err", err)
@@ -211,6 +259,23 @@ func main() {
 		eventSeries[et] = series
 	}
 	eventRows.Close()
+
+	// Load surface from flashscore_matches
+	fsRows, err := db.QueryContext(ctx,
+		`SELECT event_ticker, surface FROM flashscore_matches WHERE event_ticker IS NOT NULL AND surface IS NOT NULL`)
+	if err != nil {
+		log.Error("query flashscore surfaces", "err", err)
+		os.Exit(1)
+	}
+	for fsRows.Next() {
+		var et, surface string
+		if err := fsRows.Scan(&et, &surface); err != nil {
+			log.Error("scan surface", "err", err)
+			os.Exit(1)
+		}
+		eventSurface[et] = surface
+	}
+	fsRows.Close()
 
 	// Load markets
 	fmt.Println("Loading markets...")
@@ -257,6 +322,32 @@ func main() {
 	}
 	tickRows.Close()
 	fmt.Printf("Loaded %d tick prices across %d markets\n", count, len(tickPrices))
+
+	// Load dollar_volume time series per market (for volratio strategy)
+	fmt.Println("Loading tick volumes...")
+	tickVolumes := make(map[string][]algorithms.TickVolume)
+	vRows, err := db.QueryContext(ctx,
+		`SELECT market_ticker, ts, dollar_volume FROM ticks
+		 WHERE dollar_volume IS NOT NULL AND dollar_volume > 0
+		 ORDER BY market_ticker, ts`)
+	if err != nil {
+		log.Error("query tick volumes", "err", err)
+		os.Exit(1)
+	}
+	volCount := 0
+	for vRows.Next() {
+		var mt string
+		var ts int64
+		var dv float64
+		if err := vRows.Scan(&mt, &ts, &dv); err != nil {
+			log.Error("scan volume", "err", err)
+			os.Exit(1)
+		}
+		tickVolumes[mt] = append(tickVolumes[mt], algorithms.TickVolume{TS: ts, DollarVolume: dv})
+		volCount++
+	}
+	vRows.Close()
+	fmt.Printf("Loaded %d volume samples across %d markets\n", volCount, len(tickVolumes))
 
 	// Load point-by-point score data
 	fmt.Println("Loading points...")
@@ -306,17 +397,79 @@ func main() {
 		fmt.Printf("\n%s\n", strings.Repeat("=", 80))
 		fmt.Printf("STRATEGY: %s\n", name)
 		fmt.Printf("%s\n", strings.Repeat("=", 80))
-		runStrategy(name, strategies[name], log, markets, marketCloseTs, tickPrices, points, eventSeries, *minPrice)
+		runStrategy(name, strategies[name], log, markets, marketCloseTs, tickPrices, tickVolumes, points, eventSeries, eventSurface, *minPrice, *maxPrice)
 	}
 
 	// Aggregate summary across all strategies
 	if len(selected) > 1 {
-		printAggregate(allOrders)
+		printAggregate(filterOrders(allOrders, *minPrice, *maxPrice))
 	}
 }
 
 // allOrders collects orders across all strategies for aggregate reporting.
 var allOrders []order
+
+// filterOrders applies client-side price filters for display.
+// minPrice/maxPrice = 0 means no filter on that bound.
+func filterOrders(orders []order, minPrice, maxPrice float64) []order {
+	if minPrice <= 0 && maxPrice <= 0 {
+		return orders
+	}
+	filtered := orders[:0:0]
+	for _, o := range orders {
+		if minPrice > 0 && o.price < minPrice {
+			continue
+		}
+		if maxPrice > 0 && o.price > maxPrice {
+			continue
+		}
+		filtered = append(filtered, o)
+	}
+	return filtered
+}
+
+// seriesSetter is implemented by strategies needing series_ticker.
+type seriesSetter interface {
+	SetSeriesTicker(eventTicker, seriesTicker string)
+}
+
+// surfaceSetter is implemented by strategies needing court surface.
+type surfaceSetter interface {
+	SetSurface(eventTicker, surface string)
+}
+
+// volumeSetter is implemented by strategies needing dollar_volume series.
+type volumeSetter interface {
+	SetVolumeSeries(marketTicker string, vols []algorithms.TickVolume)
+}
+
+// wireStrategyContext sets series, surface, and volume data on strategies
+// that implement the corresponding setter interfaces.
+func wireStrategyContext(
+	strat replayStrategy,
+	matchTicker, homeMkt, awayMkt string,
+	eventSeries, eventSurface map[string]string,
+	tickVolumes map[string][]algorithms.TickVolume,
+) {
+	if ss, ok := strat.(seriesSetter); ok {
+		if series := eventSeries[matchTicker]; series != "" {
+			ss.SetSeriesTicker(matchTicker, series)
+		}
+	}
+	if ss, ok := strat.(surfaceSetter); ok {
+		if surface := eventSurface[matchTicker]; surface != "" {
+			ss.SetSurface(matchTicker, surface)
+		}
+	}
+	if vs, ok := strat.(volumeSetter); ok {
+		if vols := tickVolumes[homeMkt]; len(vols) > 0 {
+			vs.SetVolumeSeries(homeMkt, vols)
+		}
+		if vols := tickVolumes[awayMkt]; len(vols) > 0 {
+			vs.SetVolumeSeries(awayMkt, vols)
+		}
+	}
+}
 
 // runStrategy replays historical data through a single strategy and prints results.
 func runStrategy(
@@ -326,9 +479,10 @@ func runStrategy(
 	markets map[string][]marketRow,
 	marketCloseTs map[string]int64,
 	tickPrices map[string][]tickPrice,
+	tickVolumes map[string][]algorithms.TickVolume,
 	points map[string][]store.Point,
-	eventSeries map[string]string,
-	minPrice float64,
+	eventSeries, eventSurface map[string]string,
+	minPrice, maxPrice float64,
 ) {
 	var orders []order
 	both := 0
@@ -343,20 +497,11 @@ func runStrategy(
 		collector := algorithms.NewOrderCollector()
 		strat := factory(collector, log)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
-
-		// Wire series ticker for ML strategies that need it
-		if cm, ok := strat.(*algorithms.CalibratedMarkovStrategy); ok {
-			if series, ok := eventSeries[matchTicker]; ok {
-				cm.SetSeriesTicker(matchTicker, series)
-			}
-		}
+		wireStrategyContext(strat, matchTicker, homeMkt, awayMkt, eventSeries, eventSurface, tickVolumes)
 
 		replayInterleaved(strat, matchTicker, homeMkt, awayMkt, tickPrices, points)
 
 		for _, o := range collector.Orders() {
-			if minPrice > 0 && o.MarketPrice < minPrice {
-				continue
-			}
 			mktResult := ""
 			for _, m := range mkts {
 				if m.marketTicker == o.MarketTicker {
@@ -392,11 +537,13 @@ func runStrategy(
 	}
 
 	// Close-time backtest path
-	closeOrders := runCloseTimeBacktest(factory, log, markets, marketCloseTs, tickPrices, eventTitles, minPrice)
+	closeOrders := runCloseTimeBacktest(factory, log, markets, marketCloseTs, tickPrices, tickVolumes, eventTitles, eventSeries, eventSurface)
 	orders = append(orders, closeOrders...)
 	allOrders = append(allOrders, closeOrders...)
 
-	printSummary(name, orders, both)
+	// Filter at display layer
+	filtered := filterOrders(orders, minPrice, maxPrice)
+	printSummary(name, filtered, both)
 }
 
 // printSummary prints backtest results for a single strategy.
@@ -636,8 +783,9 @@ func runCloseTimeBacktest(
 	markets map[string][]marketRow,
 	marketCloseTs map[string]int64,
 	tickPrices map[string][]tickPrice,
+	tickVolumes map[string][]algorithms.TickVolume,
 	eventTitles map[string]string,
-	minPrice float64,
+	eventSeries, eventSurface map[string]string,
 ) []order {
 	collector := algorithms.NewOrderCollector()
 	strat := factory(collector, log)
@@ -673,6 +821,7 @@ func runCloseTimeBacktest(
 		homeMkt, awayMkt := orderMarketsByTitle(matchTicker, mkts)
 		cts.RegisterCloseTime(matchTicker, closeTs)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
+		wireStrategyContext(strat, matchTicker, homeMkt, awayMkt, eventSeries, eventSurface, tickVolumes)
 
 		// Replay all ticks for both markets in chronological order
 		for _, mkt := range []string{homeMkt, awayMkt} {
@@ -687,9 +836,6 @@ func runCloseTimeBacktest(
 	fmt.Printf("Close-time backtest: scanned %d finalized events with close_ts\n", both)
 
 	for _, o := range collector.Orders() {
-		if minPrice > 0 && o.MarketPrice < minPrice {
-			continue
-		}
 		mktResult := ""
 		for _, m := range markets[o.MatchTicker] {
 			if m.marketTicker == o.MarketTicker {

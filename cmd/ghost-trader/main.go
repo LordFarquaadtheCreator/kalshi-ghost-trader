@@ -196,6 +196,52 @@ func main() {
 		"set1winner": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewSet1WinnerStrategy(e, log, algorithms.DefaultSet1WinnerConfig())
 		},
+		"volratio": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewVolumeRatioStrategyWithDB(e, db, log, algorithms.DefaultVolumeRatioConfig())
+		},
+		"surface-markov": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewSurfaceMarkovStrategyWithDB(e, db, log, algorithms.DefaultSurfaceMarkovConfig())
+		},
+		"spike-fade": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewSpikeFadeStrategy(e, log, algorithms.DefaultSpikeFadeConfig())
+		},
+		"fadelongshot-itf": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-itf"
+			cfg.SeriesFilter = []string{"KXITFMATCH", "KXITFWMATCH", "KXITFDOUBLES", "KXITFWDOUBLES"}
+			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
+		},
+		"fadelongshot-challenger": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-challenger"
+			cfg.SeriesFilter = []string{"KXATPCHALLENGERMATCH", "KXWTACHALLENGERMATCH"}
+			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
+		},
+		"fadelongshot-atp": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-atp"
+			cfg.SeriesFilter = []string{"KXATPMATCH", "KXATPDOUBLES"}
+			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
+		},
+		"fadelongshot-wta": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-wta"
+			cfg.SeriesFilter = []string{"KXWTAMATCH", "KXWTADOUBLES"}
+			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
+		},
+		"fadelongshot-doubles": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-doubles"
+			cfg.SeriesFilter = []string{"KXATPDOUBLES", "KXWTADOUBLES", "KXITFDOUBLES", "KXITFWDOUBLES"}
+			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
+		},
+		"fadelongshot-evening": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-evening"
+			cfg.UTCHourStart = 18
+			cfg.UTCHourEnd = 4
+			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
+		},
 	})
 	multi.SetDB(db)
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())

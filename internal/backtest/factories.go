@@ -78,5 +78,54 @@ func DefaultFactories() map[string]StrategyFactory {
 		"set1winner": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewSet1WinnerStrategy(em, log, algorithms.DefaultSet1WinnerConfig())
 		},
+		"volratio": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewVolumeRatioStrategy(em, log, algorithms.DefaultVolumeRatioConfig())
+		},
+		"surface-markov": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewSurfaceMarkovStrategy(em, log, algorithms.DefaultSurfaceMarkovConfig())
+		},
+		"spike-fade": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewSpikeFadeStrategy(em, log, algorithms.DefaultSpikeFadeConfig())
+		},
+		// RQ3: series-tier stratification of fadelongshot
+		"fadelongshot-itf": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-itf"
+			cfg.SeriesFilter = []string{"KXITFMATCH", "KXITFWMATCH", "KXITFDOUBLES", "KXITFWDOUBLES"}
+			return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+		},
+		"fadelongshot-challenger": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-challenger"
+			cfg.SeriesFilter = []string{"KXATPCHALLENGERMATCH", "KXWTACHALLENGERMATCH"}
+			return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+		},
+		"fadelongshot-atp": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-atp"
+			cfg.SeriesFilter = []string{"KXATPMATCH", "KXATPDOUBLES"}
+			return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+		},
+		"fadelongshot-wta": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-wta"
+			cfg.SeriesFilter = []string{"KXWTAMATCH", "KXWTADOUBLES"}
+			return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+		},
+		// RQ13: doubles-only fadelongshot
+		"fadelongshot-doubles": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-doubles"
+			cfg.SeriesFilter = []string{"KXATPDOUBLES", "KXWTADOUBLES", "KXITFDOUBLES", "KXITFWDOUBLES"}
+			return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+		},
+		// RQ10: US evening only (UTC 18-04)
+		"fadelongshot-evening": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultFadeLongshotConfig()
+			cfg.Label = "fadelongshot-evening"
+			cfg.UTCHourStart = 18
+			cfg.UTCHourEnd = 4
+			return algorithms.NewFadeLongshotStrategy(em, log, cfg)
+		},
 	}
 }
