@@ -14,7 +14,9 @@
 <nav class="topnav">
 	<a href="/matches">Matches</a>
 	<a href="/orders">Paper Orders</a>
+	<a href="/real-orders">Real Orders</a>
 	<a href="/strategies">Simulated Outcomes</a>
+	<a href="/config">Config</a>
 	<a href="/system">System</a>
 </nav>
 

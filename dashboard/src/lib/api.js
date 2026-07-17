@@ -126,5 +126,43 @@ export const api = {
     return cachedFetch(`${STRATEGY_API_URL}/api/price-bands?${params}`, TTL.priceBands);
   },
 
+  async getRealOrders() {
+    return cachedFetch(`${GHOST_TRADER_URL}/api/real-orders`, TTL.orders);
+  },
+
+  async getLiquidityPool() {
+    return cachedFetch(`${GHOST_TRADER_URL}/api/liquidity-pool`, TTL.orders);
+  },
+
+  async getStrategyConfig() {
+    return cachedFetch(`${GHOST_TRADER_URL}/api/strategy-config`, TTL.strategies);
+  },
+
+  async setStrategyEnabled(/** @type {string} */ strategy, /** @type {boolean} */ enabled) {
+    if (!browser) return null;
+    const res = await fetch(`${GHOST_TRADER_URL}/api/strategy-config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ strategy, enabled }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
+  async getAppConfig() {
+    return cachedFetch(`${GHOST_TRADER_URL}/api/app-config`, TTL.strategies);
+  },
+
+  async setAppConfig(/** @type {string} */ key, /** @type {string} */ value) {
+    if (!browser) return null;
+    const res = await fetch(`${GHOST_TRADER_URL}/api/app-config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
   get pollInterval() { return pollInterval; },
 };
