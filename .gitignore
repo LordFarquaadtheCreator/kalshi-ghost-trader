@@ -29,6 +29,7 @@ config.yaml
 /ws-debug
 /backtest
 /strategy-api
+/go
 deploy/out/
 
 # OS
