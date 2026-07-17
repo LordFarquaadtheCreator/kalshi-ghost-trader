@@ -10,6 +10,7 @@
 
 <nav class="topnav">
 	<a href="/">Metrics</a>
+	<a href="/matches">Matches</a>
 	<a href="/strategies">Strategies</a>
 </nav>
 

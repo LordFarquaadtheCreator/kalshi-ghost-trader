@@ -225,6 +225,7 @@ func main() {
 	if cfg.MetricsPort > 0 {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/metrics", metricsHandler)
+		mux.HandleFunc("/api/tracked", trackedHandler(tr))
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{
 			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),

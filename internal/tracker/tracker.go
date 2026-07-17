@@ -172,6 +172,23 @@ func (t *Tracker) StopMatch(market string) {
 	t.log.Info("stopped match", "market", market)
 }
 
+// ActiveSub is a single tracked market→event mapping.
+type ActiveSub struct {
+	MarketTicker string `json:"market_ticker"`
+	EventTicker  string `json:"event_ticker"`
+}
+
+// ActiveSubs returns all tracked market→event pairs.
+func (t *Tracker) ActiveSubs() []ActiveSub {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]ActiveSub, 0, len(t.subs))
+	for m, ev := range t.subs {
+		out = append(out, ActiveSub{MarketTicker: m, EventTicker: ev})
+	}
+	return out
+}
+
 // ActiveMarkets returns currently tracked market tickers.
 func (t *Tracker) ActiveMarkets() []string {
 	t.mu.Lock()
