@@ -25,6 +25,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
+	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
 // replayStrategy extends algorithms.Strategy with backtest-specific
@@ -43,6 +44,12 @@ type strategyFactory func(emitter algorithms.OrderEmitter, log *slog.Logger) rep
 // if the strategy implements this.
 type closeTimeStrategy interface {
 	RegisterCloseTime(eventTicker string, closeTs int64)
+}
+
+// scoreObserver is an optional interface for strategies that want
+// point-by-point score updates during backtest replay.
+type scoreObserver interface {
+	OnPoint(eventTicker string, p store.Point)
 }
 
 var strategies = map[string]strategyFactory{
@@ -212,14 +219,55 @@ func main() {
 	tickRows.Close()
 	fmt.Printf("Loaded %d tick prices across %d markets\n", count, len(tickPrices))
 
-	// Load points
+	// Load point-by-point score data
+	fmt.Println("Loading points...")
+	points := make(map[string][]store.Point)
+	pRows, err := db.QueryContext(ctx, `
+		SELECT match_ticker, ts_ms, set_number, game_number, point_number,
+		       server, scorer, home_points, away_points,
+		       home_games, away_games,
+		       COALESCE(home_set_games, 0), COALESCE(away_set_games, 0),
+		       is_tiebreak, is_break_point, is_set_point, is_match_point
+		FROM points WHERE ts_ms IS NOT NULL
+		ORDER BY match_ticker, ts_ms
+	`)
+	if err != nil {
+		log.Error("query points", "err", err)
+		os.Exit(1)
+	}
+	pointCount := 0
+	for pRows.Next() {
+		var mt string
+		var p store.Point
+		var isTB, isBP, isSP, isMP int
+		if err := pRows.Scan(
+			&mt, &p.TS, &p.SetNumber, &p.GameNumber, &p.PointNumber,
+			&p.Server, &p.Scorer, &p.HomePoints, &p.AwayPoints,
+			&p.HomeGames, &p.AwayGames,
+			&p.HomeSetGames, &p.AwaySetGames,
+			&isTB, &isBP, &isSP, &isMP,
+		); err != nil {
+			pRows.Close()
+			log.Error("scan point", "err", err)
+			os.Exit(1)
+		}
+		p.IsTiebreak = isTB != 0
+		p.IsBreakPoint = isBP != 0
+		p.IsSetPoint = isSP != 0
+		p.IsMatchPoint = isMP != 0
+		points[mt] = append(points[mt], p)
+		pointCount++
+	}
+	pRows.Close()
+	fmt.Printf("Loaded %d points across %d matches\n", pointCount, len(points))
+
 	fmt.Printf("Matches with markets: %d\n", len(markets))
 
 	for _, name := range selected {
 		fmt.Printf("\n%s\n", strings.Repeat("=", 80))
 		fmt.Printf("STRATEGY: %s\n", name)
 		fmt.Printf("%s\n", strings.Repeat("=", 80))
-		runStrategy(name, strategies[name], log, markets, marketCloseTs, tickPrices, *minPrice)
+		runStrategy(name, strategies[name], log, markets, marketCloseTs, tickPrices, points, *minPrice)
 	}
 
 	// Aggregate summary across all strategies
@@ -239,6 +287,7 @@ func runStrategy(
 	markets map[string][]marketRow,
 	marketCloseTs map[string]int64,
 	tickPrices map[string][]tickPrice,
+	points map[string][]store.Point,
 	minPrice float64,
 ) {
 	var orders []order
@@ -255,13 +304,7 @@ func runStrategy(
 		strat := factory(collector, log)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
 
-		for _, mkt := range []string{homeMkt, awayMkt} {
-			ticks := tickPrices[mkt]
-			for _, t := range ticks {
-				strat.SetReplayTime(time.UnixMilli(t.ts))
-				strat.OnPriceAt(mkt, t.price, time.UnixMilli(t.ts))
-			}
-		}
+		replayInterleaved(strat, matchTicker, homeMkt, awayMkt, tickPrices, points)
 
 		for _, o := range collector.Orders() {
 			if minPrice > 0 && o.MarketPrice < minPrice {
@@ -437,6 +480,49 @@ func printAggregate(orders []order) {
 	fmt.Printf("Net P&L: $%.2f\n", totalPnL)
 	if totalInvested > 0 {
 		fmt.Printf("ROI: %.1f%%\n", totalPnL/totalInvested*100)
+	}
+}
+
+// replayInterleaved feeds price ticks and score events to a strategy in
+// timestamp order. Score events are only fed to strategies implementing scoreObserver.
+func replayInterleaved(
+	strat replayStrategy,
+	matchTicker, homeMkt, awayMkt string,
+	tickPrices map[string][]tickPrice,
+	points map[string][]store.Point,
+) {
+	type event struct {
+		ts    int64
+		kind  int // 0=price, 1=score
+		mkt   string
+		price float64
+		point store.Point
+	}
+
+	var events []event
+
+	for _, mkt := range []string{homeMkt, awayMkt} {
+		for _, t := range tickPrices[mkt] {
+			events = append(events, event{ts: t.ts, kind: 0, mkt: mkt, price: t.price})
+		}
+	}
+
+	for _, p := range points[matchTicker] {
+		events = append(events, event{ts: p.TS, kind: 1, point: p})
+	}
+
+	sort.Slice(events, func(i, j int) bool { return events[i].ts < events[j].ts })
+
+	scoreObs, _ := strat.(scoreObserver)
+
+	for _, ev := range events {
+		ts := time.UnixMilli(ev.ts)
+		strat.SetReplayTime(ts)
+		if ev.kind == 0 {
+			strat.OnPriceAt(ev.mkt, ev.price, ts)
+		} else if scoreObs != nil {
+			scoreObs.OnPoint(matchTicker, ev.point)
+		}
 	}
 }
 
