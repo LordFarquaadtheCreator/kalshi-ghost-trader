@@ -123,11 +123,19 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 		_, pending := s.pending[m.MarketTicker]
 		s.mu.Unlock()
 		if pending {
+			// Schedule checker may have moved occurrence_ts earlier.
+			// Re-check with fresh DB value — if new start time is past, track now.
+			// The scheduled goroutine will fire later and be a no-op (StartMatch is idempotent).
+			freshStart := time.UnixMilli(m.OccurrenceTS).Add(-s.lead)
+			if now.After(freshStart) {
+				s.startTracking(ctx, m.MarketTicker, m.EventTicker)
+			}
 			continue
 		}
 
 		// If occurrence is in the past or within lead window, start now
-		if now.After(startAt) {
+		// Also start immediately if status is 'active' — WS lifecycle says market is live
+		if m.Status == "active" || now.After(startAt) {
 			s.startTracking(ctx, m.MarketTicker, m.EventTicker)
 			scheduled++
 		} else {

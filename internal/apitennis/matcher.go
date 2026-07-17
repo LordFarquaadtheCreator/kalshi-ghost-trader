@@ -85,6 +85,8 @@ func extractLastName(name string) string {
 	if i := strings.Index(name, " ("); i >= 0 {
 		name = name[:i]
 	}
+	// Doubles: "Furlanetto/Parizzia" → "Furlanetto Parizzia"
+	name = strings.ReplaceAll(name, "/", " ")
 	parts := strings.Fields(name)
 	if len(parts) == 0 {
 		return ""
