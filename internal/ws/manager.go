@@ -72,6 +72,17 @@ type Manager struct {
 	cmdToMarket map[int64]string    // command id -> market (for sid mapping)
 	msgID       atomic.Int64
 
+	// Seq gap tracking: sid -> last seen seq. Cleared on reconnect.
+	seqMu   sync.Mutex
+	lastSeq map[int64]int64
+	SeqGaps atomic.Int64 // total missed messages across all sids
+
+	// Latency tracking: recv_ts - server ts_ms for ticker/trade messages.
+	latencyMu    sync.Mutex
+	latencySum   int64 // ms
+	latencyCount int64
+	latencyMax   int64 // ms
+
 	tickWriter *store.TickWriter
 	priceUpd   PriceUpdater // nil if no signal generator
 }
@@ -92,6 +103,7 @@ func NewManager(wsURL string, signer *kalshiauth.Signer, tw *store.TickWriter, s
 		seriesFilter: sf,
 		subs:         make(map[string]*subInfo),
 		cmdToMarket:  make(map[int64]string),
+		lastSeq:      make(map[int64]int64),
 		tickWriter:   tw,
 	}
 }
@@ -132,6 +144,11 @@ func (m *Manager) Run(ctx context.Context) error {
 		m.cmdMu.Lock()
 		m.cmdToMarket = make(map[int64]string)
 		m.cmdMu.Unlock()
+
+		// Clear seq tracking — new connection resets all sids
+		m.seqMu.Lock()
+		m.lastSeq = make(map[int64]int64)
+		m.seqMu.Unlock()
 
 		// Replay subscriptions after (re)connect
 		if err := m.replaySubscriptions(ctx); err != nil {

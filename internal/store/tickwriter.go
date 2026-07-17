@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,6 +38,13 @@ type TickWriter struct {
 	batchSize        int
 	flushTimeout     time.Duration
 	log              *slog.Logger
+
+	TickDrops         atomic.Int64
+	OrderbookDrops    atomic.Int64
+	LifecycleDrops    atomic.Int64
+	EvtLifecycleDrops atomic.Int64
+	PointsDrops       atomic.Int64
+	OrdersDrops       atomic.Int64
 }
 
 // NewTickWriter creates a batched tick writer.
@@ -60,7 +68,8 @@ func (w *TickWriter) Ingest(t Tick) {
 	select {
 	case w.in <- t:
 	default:
-		w.log.Warn("tick buffer full, dropping", "market", t.MarketTicker)
+		w.TickDrops.Add(1)
+		w.log.Warn("tick buffer full, dropping", "market", t.MarketTicker, "total_drops", w.TickDrops.Load())
 	}
 }
 
@@ -69,7 +78,8 @@ func (w *TickWriter) IngestLifecycle(le LifecycleEvent) {
 	select {
 	case w.lifecycleIn <- le:
 	default:
-		w.log.Warn("lifecycle buffer full, dropping", "market", le.MarketTicker)
+		w.LifecycleDrops.Add(1)
+		w.log.Warn("lifecycle buffer full, dropping", "market", le.MarketTicker, "total_drops", w.LifecycleDrops.Load())
 	}
 }
 
@@ -78,7 +88,8 @@ func (w *TickWriter) IngestEventLifecycle(el EventLifecycleEvent) {
 	select {
 	case w.eventLifecycleIn <- el:
 	default:
-		w.log.Warn("event lifecycle buffer full, dropping", "event", el.EventTicker)
+		w.EvtLifecycleDrops.Add(1)
+		w.log.Warn("event lifecycle buffer full, dropping", "event", el.EventTicker, "total_drops", w.EvtLifecycleDrops.Load())
 	}
 }
 
@@ -87,7 +98,8 @@ func (w *TickWriter) IngestOrderbook(oe OrderbookEvent) {
 	select {
 	case w.orderbookIn <- oe:
 	default:
-		w.log.Warn("orderbook buffer full, dropping", "market", oe.MarketTicker)
+		w.OrderbookDrops.Add(1)
+		w.log.Warn("orderbook buffer full, dropping", "market", oe.MarketTicker, "total_drops", w.OrderbookDrops.Load())
 	}
 }
 
@@ -98,7 +110,8 @@ func (w *TickWriter) IngestPoints(pts []Point) {
 		select {
 		case w.pointsIn <- p:
 		default:
-			w.log.Warn("points buffer full, dropping", "match", p.MatchTicker)
+			w.PointsDrops.Add(1)
+			w.log.Warn("points buffer full, dropping", "match", p.MatchTicker, "total_drops", w.PointsDrops.Load())
 			return
 		}
 	}
@@ -111,7 +124,8 @@ func (w *TickWriter) IngestOrder(o Order) bool {
 	case w.ordersIn <- o:
 		return true
 	default:
-		w.log.Warn("orders buffer full, dropping", "match", o.MatchTicker)
+		w.OrdersDrops.Add(1)
+		w.log.Warn("orders buffer full, dropping", "match", o.MatchTicker, "total_drops", w.OrdersDrops.Load())
 		return false
 	}
 }

@@ -46,12 +46,16 @@ func (m *Manager) handleMessage(data []byte) {
 	case "error":
 		m.handleWsError(env)
 	case "ticker":
+		m.trackSeq(env.SID, env.Seq)
 		m.handleTicker(env.SID, env.Msg, data)
 	case "trade":
+		m.trackSeq(env.SID, env.Seq)
 		m.handleTrade(env.SID, env.Msg, data)
 	case "orderbook_snapshot":
+		m.trackSeq(env.SID, env.Seq)
 		m.handleOrderbookSnapshot(env.SID, env.Seq, env.Msg, data)
 	case "orderbook_delta":
+		m.trackSeq(env.SID, env.Seq)
 		m.handleOrderbookDelta(env.SID, env.Seq, env.Msg, data)
 	case "market_lifecycle_v2":
 		m.handleLifecycle(env.Msg, data)
@@ -62,6 +66,50 @@ func (m *Manager) handleMessage(data []byte) {
 	default:
 		// Unknown type — skip
 	}
+}
+
+// trackSeq detects gaps in per-sid message sequence numbers. Kalshi assigns
+// monotonically increasing seq values per sid. A gap means messages were lost
+// between server and client (network drop, slow consumer, etc).
+func (m *Manager) trackSeq(sid, seq int64) {
+	if sid == 0 || seq == 0 {
+		return
+	}
+	m.seqMu.Lock()
+	prev, exists := m.lastSeq[sid]
+	if exists && seq > prev+1 {
+		missed := seq - prev - 1
+		m.SeqGaps.Add(missed)
+		m.log.Warn("ws seq gap", "sid", sid, "prev", prev, "cur", seq, "missed", missed, "total_gaps", m.SeqGaps.Load())
+	}
+	m.lastSeq[sid] = seq
+	m.seqMu.Unlock()
+}
+
+// trackLatency records recv_ts - server_ts for ticker/trade messages.
+// Exposed via metrics to detect WS transport delays.
+func (m *Manager) trackLatency(recvTs, serverTs int64) {
+	latency := recvTs - serverTs
+	if latency < 0 {
+		return // clock skew — ignore
+	}
+	m.latencyMu.Lock()
+	m.latencySum += latency
+	m.latencyCount++
+	if latency > m.latencyMax {
+		m.latencyMax = latency
+	}
+	m.latencyMu.Unlock()
+}
+
+// LatencyStats returns avg/max latency in ms and sample count.
+func (m *Manager) LatencyStats() (avg, max, count int64) {
+	m.latencyMu.Lock()
+	defer m.latencyMu.Unlock()
+	if m.latencyCount > 0 {
+		avg = m.latencySum / m.latencyCount
+	}
+	return avg, m.latencyMax, m.latencyCount
 }
 
 // handleWsError logs WS errors and propagates subscribe failures to

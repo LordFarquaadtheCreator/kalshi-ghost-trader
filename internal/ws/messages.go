@@ -31,9 +31,10 @@ func (m *Manager) handleTicker(sid int64, msg json.RawMessage, raw []byte) {
 		return
 	}
 
+	recvTs := time.Now().UnixMilli()
 	tick := store.Tick{
 		TS:                 t.TsMs,
-		RecvTS:             time.Now().UnixMilli(),
+		RecvTS:             recvTs,
 		MarketTicker:       t.MarketTicker,
 		MsgType:            "ticker",
 		SID:                sid,
@@ -50,6 +51,7 @@ func (m *Manager) handleTicker(sid int64, msg json.RawMessage, raw []byte) {
 		Payload:            string(raw),
 	}
 
+	m.trackLatency(recvTs, t.TsMs)
 	m.tickWriter.Ingest(tick)
 
 	if m.priceUpd != nil && tick.Price > 0 {
@@ -76,9 +78,10 @@ func (m *Manager) handleTrade(sid int64, msg json.RawMessage, raw []byte) {
 		return
 	}
 
+	recvTs := time.Now().UnixMilli()
 	tick := store.Tick{
 		TS:               t.TsMs,
-		RecvTS:           time.Now().UnixMilli(),
+		RecvTS:           recvTs,
 		MarketTicker:     t.MarketTicker,
 		MsgType:          "trade",
 		SID:              sid,
@@ -91,6 +94,7 @@ func (m *Manager) handleTrade(sid int64, msg json.RawMessage, raw []byte) {
 		TakerBookSide:    t.TakerBookSide,
 		Payload:          string(raw),
 	}
+	m.trackLatency(recvTs, t.TsMs)
 	m.tickWriter.Ingest(tick)
 }
 
