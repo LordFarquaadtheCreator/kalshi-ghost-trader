@@ -81,6 +81,12 @@ func NewNoFadeStrategy(emitter OrderEmitter, log *slog.Logger, cfg NoFadeConfig,
 func NewNoFadeStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg NoFadeConfig, bankroll, kellyFraction float64) *NoFadeStrategy {
 	s := NewNoFadeStrategy(emitter, log, cfg, bankroll, kellyFraction)
 	s.db = db
+	if fired, err := db.LoadFiredEvents(context.Background(), cfg.Label); err == nil {
+		s.fired = fired
+		log.Info("nofade: loaded fired state from DB", "count", len(fired))
+	} else {
+		log.Error("nofade: load fired state", "err", err)
+	}
 	return s
 }
 
@@ -271,6 +277,13 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 
 	s.fired[eventTicker] = true
 	s.mu.Unlock()
+
+	// Persist fired state so restart doesn't re-fire
+	if s.db != nil {
+		if err := s.db.MarkFired(context.Background(), eventTicker, s.cfg.Label); err != nil {
+			s.log.Error("nofade: persist fired state", "event", eventTicker, "err", err)
+		}
+	}
 
 	// convProb derived from MaxNoPrice: if underdog NO <= 0.05,
 	// favorite conversion >= 0.95

@@ -199,6 +199,15 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_match_ts ON orders(match_ticker, ts);
 CREATE INDEX IF NOT EXISTS idx_orders_market ON orders(market_ticker);
 
+-- Fired events: tracks which event_tickers a strategy has already fired on.
+-- Survives restarts so strategies don't re-fire on the same match.
+CREATE TABLE IF NOT EXISTS fired_events (
+    event_ticker    TEXT NOT NULL,
+    strategy        TEXT NOT NULL,
+    fired_ts        INTEGER NOT NULL,
+    PRIMARY KEY (event_ticker, strategy)
+);
+
 -- Flattened cascade triggers. Delete child rows directly instead of relying
 -- on recursive trigger chaining (which requires connection-level PRAGMA).
 -- Deletes happen from events outward — markets fire their own cleanup first,
@@ -221,5 +230,6 @@ BEGIN
     DELETE FROM event_lifecycle_events WHERE event_ticker = OLD.event_ticker;
     DELETE FROM points WHERE match_ticker = OLD.event_ticker;
     DELETE FROM orders WHERE match_ticker = OLD.event_ticker;
+    DELETE FROM fired_events WHERE event_ticker = OLD.event_ticker;
 END;
 `

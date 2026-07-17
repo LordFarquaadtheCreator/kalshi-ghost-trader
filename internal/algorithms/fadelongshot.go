@@ -88,9 +88,16 @@ func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLon
 
 // NewFadeLongshotStrategyWithDB creates a live-mode fadelongshot that
 // auto-loads close_ts from the markets table on RegisterMarkets.
+// Also loads persisted fired state so restarts don't cause duplicate orders.
 func NewFadeLongshotStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg FadeLongshotConfig, bankroll, kellyFraction float64) *FadeLongshotStrategy {
 	s := NewFadeLongshotStrategy(emitter, log, cfg, bankroll, kellyFraction)
 	s.db = db
+	if fired, err := db.LoadFiredEvents(context.Background(), cfg.Label); err == nil {
+		s.fired = fired
+		log.Info("fadelongshot: loaded fired state from DB", "count", len(fired))
+	} else {
+		log.Error("fadelongshot: load fired state", "err", err)
+	}
 	return s
 }
 
@@ -384,6 +391,13 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 
 	s.fired[eventTicker] = true
 	s.mu.Unlock()
+
+	// Persist fired state so restart doesn't re-fire
+	if s.db != nil {
+		if err := s.db.MarkFired(context.Background(), eventTicker, s.cfg.Label); err != nil {
+			s.log.Error("fadelongshot: persist fired state", "event", eventTicker, "err", err)
+		}
+	}
 
 	convProb := 0.99
 	if s.cfg.DynamicConvProb {
