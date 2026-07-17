@@ -97,7 +97,7 @@ type ReplayStrategy interface {
 }
 
 // StrategyFactory creates a strategy instance for backtest.
-type StrategyFactory func(emitter algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy
+type StrategyFactory func(emitter algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) ReplayStrategy
 
 // CloseTimeStrategy is an optional interface for strategies needing close_ts.
 type CloseTimeStrategy interface {
@@ -114,6 +114,8 @@ type Engine struct {
 	pointsByMatch map[string][]PointRow
 	eventTitles   map[string]string
 	factories     map[string]StrategyFactory
+	bankroll      float64
+	kellyFraction float64
 }
 
 // NewEngine creates a backtest engine from a read-only SQLite DB.
@@ -133,6 +135,8 @@ func NewEngine(dbPath string, log *slog.Logger) (*Engine, error) {
 		pointsByMatch: make(map[string][]PointRow),
 		eventTitles:   make(map[string]string),
 		factories:     DefaultFactories(),
+		bankroll:      1000.0,
+		kellyFraction: 0.25,
 	}
 
 	if err := e.load(); err != nil {
@@ -362,7 +366,7 @@ func (e *Engine) RunStrategy(name string, minPrice float64) (*StrategyResult, er
 		return nil, fmt.Errorf("unknown strategy %q", name)
 	}
 
-	var orders []Order
+	orders := make([]Order, 0)
 	both := 0
 
 	// Point-based replay path
@@ -376,7 +380,7 @@ func (e *Engine) RunStrategy(name string, minPrice float64) (*StrategyResult, er
 		homeMkt, awayMkt := e.orderMarketsByTitle(matchTicker, mkts)
 
 		collector := algorithms.NewOrderCollector()
-		strat := factory(collector, e.log)
+		strat := factory(collector, e.log, e.bankroll, e.kellyFraction)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
 
 		sort.Slice(pts, func(i, j int) bool { return pts[i].TS < pts[j].TS })
@@ -439,14 +443,14 @@ func (e *Engine) RunAll(minPrice float64) ([]*StrategyResult, error) {
 
 func (e *Engine) runCloseTimeBacktest(factory StrategyFactory, minPrice float64) []Order {
 	collector := algorithms.NewOrderCollector()
-	strat := factory(collector, e.log)
+	strat := factory(collector, e.log, e.bankroll, e.kellyFraction)
 
 	cts, ok := strat.(CloseTimeStrategy)
 	if !ok {
 		return nil
 	}
 
-	var orders []Order
+	orders := make([]Order, 0)
 	for matchTicker, mkts := range e.markets {
 		closeTs, ok := e.marketCloseTs[matchTicker]
 		if !ok || closeTs == 0 {

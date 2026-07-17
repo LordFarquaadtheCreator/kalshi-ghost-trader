@@ -150,4 +150,6 @@ type Order struct {
 	SetNumber     int     // set when signal fired
 	Strategy      string  // strategy name that generated this order
 	Payload       string  // extra debug info (JSON)
+	Bankroll      float64 // bankroll used for Kelly sizing
+	KellyFraction float64 // Kelly fraction used for sizing
 }

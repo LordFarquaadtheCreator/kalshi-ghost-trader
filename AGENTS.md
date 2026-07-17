@@ -48,7 +48,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `internal/scheduler/` — schedules tracking at occurrence_datetime - lead
 - `internal/flashscore/` — FlashScore point-by-point scraper (optional)
 - `internal/apitennis/` — API-Tennis WebSocket real-time point-by-point scraper (optional)
-- `internal/algorithms/` — pluggable trading strategies (match-point detection, order emission)
+- `internal/algorithms/` — pluggable trading strategies (match-point detection, order emission, quota guard, real order emitter)
 - `internal/signal/` — close-timer strategy, simulated order emission
 
 ## Concurrency Model
@@ -137,6 +137,66 @@ Must implement `replayStrategy` (Strategy + `SetReplayTime` + `OnPriceAt`).
 go build ./...   # compiles
 go vet ./...     # no issues
 ```
+
+## Order Emission Pipeline
+
+```
+strategies → paperGuard → paperEmitter (TickWriter, ALWAYS writes to DB)
+                 ↓ (inner, if paper quota approved)
+              realGuard → KalshiOrderEmitter (if real_trading_enabled)
+                 ↓ (if real quota approved)
+              NoopEmitter (if real_trading disabled)
+```
+
+Two independent `QuotaGuard` instances:
+- **Paper guard** — always active, tracks `paper_budget_total` / `paper_budget_floor`
+- **Real guard** — only when `real_trading_enabled: true`, tracks `real_budget_total` / `real_budget_floor`
+
+Both have independent cooldowns, rate limits, daily quotas. Paper trail always complete regardless.
+
+### QuotaGuard (4 layers)
+
+1. **Per-market cooldown** — first order per market passes, rest dropped within window (default 30s). Prevents N strategies firing N orders on same market.
+2. **Budget floor** — tracks cumulative spend locally via `atomic.Int64` (cents). If remaining would drop below floor, order dropped and spend rolled back. No REST balance query.
+3. **Global rate limit** — token bucket, non-blocking. Drops if no token (never blocks WS goroutine). Default 2 orders/sec.
+4. **Daily quota** — hard atomic counter ceiling. Resettable via `ResetDailyQuota()`.
+
+### KalshiOrderEmitter (real orders)
+
+- Submits IOC bid orders to `POST /portfolio/events/orders` (V2)
+- Hard contract cap (`real_max_contracts`, default 50)
+- Per-order HTTP timeout (`real_order_timeout_secs`, default 10s)
+- `taker_at_cross` self-trade prevention
+- All submissions logged with order_id, fill_count, remaining_count
+- Errors logged, not propagated — strategy goroutines never block on REST failures
+
+### Config
+
+```yaml
+order_quota_enabled: true          # quota guard active
+order_quota_cooldown_secs: 30     # per-market cooldown
+order_quota_max_per_sec: 2         # global rate limit
+order_quota_daily_limit: 100       # hard daily ceiling
+
+paper_budget_total: 1000.00       # paper trading budget
+paper_budget_floor: 50.00         # paper floor
+
+real_trading_enabled: false       # LIVE orders off by default
+real_max_contracts: 50            # hard cap per order
+real_order_timeout_secs: 10       # per-order HTTP timeout
+
+real_budget_total: 100.00         # real trading budget
+real_budget_floor: 5.00           # real floor
+```
+
+### Going live checklist
+
+1. Test in demo first: `environment: demo` + `real_trading_enabled: true`
+2. Start with small `real_budget_total` (e.g. $10)
+3. Monitor `remaining_budget` in logs — every approved order logs it
+4. `real_max_contracts` hard cap — can't be exceeded even if strategy suggests more
+5. IOC orders — no unfilled orders resting on book
+6. Watch for `REAL TRADING ENABLED` warning on startup
 
 ## Simulated Trades
 

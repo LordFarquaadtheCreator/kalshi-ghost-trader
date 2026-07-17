@@ -4,7 +4,7 @@ REST client for Kalshi market data.
 
 ## Files
 
-- `client.go` — Client struct, NewClient, signed GET with 429 retry
+- `client.go` — Client struct, NewClient, signed GET/POST with 429 retry
 - `events.go` — GetEvents + event types
 - `markets.go` — GetMarkets, GetMarket + market types
 - `parse.go` — ParseTennisCompetitor, ParseISOTime, ParseFP
@@ -18,6 +18,7 @@ REST client for Kalshi market data.
 - `GET /events?series_ticker=X&status=Y&limit=200&cursor=Z`
 - `GET /markets?series_ticker=X&event_ticker=Y&status=Z&limit=1000&cursor=W`
 - `GET /markets/{ticker}` — single market
+- `POST /portfolio/events/orders` — create order (V2, used by KalshiOrderEmitter)
 
 ## Pagination
 
@@ -26,6 +27,7 @@ Cursor-based. Empty cursor = done. `limit` max: 200 for events, 1000 for markets
 ## Signing
 
 Path passed to signer is `/trade-api/v2` + relative path. Query params stripped.
+POST requests sign the path only (not body). Same as GET.
 
 ## Timestamps
 

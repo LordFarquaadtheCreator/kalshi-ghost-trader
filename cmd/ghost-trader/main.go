@@ -94,19 +94,62 @@ func main() {
 	restClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
 		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
 
-	// Quota guard — throttles orders when enabled. Paper trail always complete.
-	// When order_quota_enabled=false, all orders are paper trades (current behavior).
-	// When enabled, per-market cooldown prevents N strategies from firing N orders
-	// on the same market simultaneously.
+	// Order emission pipeline:
+	//
+	//   strategies → paperGuard → paperEmitter (TickWriter, always)
+	//                    ↓ (inner, if quota approved)
+	//                 realGuard → KalshiOrderEmitter (if real_trading_enabled)
+	//                    ↓ (inner, if real quota approved)
+	//                 NoopEmitter (if real trading disabled)
+	//
+	// Paper guard: always active, tracks paper budget, writes to DB.
+	// Real guard: only active when real_trading_enabled, tracks real budget.
+	// Both have independent cooldowns, rate limits, and daily quotas.
+	//
+	// When order_quota_enabled=false: paper guard passes all through (no throttle).
+	// When real_trading_enabled=false: inner is NoopEmitter (no real orders).
+
 	paperEmitter := algorithms.NewTickWriterEmitter(tickWriter)
-	guard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{},
+
+	// Build inner emitter: real order submission or noop
+	var realInner algorithms.OrderEmitter = algorithms.NoopEmitter{}
+	if cfg.RealTradingEnabled {
+		realEmitter := algorithms.NewKalshiOrderEmitter(restClient,
+			algorithms.RealOrderConfig{
+				Enabled:       true,
+				MaxContracts:  cfg.RealMaxContracts,
+				Environment:   cfg.Environment,
+				OrderTimeoutS: cfg.RealOrderTimeoutSecs,
+			}, log)
+		// Real guard wraps real emitter with its own budget/quota
+		realGuard := algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter,
+			algorithms.QuotaConfig{
+				Enabled:      cfg.OrderQuotaEnabled,
+				CooldownSecs: cfg.OrderQuotaCooldownSecs,
+				MaxPerSec:    cfg.OrderQuotaMaxPerSec,
+				DailyLimit:   cfg.OrderQuotaDailyLimit,
+				BudgetTotal:  cfg.RealBudgetTotal,
+				BudgetFloor:  cfg.RealBudgetFloor,
+			}, log)
+		defer realGuard.Close()
+		realInner = realGuard
+		log.Warn("REAL TRADING ENABLED",
+			"environment", cfg.Environment,
+			"max_contracts", cfg.RealMaxContracts,
+			"real_budget", cfg.RealBudgetTotal,
+			"real_floor", cfg.RealBudgetFloor)
+	}
+
+	// Paper guard: strategies emit here. Paper trail always written.
+	// Inner = realInner (real guard or noop).
+	guard := algorithms.NewQuotaGuard(paperEmitter, realInner,
 		algorithms.QuotaConfig{
 			Enabled:      cfg.OrderQuotaEnabled,
 			CooldownSecs: cfg.OrderQuotaCooldownSecs,
 			MaxPerSec:    cfg.OrderQuotaMaxPerSec,
 			DailyLimit:   cfg.OrderQuotaDailyLimit,
-			BudgetTotal:  cfg.OrderQuotaBudgetTotal,
-			BudgetFloor:  cfg.OrderQuotaBudgetFloor,
+			BudgetTotal:  cfg.PaperBudgetTotal,
+			BudgetFloor:  cfg.PaperBudgetFloor,
 		}, log)
 	defer guard.Close()
 
@@ -115,21 +158,22 @@ func main() {
 			"cooldown_secs", cfg.OrderQuotaCooldownSecs,
 			"max_per_sec", cfg.OrderQuotaMaxPerSec,
 			"daily_limit", cfg.OrderQuotaDailyLimit,
-			"budget_total", cfg.OrderQuotaBudgetTotal,
-			"budget_floor", cfg.OrderQuotaBudgetFloor)
+			"paper_budget", cfg.PaperBudgetTotal,
+			"paper_floor", cfg.PaperBudgetFloor,
+			"real_trading", cfg.RealTradingEnabled)
 	}
 
 	// matchPoint is the primary strategy and also serves as PriceLookup for CloseTimer
-	matchPoint := algorithms.NewMatchPointStrategy(guard, log)
+	matchPoint := algorithms.NewMatchPointStrategy(guard, log, cfg.PaperBudgetTotal, cfg.KellyFraction)
 
 	// FadeLongshot: buy favorite at T-10min before close. Highest Sharpe (1.01).
 	// Created outside factory because it needs DB for live close_ts loading.
 	// All orders are paper trades — TickWriterEmitter writes to orders table, no real execution.
 	fadeLongshot := algorithms.NewFadeLongshotStrategyWithDB(guard, db, log,
-		algorithms.DefaultFadeLongshotConfig())
+		algorithms.DefaultFadeLongshotConfig(), cfg.PaperBudgetTotal, cfg.KellyFraction)
 
 	noFade := algorithms.NewNoFadeStrategyWithDB(guard, db, log,
-		algorithms.DefaultNoFadeConfig())
+		algorithms.DefaultNoFadeConfig(), cfg.PaperBudgetTotal, cfg.KellyFraction)
 
 	// Multi-strategy runtime: all point-based strategies run simultaneously.
 	// Each strategy's orders are tagged with its name in the orders table.
@@ -144,7 +188,7 @@ func main() {
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     1,
 				Label:            "matchpoint-aggro",
-			})
+			}, cfg.PaperBudgetTotal, cfg.KellyFraction)
 		},
 		"setpoint": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
@@ -155,7 +199,7 @@ func main() {
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     1,
 				Label:            "setpoint",
-			})
+			}, cfg.PaperBudgetTotal, cfg.KellyFraction)
 		},
 		"setpoint-serve": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
@@ -166,7 +210,7 @@ func main() {
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     1,
 				Label:            "setpoint-serve",
-			})
+			}, cfg.PaperBudgetTotal, cfg.KellyFraction)
 		},
 		"setpoint-cheap": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
@@ -178,7 +222,7 @@ func main() {
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     1,
 				Label:            "setpoint-cheap",
-			})
+			}, cfg.PaperBudgetTotal, cfg.KellyFraction)
 		},
 		"fadelongshot": func(e algorithms.OrderEmitter) algorithms.Strategy { return fadeLongshot },
 		"nofade":       func(e algorithms.OrderEmitter) algorithms.Strategy { return noFade },

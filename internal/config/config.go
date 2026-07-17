@@ -86,14 +86,27 @@ type Config struct {
 	CloseTimerPollSecs int     `yaml:"close_timer_poll_secs"`    // DB poll interval
 	CloseTimerSize     float64 `yaml:"close_timer_size"`         // shares per order
 
-	// Order quota — throttles order emission to prevent exhausting API quota.
-	// When disabled, all orders are paper trades only (current behavior).
+	// Order quota — throttles order emission. Enabled by default.
+	// Paper budget/floor track simulated spend. Real budget/floor track live spend.
+	// Both enforced independently — paper trades always logged regardless.
 	OrderQuotaEnabled      bool    `yaml:"order_quota_enabled"`
 	OrderQuotaCooldownSecs int     `yaml:"order_quota_cooldown_secs"` // per-market cooldown window
 	OrderQuotaMaxPerSec    int     `yaml:"order_quota_max_per_sec"`   // global rate limit (0 = unlimited)
 	OrderQuotaDailyLimit   int     `yaml:"order_quota_daily_limit"`   // hard daily ceiling (0 = unlimited)
-	OrderQuotaBudgetTotal  float64 `yaml:"order_quota_budget_total"`  // starting budget in dollars (0 = no tracking)
-	OrderQuotaBudgetFloor  float64 `yaml:"order_quota_budget_floor"`  // stop when remaining drops below this
+	PaperBudgetTotal       float64 `yaml:"paper_budget_total"`        // paper trading budget (0 = no tracking)
+	PaperBudgetFloor       float64 `yaml:"paper_budget_floor"`        // paper floor
+	RealBudgetTotal        float64 `yaml:"real_budget_total"`         // real trading budget (0 = no tracking)
+	RealBudgetFloor        float64 `yaml:"real_budget_floor"`         // real floor
+
+	// Real trading — submits live orders to Kalshi. DANGEROUS.
+	// When false, inner emitter is NoopEmitter (paper only).
+	// When true, inner emitter is KalshiOrderEmitter submitting IOC bids.
+	RealTradingEnabled   bool `yaml:"real_trading_enabled"`
+	RealMaxContracts     int  `yaml:"real_max_contracts"`      // hard cap per order
+	RealOrderTimeoutSecs int  `yaml:"real_order_timeout_secs"` // per-order HTTP timeout
+
+	// Kelly sizing — fraction of bankroll to risk per order (0 = no Kelly sizing)
+	KellyFraction float64 `yaml:"kelly_fraction"`
 }
 
 // Load reads config from config.yaml in the working directory.
@@ -225,8 +238,20 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	if c.OrderQuotaDailyLimit == 0 {
 		c.OrderQuotaDailyLimit = 100
 	}
-	if c.OrderQuotaBudgetFloor == 0 && c.OrderQuotaBudgetTotal > 0 {
-		c.OrderQuotaBudgetFloor = 5.0
+	if c.PaperBudgetFloor == 0 && c.PaperBudgetTotal > 0 {
+		c.PaperBudgetFloor = 5.0
+	}
+	if c.RealBudgetFloor == 0 && c.RealBudgetTotal > 0 {
+		c.RealBudgetFloor = 5.0
+	}
+	if c.RealMaxContracts == 0 {
+		c.RealMaxContracts = 50
+	}
+	if c.RealOrderTimeoutSecs == 0 {
+		c.RealOrderTimeoutSecs = 10
+	}
+	if c.KellyFraction == 0 {
+		c.KellyFraction = 0.25
 	}
 }
 

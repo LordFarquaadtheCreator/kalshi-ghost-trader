@@ -57,28 +57,32 @@ func DefaultSetPointConfig() SetPointConfig {
 // match-deciding ones. Data shows set points have 91% conversion
 // but market prices them at 56c avg — a 33c edge.
 type SetPointStrategy struct {
-	mu          sync.RWMutex
-	prices      map[string]float64
-	priceTimes  map[string]time.Time
-	markets     map[string][]string
-	matchStates map[string]*matchState
-	seenPoints  map[string]map[string]bool
-	emitter     OrderEmitter
-	log         *slog.Logger
-	cfg         SetPointConfig
-	replayNow   *time.Time
+	mu            sync.RWMutex
+	prices        map[string]float64
+	priceTimes    map[string]time.Time
+	markets       map[string][]string
+	matchStates   map[string]*matchState
+	seenPoints    map[string]map[string]bool
+	emitter       OrderEmitter
+	log           *slog.Logger
+	cfg           SetPointConfig
+	bankroll      float64
+	kellyFraction float64
+	replayNow     *time.Time
 }
 
-func NewSetPointStrategy(emitter OrderEmitter, log *slog.Logger, cfg SetPointConfig) *SetPointStrategy {
+func NewSetPointStrategy(emitter OrderEmitter, log *slog.Logger, cfg SetPointConfig, bankroll, kellyFraction float64) *SetPointStrategy {
 	return &SetPointStrategy{
-		prices:      make(map[string]float64),
-		priceTimes:  make(map[string]time.Time),
-		markets:     make(map[string][]string),
-		matchStates: make(map[string]*matchState),
-		seenPoints:  make(map[string]map[string]bool),
-		emitter:     emitter,
-		log:         log,
-		cfg:         cfg,
+		prices:        make(map[string]float64),
+		priceTimes:    make(map[string]time.Time),
+		markets:       make(map[string][]string),
+		matchStates:   make(map[string]*matchState),
+		seenPoints:    make(map[string]map[string]bool),
+		emitter:       emitter,
+		log:           log,
+		cfg:           cfg,
+		bankroll:      bankroll,
+		kellyFraction: kellyFraction,
 	}
 }
 
@@ -231,7 +235,10 @@ func (s *SetPointStrategy) processPoint(p store.Point) {
 		return
 	}
 
-	size := suggestedSize(edgeCents)
+	size := kellySize(convProb, mktPrice, s.bankroll, s.kellyFraction)
+	if size <= 0 {
+		size = 10.0
+	}
 
 	payload, _ := json.Marshal(map[string]any{
 		"home_games": p.HomeGames, "away_games": p.AwayGames,
@@ -256,6 +263,8 @@ func (s *SetPointStrategy) processPoint(p store.Point) {
 		SetNumber:     p.SetNumber,
 		Strategy:      s.cfg.Label,
 		Payload:       string(payload),
+		Bankroll:      s.bankroll,
+		KellyFraction: s.kellyFraction,
 	}
 
 	if !s.emitter.EmitOrder(o) {

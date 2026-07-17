@@ -238,7 +238,7 @@ func TestQuotaGuard_BudgetFloor(t *testing.T) {
 
 	// Each order costs $4 (SuggestedSize=4)
 	// Order 1: spent=4,  remaining=6  >= 3 → pass
-	// Order 2: spent=8,  remaining=2  <  3 → drop
+	// Order 2: would spend 4, leaving 2 < 3 → scaled to fit (avail = 10-4-3 = $3)
 	o := newTestOrder("MKT-A", "s")
 	o.SuggestedSize = 4
 
@@ -250,14 +250,15 @@ func TestQuotaGuard_BudgetFloor(t *testing.T) {
 
 	o2 := newTestOrder("MKT-B", "s")
 	o2.SuggestedSize = 4
-	guard.EmitOrder(o2) // would leave 2 < 3, dropped
+	guard.EmitOrder(o2) // scaled to $3 (avail = 10-4-3)
 
-	if inner.Count() != 1 {
-		t.Fatalf("inner got %d, want 1 (budget floor)", inner.Count())
+	if inner.Count() != 2 {
+		t.Fatalf("inner got %d, want 2 (scaled to fit)", inner.Count())
 	}
+	// After scaling: spent = 4 + 3 = 7, remaining = 3 = floor
 	rem = guard.RemainingBudget()
-	if rem < 5.99 || rem > 6.01 {
-		t.Fatalf("remaining after dropped: %.2f, want ~6.00 (rollback)", rem)
+	if rem < 2.99 || rem > 3.01 {
+		t.Fatalf("remaining after scaled: %.2f, want ~3.00", rem)
 	}
 }
 

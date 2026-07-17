@@ -76,12 +76,29 @@ close_timer_min_price: 0.85
 close_timer_poll_secs: 30
 close_timer_size: 50
 
-# Order quota — throttles order emission to prevent exhausting API quota.
-# When disabled, all orders are paper trades only (current behavior).
-# Enable when wiring real order execution.
-order_quota_enabled: false
+# Order quota — throttles order emission. Enabled by default.
+# Per-market cooldown prevents N strategies from firing N orders on same market.
+# Paper and real budgets tracked independently.
+order_quota_enabled: true
 order_quota_cooldown_secs: 30   # per-market: first order passes, rest dropped within window
 order_quota_max_per_sec: 2      # global rate limit across all markets
 order_quota_daily_limit: 100    # hard daily ceiling (0 = unlimited)
-order_quota_budget_total: 0     # starting budget in dollars (0 = no budget tracking)
-order_quota_budget_floor: 5.00  # stop ordering when remaining budget drops below this
+
+# Paper trading budget (simulated spend tracking)
+paper_budget_total: 1000.00    # starting paper budget in dollars (0 = no tracking)
+paper_budget_floor: 50.00      # stop paper orders when remaining drops below this
+
+# Real trading — submits LIVE orders to Kalshi. DANGEROUS.
+# When false: paper only (no real orders submitted).
+# When true: IOC bid orders submitted via REST after passing real quota guard.
+real_trading_enabled: false
+real_max_contracts: 50          # hard cap on contracts per order
+real_order_timeout_secs: 10     # per-order HTTP timeout
+
+# Real trading budget (live spend tracking)
+real_budget_total: 100.00      # starting real budget in dollars (0 = no tracking)
+real_budget_floor: 5.00        # stop real orders when remaining drops below this
+
+# Kelly sizing — fraction of bankroll to risk per order
+# size = kelly_fraction * f_kelly * bankroll, where f_kelly = (p - c) / (1 - c)
+kelly_fraction: 0.25

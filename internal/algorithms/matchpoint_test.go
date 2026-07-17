@@ -40,7 +40,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		wg.Wait()
 		db.Close()
 	})
-	strat := NewMatchPointStrategy(NewTickWriterEmitter(tw), slog.Default())
+	strat := NewMatchPointStrategy(NewTickWriterEmitter(tw), slog.Default(), 1000.0, 0.25)
 	return &testEnv{db: db, tw: tw, strat: strat, ctx: ctx, cancel: cancel, wg: &wg}
 }
 
@@ -72,7 +72,7 @@ func setMatchState(g *MatchPointStrategy, match string, setsHome, setsAway, last
 }
 
 func TestDetectMatchPoint_HomeServing(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	setMatchState(g, "M1", 1, 0, 2)
 	p := makePoint("M1", 2, 10, 1, 1, 0, "40", "30", 5, 4)
 	mp := g.detectMatchPoint(p)
@@ -88,7 +88,7 @@ func TestDetectMatchPoint_HomeServing(t *testing.T) {
 }
 
 func TestDetectMatchPoint_AwayServing(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	setMatchState(g, "M1", 0, 1, 2)
 	p := makePoint("M1", 2, 10, 1, 2, 0, "30", "40", 4, 5)
 	mp := g.detectMatchPoint(p)
@@ -104,7 +104,7 @@ func TestDetectMatchPoint_AwayServing(t *testing.T) {
 }
 
 func TestDetectMatchPoint_NotOneSetAway(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	setMatchState(g, "M1", 0, 0, 1)
 	p := makePoint("M1", 1, 10, 1, 1, 0, "40", "30", 5, 4)
 	if mp := g.detectMatchPoint(p); mp != nil {
@@ -113,7 +113,7 @@ func TestDetectMatchPoint_NotOneSetAway(t *testing.T) {
 }
 
 func TestDetectMatchPoint_AlreadyWon(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	setMatchState(g, "M1", 2, 0, 3)
 	p := makePoint("M1", 3, 1, 1, 1, 0, "40", "30", 5, 4)
 	if mp := g.detectMatchPoint(p); mp != nil {
@@ -122,7 +122,7 @@ func TestDetectMatchPoint_AlreadyWon(t *testing.T) {
 }
 
 func TestDetectMatchPoint_Tiebreak(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	setMatchState(g, "M1", 1, 0, 2)
 	p := makePoint("M1", 2, 13, 1, 1, 0, "40", "30", 6, 6)
 	p.IsTiebreak = true
@@ -132,7 +132,7 @@ func TestDetectMatchPoint_Tiebreak(t *testing.T) {
 }
 
 func TestDetectMatchPoint_HomeNotLeadingGames(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	setMatchState(g, "M1", 1, 0, 2)
 	p := makePoint("M1", 2, 10, 1, 1, 0, "40", "30", 4, 4)
 	if mp := g.detectMatchPoint(p); mp != nil {
@@ -141,7 +141,7 @@ func TestDetectMatchPoint_HomeNotLeadingGames(t *testing.T) {
 }
 
 func TestDetectMatchPoint_HomeNotAtFive(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	setMatchState(g, "M1", 1, 0, 2)
 	p := makePoint("M1", 2, 7, 1, 1, 0, "40", "30", 3, 2)
 	if mp := g.detectMatchPoint(p); mp != nil {
@@ -150,7 +150,7 @@ func TestDetectMatchPoint_HomeNotAtFive(t *testing.T) {
 }
 
 func TestDetectMatchPoint_Deuce(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	setMatchState(g, "M1", 1, 0, 2)
 	p := makePoint("M1", 2, 10, 1, 1, 0, "40", "40", 5, 4)
 	if mp := g.detectMatchPoint(p); mp != nil {
@@ -159,7 +159,7 @@ func TestDetectMatchPoint_Deuce(t *testing.T) {
 }
 
 func TestDetectMatchPoint_Advantage(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	setMatchState(g, "M1", 1, 0, 2)
 	p := makePoint("M1", 2, 10, 1, 1, 0, "A", "40", 5, 4)
 	mp := g.detectMatchPoint(p)
@@ -202,7 +202,7 @@ func TestCanWinGame(t *testing.T) {
 }
 
 func TestUpdateMatchState_SetTransition(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	g.updateMatchState(makePoint("M1", 1, 10, 1, 1, 1, "40", "30", 6, 4))
 	g.updateMatchState(makePoint("M1", 2, 1, 1, 1, 0, "15", "0", 0, 0))
 	g.mu.RLock()
@@ -214,7 +214,7 @@ func TestUpdateMatchState_SetTransition(t *testing.T) {
 }
 
 func TestUpdateMatchState_TiebreakSet(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	g.updateMatchState(makePoint("M1", 1, 13, 7, 1, 1, "40", "30", 7, 6))
 	g.updateMatchState(makePoint("M1", 2, 1, 1, 1, 0, "15", "0", 0, 0))
 	g.mu.RLock()
@@ -226,7 +226,7 @@ func TestUpdateMatchState_TiebreakSet(t *testing.T) {
 }
 
 func TestUpdateMatchState_FirstPoint(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	g.updateMatchState(makePoint("M1", 1, 1, 1, 1, 0, "15", "0", 0, 0))
 	g.mu.RLock()
 	ms := g.matchStates["M1"]
@@ -237,7 +237,7 @@ func TestUpdateMatchState_FirstPoint(t *testing.T) {
 }
 
 func TestUpdateMatchState_MultipleSets(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	g.updateMatchState(makePoint("M1", 1, 10, 1, 1, 1, "40", "30", 6, 4))
 	g.updateMatchState(makePoint("M1", 2, 9, 1, 1, 1, "40", "15", 6, 3))
 	g.updateMatchState(makePoint("M1", 3, 1, 1, 1, 0, "15", "0", 0, 0))
@@ -278,8 +278,9 @@ func TestProcessPoint_FiresOrder(t *testing.T) {
 	if o.EdgeCents != 17 {
 		t.Fatalf("edgeCents=%d, want 17", o.EdgeCents)
 	}
-	if o.SuggestedSize != 100.0 {
-		t.Fatalf("suggestedSize=%v, want 100.0 (capped)", o.SuggestedSize)
+	// Kelly: 0.25 * (0.97-0.80)/(1-0.80) * 1000 = 0.25 * 0.85 * 1000 = 212.5
+	if o.SuggestedSize < 212.49 || o.SuggestedSize > 212.51 {
+		t.Fatalf("suggestedSize=%v, want ~212.5 (Kelly)", o.SuggestedSize)
 	}
 	if o.MarketTicker != "MKT-HOME" {
 		t.Fatalf("marketTicker=%q, want MKT-HOME", o.MarketTicker)
@@ -426,7 +427,7 @@ func TestSuggestedSize(t *testing.T) {
 }
 
 func TestUnregisterMarkets_CleansAll(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	g.RegisterMarkets("EVT-1", []string{"MKT-HOME", "MKT-AWAY"})
 	g.OnPrice("MKT-HOME", 0.80)
 	g.OnPrice("MKT-AWAY", 0.20)
@@ -455,7 +456,7 @@ func TestUnregisterMarkets_CleansAll(t *testing.T) {
 }
 
 func TestDeletePrice_RemovesSingle(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	g.OnPrice("MKT-A", 0.80)
 	g.OnPrice("MKT-B", 0.50)
 	g.DeletePrice("MKT-A")
@@ -468,7 +469,7 @@ func TestDeletePrice_RemovesSingle(t *testing.T) {
 }
 
 func TestGetPriceAge_Missing(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	age := g.GetPriceAge("NONEXIST")
 	if age < 30*time.Minute {
 		t.Fatalf("age for missing market=%v, want >30min", age)
@@ -476,7 +477,7 @@ func TestGetPriceAge_Missing(t *testing.T) {
 }
 
 func TestGetPriceAge_Fresh(t *testing.T) {
-	g := NewMatchPointStrategy(nil, slog.Default())
+	g := NewMatchPointStrategy(nil, slog.Default(), 1000.0, 0.25)
 	g.OnPrice("MKT-A", 0.80)
 	age := g.GetPriceAge("MKT-A")
 	if age > 1*time.Second {

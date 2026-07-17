@@ -79,6 +79,17 @@ Full reference in `config.yaml.example`.
 | `flashscore_scan_interval_secs` | `300` | FlashScore feed scan interval |
 | `flashscore_poll_interval_secs` | `10` | FlashScore point poll interval |
 | `flashscore_lookahead_days` | `1` | Days to look ahead in FlashScore feed |
+| `order_quota_enabled` | `true` | Throttle order emission (cooldown, rate limit, daily cap) |
+| `order_quota_cooldown_secs` | `30` | Per-market cooldown window |
+| `order_quota_max_per_sec` | `2` | Global order rate limit |
+| `order_quota_daily_limit` | `100` | Hard daily order ceiling (0 = unlimited) |
+| `paper_budget_total` | `1000.00` | Paper trading budget in dollars (0 = no tracking) |
+| `paper_budget_floor` | `50.00` | Stop paper orders when remaining drops below this |
+| `real_trading_enabled` | `false` | Submit LIVE orders to Kalshi. DANGEROUS. |
+| `real_max_contracts` | `50` | Hard cap on contracts per real order |
+| `real_order_timeout_secs` | `10` | Per-order HTTP timeout |
+| `real_budget_total` | `100.00` | Real trading budget in dollars (0 = no tracking) |
+| `real_budget_floor` | `5.00` | Stop real orders when remaining drops below this |
 
 ## Dashboard
 
@@ -239,6 +250,60 @@ Open in Zed or Jupyter:
 ```bash
 zed notebooks/nothing_happens.ipynb
 ```
+
+## Order emission and real trading
+
+Strategies emit orders through a two-layer pipeline:
+
+```
+strategies → paperGuard → paperEmitter (TickWriter, ALWAYS writes to DB)
+                 ↓ (if paper quota approved)
+              realGuard → KalshiOrderEmitter (if real_trading_enabled)
+                 ↓ (if real quota approved)
+              NoopEmitter (if real trading disabled)
+```
+
+**Paper guard** is always active. Every order is written to the `orders` table
+regardless of quota decisions. This preserves a complete paper trail for
+backtesting.
+
+**Real guard** only exists when `real_trading_enabled: true`. It wraps
+`KalshiOrderEmitter`, which submits IOC bid orders to Kalshi's REST API.
+
+Each guard applies four layers of throttling:
+
+1. **Per-market cooldown** (30s default) — prevents multiple strategies from
+   firing on the same market simultaneously
+2. **Budget floor** — tracks cumulative spend locally. Drops orders that would
+   push remaining budget below the floor. No REST balance query needed.
+3. **Global rate limit** (2/sec default) — non-blocking token bucket
+4. **Daily quota** (100 default) — hard ceiling on total orders per session
+
+### Enabling real trading
+
+Real trading is **off by default**. To enable:
+
+1. Test in demo first:
+
+   ```yaml
+   environment: demo
+   real_trading_enabled: true
+   real_budget_total: 10.00
+   real_budget_floor: 2.00
+   ```
+
+2. Watch logs for `REAL TRADING ENABLED` on startup.
+
+3. Each submitted order logs `real: order submitted` with order_id and fill info.
+
+4. Switch to `environment: prod` only after verifying demo behavior.
+
+Safety features:
+- IOC (immediate-or-cancel) orders — no resting orders on the book
+- Hard contract cap (`real_max_contracts`, default 50)
+- Per-order HTTP timeout (10s default)
+- Independent real budget tracking with floor
+- All errors logged, never propagated to strategy goroutines
 
 ## Verification
 

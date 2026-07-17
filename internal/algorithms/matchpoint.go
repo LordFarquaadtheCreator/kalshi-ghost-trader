@@ -42,14 +42,16 @@ type matchState struct {
 // buy orders when the edge exceeds the threshold. Implements both
 // Strategy and PriceLookup.
 type MatchPointStrategy struct {
-	mu          sync.RWMutex
-	prices      map[string]float64         // market_ticker -> latest YES price (0-1)
-	priceTimes  map[string]time.Time       // market_ticker -> last price update
-	markets     map[string][]string        // event_ticker -> [home_ticker, away_ticker]
-	matchStates map[string]*matchState     // event_ticker -> set tracking state
-	seenPoints  map[string]map[string]bool // event_ticker -> dedup set ("set:game:point")
-	emitter     OrderEmitter
-	log         *slog.Logger
+	mu            sync.RWMutex
+	prices        map[string]float64         // market_ticker -> latest YES price (0-1)
+	priceTimes    map[string]time.Time       // market_ticker -> last price update
+	markets       map[string][]string        // event_ticker -> [home_ticker, away_ticker]
+	matchStates   map[string]*matchState     // event_ticker -> set tracking state
+	seenPoints    map[string]map[string]bool // event_ticker -> dedup set ("set:game:point")
+	emitter       OrderEmitter
+	log           *slog.Logger
+	bankroll      float64
+	kellyFraction float64
 
 	// replayNow, when non-nil, overrides time.Now() for staleness checks.
 	// Set by backtest to the timestamp of the point being processed.
@@ -59,15 +61,17 @@ type MatchPointStrategy struct {
 // NewMatchPointStrategy creates a match-point detection strategy.
 // emitter receives simulated buy orders. Use TickWriterEmitter for live
 // or OrderCollector for backtest.
-func NewMatchPointStrategy(emitter OrderEmitter, log *slog.Logger) *MatchPointStrategy {
+func NewMatchPointStrategy(emitter OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) *MatchPointStrategy {
 	return &MatchPointStrategy{
-		prices:      make(map[string]float64),
-		priceTimes:  make(map[string]time.Time),
-		markets:     make(map[string][]string),
-		matchStates: make(map[string]*matchState),
-		seenPoints:  make(map[string]map[string]bool),
-		emitter:     emitter,
-		log:         log,
+		prices:        make(map[string]float64),
+		priceTimes:    make(map[string]time.Time),
+		markets:       make(map[string][]string),
+		matchStates:   make(map[string]*matchState),
+		seenPoints:    make(map[string]map[string]bool),
+		emitter:       emitter,
+		log:           log,
+		bankroll:      bankroll,
+		kellyFraction: kellyFraction,
 	}
 }
 
@@ -236,7 +240,10 @@ func (s *MatchPointStrategy) processPoint(p store.Point) {
 
 	// Buy only — never sell at match points.
 	// Backtest: selling (comeback bets) has 7.1% hit rate, catastrophic PnL.
-	size := suggestedSize(edgeCents)
+	size := kellySize(convProb, mktPrice, s.bankroll, s.kellyFraction)
+	if size <= 0 {
+		size = 10.0
+	}
 
 	payload, _ := json.Marshal(map[string]any{
 		"home_games": p.HomeGames, "away_games": p.AwayGames,
@@ -259,6 +266,8 @@ func (s *MatchPointStrategy) processPoint(p store.Point) {
 		SetNumber:     p.SetNumber,
 		Strategy:      "matchpoint",
 		Payload:       string(payload),
+		Bankroll:      s.bankroll,
+		KellyFraction: s.kellyFraction,
 	}
 
 	if !s.emitter.EmitOrder(o) {

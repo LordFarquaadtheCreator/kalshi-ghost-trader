@@ -19,6 +19,7 @@
 package kalshiclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -150,6 +151,82 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 		}
 
 		return json.Unmarshal(body, out)
+	}
+
+	return fmt.Errorf("kalshi API: exhausted retries for %s", path)
+}
+
+// Post performs a signed POST request with a JSON body and decodes the response.
+// Exported wrapper around internal post for use by order submission code.
+func (c *Client) Post(ctx context.Context, path string, body any, out any) error {
+	return c.post(ctx, path, body, out)
+}
+
+// post performs a signed POST request with a JSON body and decodes the response.
+// Retries on 429 with exponential backoff (same as get).
+func (c *Client) post(ctx context.Context, path string, body any, out any) error {
+	fullURL := c.baseURL + path
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal request body: %w", err)
+	}
+
+	backoff := initialRetryBackoff
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		if err := c.rateLimiter.wait(ctx); err != nil {
+			return err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		if c.signer != nil {
+			signPath := apiPathPrefix + path
+			headers, err := c.signer.AuthHeaders("POST", signPath)
+			if err != nil {
+				return fmt.Errorf("sign request: %w", err)
+			}
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+		}
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return err
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+
+		if resp.StatusCode == 429 && attempt < maxRetries {
+			c.log.Warn("rate limited, retrying", "path", path, "attempt", attempt+1, "backoff", backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			backoff *= 2
+			continue
+		}
+
+		if resp.StatusCode != 200 && resp.StatusCode != 201 {
+			return fmt.Errorf("kalshi API %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		return json.Unmarshal(respBody, out)
 	}
 
 	return fmt.Errorf("kalshi API: exhausted retries for %s", path)
