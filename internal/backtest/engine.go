@@ -900,6 +900,99 @@ func (e *Engine) GetOrderCountsByEvent(ctx context.Context) (map[string]int, err
 	return counts, nil
 }
 
+// PassedMatch is a finalized event with winner + aggregate P&L, for the dashboard.
+type PassedMatch struct {
+	EventTicker   string  `json:"event_ticker"`
+	Title         string  `json:"title"`
+	Series        string  `json:"series"`
+	Winner        string  `json:"winner"`
+	CloseTs       int64   `json:"close_ts"`
+	SettledTs     int64   `json:"settled_ts"`
+	OrderCount    int     `json:"order_count"`
+	NetPnL        float64 `json:"net_pnl"`
+}
+
+// GetPassedMatches returns events where both markets are finalized, newest first.
+// Joins orders for sim count + resolved P&L per event.
+func (e *Engine) GetPassedMatches(ctx context.Context, limit int) ([]PassedMatch, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := e.db.QueryContext(ctx, `
+SELECT e.event_ticker, e.title, e.series_ticker,
+       (SELECT player_name FROM markets WHERE event_ticker = e.event_ticker AND result = 'yes' LIMIT 1),
+       MAX(mk.close_ts), MAX(mk.settlement_ts)
+FROM events e
+JOIN markets mk ON mk.event_ticker = e.event_ticker
+WHERE mk.status = 'finalized'
+  AND NOT EXISTS (
+    SELECT 1 FROM markets WHERE event_ticker = e.event_ticker AND status != 'finalized'
+  )
+GROUP BY e.event_ticker, e.title, e.series_ticker
+ORDER BY MAX(mk.settlement_ts) DESC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query passed matches: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]PassedMatch, 0, limit)
+	for rows.Next() {
+		var pm PassedMatch
+		var closeTs, settledTs sql.NullInt64
+		var winner sql.NullString
+		if err := rows.Scan(&pm.EventTicker, &pm.Title, &pm.Series, &winner, &closeTs, &settledTs); err != nil {
+			return nil, err
+		}
+		pm.Winner = winner.String
+		pm.CloseTs = closeTs.Int64
+		pm.SettledTs = settledTs.Int64
+		out = append(out, pm)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+
+	tickers := make([]any, len(out))
+	idx := make(map[string]int, len(out))
+	for i, pm := range out {
+		tickers[i] = pm.EventTicker
+		idx[pm.EventTicker] = i
+	}
+	placeholders := strings.Repeat("?,", len(out))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	oRows, err := e.db.QueryContext(ctx, fmt.Sprintf(`
+SELECT o.match_ticker, COUNT(*),
+       SUM(CASE WHEN m.result = 'yes' THEN o.suggested_size * (1.0 - o.market_price)
+                WHEN m.result = 'no'  THEN -o.suggested_size * o.market_price
+                ELSE 0 END)
+FROM orders o
+LEFT JOIN markets m ON o.market_ticker = m.market_ticker
+WHERE o.match_ticker IN (%s)
+GROUP BY o.match_ticker`, placeholders), tickers...)
+	if err != nil {
+		return nil, fmt.Errorf("query passed order aggregates: %w", err)
+	}
+	defer oRows.Close()
+	for oRows.Next() {
+		var ticker string
+		var count int
+		var pnl sql.NullFloat64
+		if err := oRows.Scan(&ticker, &count, &pnl); err != nil {
+			return nil, err
+		}
+		if i, ok := idx[ticker]; ok {
+			out[i].OrderCount = count
+			out[i].NetPnL = pnl.Float64
+		}
+	}
+	return out, oRows.Err()
+}
+
 // GetPendingOrderCountsByEvent returns a map of event_ticker → unsettled order count.
 func (e *Engine) GetPendingOrderCountsByEvent(ctx context.Context) (map[string]int, error) {
 	rows, err := e.db.QueryContext(ctx,

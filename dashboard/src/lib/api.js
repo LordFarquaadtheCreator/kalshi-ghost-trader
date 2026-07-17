@@ -21,6 +21,7 @@ const TTL = {
   ticks: 3_000,
   strategies: 300_000,
   backtest: 30_000,
+  passedMatches: 10_000,
 };
 
 function isCacheFresh(/** @type {CacheEntry} */ entry) {
@@ -88,6 +89,10 @@ export const api = {
 
   async getPendingOrderCounts() {
     return cachedFetch(`${STRATEGY_API_URL}/api/pending-order-counts`, TTL.orderCounts);
+  },
+
+  async getPassedMatches() {
+    return cachedFetch(`${STRATEGY_API_URL}/api/passed-matches?limit=100`, TTL.passedMatches);
   },
 
   async getOrders() {

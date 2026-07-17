@@ -1,7 +1,7 @@
 <script>
   import { createPoll } from '$lib/poll.js';
   import { api } from '$lib/api.js';
-  import { fmtTicker, seriesFromTicker } from '$lib/utils.js';
+  import { fmtTicker, seriesFromTicker, fmtTime, fmtPnL } from '$lib/utils.js';
   import PageHeader from '$lib/components/PageHeader.svelte';
   import StatCard from '$lib/components/StatCard.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
@@ -12,6 +12,7 @@
   const countsStore = createPoll(() => api.getOrderCounts(), 5000, { data: null, error: null, connected: false });
   const pendingStore = createPoll(() => api.getPendingOrderCounts(), 5000, { data: null, error: null, connected: false });
   const ordersStore = createPoll(() => api.getOrders(), 5000, { data: null, error: null, connected: false });
+  const passedStore = createPoll(() => api.getPassedMatches(), 10000, { data: null, error: null, connected: false });
 
   let subs = $derived($trackedStore.data?.subs || []);
   let eventCount = $derived($trackedStore.data?.event_count || 0);
@@ -67,6 +68,15 @@
   let liveRows = $derived(rows.filter((/** @type {any} */ r) => scores[r.event_ticker]));
   /** @type {any[]} */
   let nonLiveRows = $derived(rows.filter((/** @type {any} */ r) => !scores[r.event_ticker]));
+
+  /** @type {any[]} */
+  let passedRows = $derived(($passedStore.data?.matches || []).map((/** @type {any} */ m) => ({
+    ...m,
+    title: m.title || fmtTicker(m.event_ticker),
+    series: m.series || seriesFromTicker(m.event_ticker),
+    settled: m.settled_ts ? fmtTime(m.settled_ts) : '—',
+    pnl: m.net_pnl,
+  })));
 
   function handleRowClick(/** @type {any} */ row) {
     goto(`/matches/${encodeURIComponent(row.event_ticker)}`);
@@ -144,6 +154,41 @@
         </div>
       {:else}
         <EmptyState text="No upcoming matches." />
+      {/if}
+    </CollapsibleSection>
+
+    <CollapsibleSection title="Passed Matches" count={passedRows.length} defaultOpen={false}>
+      {#if passedRows.length > 0}
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Event Ticker</th>
+                <th>Match</th>
+                <th>Series</th>
+                <th>Winner</th>
+                <th>Settled</th>
+                <th class="num">Sim Orders</th>
+                <th class="num">Net P&L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each passedRows as row}
+                <tr class="clickable" onclick={() => handleRowClick(row)}>
+                  <td class="mono">{row.event_ticker}</td>
+                  <td>{row.title}</td>
+                  <td class="series">{row.series}</td>
+                  <td>{row.winner || '—'}</td>
+                  <td>{row.settled}</td>
+                  <td class="num">{row.order_count}</td>
+                  <td class="num {row.pnl >= 0 ? 'pnl-win' : 'pnl-loss'}">{fmtPnL(row.pnl)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {:else}
+        <EmptyState text="No passed matches." />
       {/if}
     </CollapsibleSection>
   {/if}

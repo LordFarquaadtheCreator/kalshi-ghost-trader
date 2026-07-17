@@ -209,3 +209,25 @@ func pendingOrderCountsHandler(e *backtest.Engine, log *slog.Logger) http.Handle
 		json.NewEncoder(w).Encode(map[string]any{"counts": counts})
 	}
 }
+
+func passedMatchesHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=10")
+
+		limit := 100
+		if v := r.URL.Query().Get("limit"); v != "" {
+			fmt.Sscanf(v, "%d", &limit)
+		}
+
+		matches, err := e.GetPassedMatches(r.Context(), limit)
+		if err != nil {
+			log.Error("get passed matches", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{"matches": matches})
+	}
+}
