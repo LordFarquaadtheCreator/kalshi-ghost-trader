@@ -364,6 +364,10 @@ func main() {
 		mux.HandleFunc("/api/order-counts", corsHandler(orderCountsHandler(btEngine, log)))
 		mux.HandleFunc("/api/pending-order-counts", corsHandler(pendingOrderCountsHandler(btEngine, log)))
 		mux.HandleFunc("/api/passed-matches", corsHandler(passedMatchesHandler(btEngine, log)))
+		mux.HandleFunc("/api/real-orders", corsHandler(realOrdersHandler(db, log)))
+		mux.HandleFunc("/api/liquidity-pool", corsHandler(liquidityPoolHandler(db, log)))
+		mux.HandleFunc("/api/strategy-config", corsHandler(strategyConfigHandler(db, log)))
+		mux.HandleFunc("/api/app-config", corsHandler(appConfigHandler(db, log)))
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{
 			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),

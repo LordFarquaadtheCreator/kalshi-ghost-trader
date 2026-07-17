@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
+	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 	"github.com/farquaad/kalshi-ghost-trader/internal/tracker"
 )
 
@@ -77,7 +78,7 @@ func trackedHandler(tr *tracker.Tracker, e *backtest.Engine) http.HandlerFunc {
 func corsHandler(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -270,5 +271,123 @@ func priceBandsHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
 			"metric":  metricName,
 			"results": results,
 		})
+	}
+}
+
+func realOrdersHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=5")
+
+		orders, err := db.GetRealOrders(r.Context())
+		if err != nil {
+			log.Error("get real orders", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{"orders": orders})
+	}
+}
+
+func liquidityPoolHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=5")
+
+		lp, err := db.GetLiquidityPool(r.Context())
+		if err != nil {
+			log.Error("get liquidity pool", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"balance_cents":         lp.BalanceCents,
+			"initial_balance_cents": lp.InitialBalanceCents,
+			"total_spent_cents":     lp.TotalSpentCents,
+			"total_pnl_cents":       lp.TotalPNLCents,
+			"updated_ts":            lp.UpdatedTS,
+		})
+	}
+}
+
+func strategyConfigHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.Method {
+		case http.MethodGet:
+			entries, err := db.GetAllStrategyConfig(r.Context())
+			if err != nil {
+				log.Error("get strategy config", "err", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"strategies": entries})
+
+		case http.MethodPut:
+			var body struct {
+				Strategy string `json:"strategy"`
+				Enabled  bool   `json:"enabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
+				return
+			}
+			if err := db.SetStrategyEnabled(r.Context(), body.Strategy, body.Enabled); err != nil {
+				log.Error("set strategy config", "err", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func appConfigHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.Method {
+		case http.MethodGet:
+			pairs, err := db.GetAllAppConfig(r.Context())
+			if err != nil {
+				log.Error("get app config", "err", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"config": pairs})
+
+		case http.MethodPut:
+			var body struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
+				return
+			}
+			if err := db.SetAppConfig(r.Context(), body.Key, body.Value); err != nil {
+				log.Error("set app config", "err", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
 	}
 }
