@@ -27,7 +27,7 @@
       if (filterResult === 'lost' && o.won) return false;
       if (filterResult === 'pending' && o.result) return false;
       return true;
-    });
+    }).sort((/** @type {any} */ a, /** @type {any} */ b) => (b.ts || 0) - (a.ts || 0));
   });
 
   let settledOrders = $derived(filteredOrders.filter((/** @type {any} */ o) => o.result));

@@ -43,14 +43,26 @@
     return `${sets}  ${games}  ${pts}`;
   }
 
-  let rows = $derived(subs.map((/** @type {any} */ s) => ({
-    ...s,
-    title: s.title || fmtTicker(s.event_ticker),
-    series: seriesFromTicker(s.event_ticker),
-    score: fmtScore(scores[s.event_ticker]),
-    sim_orders: orderCounts[s.event_ticker] || 0,
-    live_orders: pendingCounts[s.event_ticker] || 0,
-  })));
+  let rows = $derived((() => {
+    const byEvent = new Map();
+    for (const s of subs) {
+      const existing = byEvent.get(s.event_ticker);
+      if (existing) {
+        existing.market_ticker = `${existing.market_ticker}, ${s.market_ticker}`;
+        existing.subscribed_at = Math.max(existing.subscribed_at, s.subscribed_at || 0);
+      } else {
+        byEvent.set(s.event_ticker, { ...s });
+      }
+    }
+    return Array.from(byEvent.values()).map((/** @type {any} */ s) => ({
+      ...s,
+      title: s.title || fmtTicker(s.event_ticker),
+      series: seriesFromTicker(s.event_ticker),
+      score: fmtScore(scores[s.event_ticker]),
+      sim_orders: orderCounts[s.event_ticker] || 0,
+      live_orders: pendingCounts[s.event_ticker] || 0,
+    })).sort((/** @type {any} */ a, /** @type {any} */ b) => (b.subscribed_at || 0) - (a.subscribed_at || 0));
+  })());
 
   function handleRowClick(/** @type {any} */ row) {
     goto(`/matches/${encodeURIComponent(row.event_ticker)}`);

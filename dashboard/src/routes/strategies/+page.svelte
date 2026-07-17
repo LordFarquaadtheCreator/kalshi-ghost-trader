@@ -105,7 +105,7 @@
       if (filterResult === 'lost' && o.won) return false;
       if (filterMatch && !o.match.toLowerCase().includes(filterMatch.toLowerCase())) return false;
       return true;
-    });
+    }).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   }
 
   function cumulativePnL(/** @type {any[]} */ orders) {

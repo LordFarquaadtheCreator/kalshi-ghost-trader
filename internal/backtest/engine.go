@@ -43,6 +43,7 @@ type Order struct {
 	Won       bool    `json:"won"`
 	PnL       float64 `json:"pnl"`
 	Result    string  `json:"result"`
+	TS        int64   `json:"ts"`
 }
 
 // StrategyResult holds the output of running one strategy.
@@ -622,6 +623,7 @@ func (e *Engine) resolveOrders(raw []store.Order, mkts []MarketRow, minPrice flo
 			Match: o.MatchTicker, Market: o.MarketTicker, Context: o.Context,
 			SetNum: o.SetNumber, Price: o.MarketPrice, EdgeCents: o.EdgeCents,
 			Size: o.SuggestedSize, Won: won, PnL: pnl, Result: mktResult,
+			TS: o.TS,
 		})
 	}
 	return orders

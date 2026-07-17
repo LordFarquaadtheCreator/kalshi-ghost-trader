@@ -18,6 +18,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	wsclient "github.com/farquaad/kalshi-ghost-trader/internal/ws"
 )
@@ -58,6 +59,8 @@ type Tracker struct {
 	// subs maps market_ticker → event_ticker for all tracked markets.
 	// event_ticker is used to drive score polling.
 	subs map[string]string
+	// subTimes maps market_ticker → subscription time for chronological sorting.
+	subTimes map[string]time.Time
 	// registered tracks events already registered with strategies
 	registered map[string]bool
 }
@@ -69,6 +72,7 @@ func New(ws *wsclient.Manager, sp ScorePoller, log *slog.Logger) *Tracker {
 		sp:         sp,
 		log:        log,
 		subs:       make(map[string]string),
+		subTimes:   make(map[string]time.Time),
 		registered: make(map[string]bool),
 	}
 }
@@ -92,11 +96,13 @@ func (t *Tracker) StartMatch(ctx context.Context, market, eventTicker string) er
 		return nil
 	}
 	t.subs[market] = eventTicker
+	t.subTimes[market] = time.Now()
 	t.mu.Unlock()
 
 	if err := t.ws.Subscribe(ctx, market); err != nil {
 		t.mu.Lock()
 		delete(t.subs, market)
+		delete(t.subTimes, market)
 		t.mu.Unlock()
 		return err
 	}
@@ -138,6 +144,7 @@ func (t *Tracker) StopMatch(market string) {
 		return
 	}
 	delete(t.subs, market)
+	delete(t.subTimes, market)
 
 	// Check if any other tracked market shares this event
 	eventStillTracked := false
@@ -177,6 +184,7 @@ type ActiveSub struct {
 	MarketTicker string `json:"market_ticker"`
 	EventTicker  string `json:"event_ticker"`
 	Title        string `json:"title"`
+	SubscribedAt int64  `json:"subscribed_at"`
 }
 
 // ActiveSubs returns all tracked market→event pairs.
@@ -185,7 +193,7 @@ func (t *Tracker) ActiveSubs() []ActiveSub {
 	defer t.mu.Unlock()
 	out := make([]ActiveSub, 0, len(t.subs))
 	for m, ev := range t.subs {
-		out = append(out, ActiveSub{MarketTicker: m, EventTicker: ev})
+		out = append(out, ActiveSub{MarketTicker: m, EventTicker: ev, SubscribedAt: t.subTimes[m].UnixMilli()})
 	}
 	return out
 }
@@ -222,6 +230,10 @@ func (t *Tracker) StopAll() {
 	markets := make([]string, 0, len(t.subs))
 	for k := range t.subs {
 		markets = append(markets, k)
+	}
+	for _, m := range markets {
+		delete(t.subs, m)
+		delete(t.subTimes, m)
 	}
 	t.mu.Unlock()
 

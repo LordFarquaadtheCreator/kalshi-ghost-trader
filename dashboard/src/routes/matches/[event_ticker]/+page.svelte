@@ -249,7 +249,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each data.orders as o}
+              {#each [...(data.orders || [])].sort((a, b) => (b.ts || 0) - (a.ts || 0)) as o}
                 <tr>
                   <td class="mono">{fmtTime(o.ts)}</td>
                   <td>{o.player_name || o.market_ticker}</td>
