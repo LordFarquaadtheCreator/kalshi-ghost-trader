@@ -22,6 +22,23 @@
   let filterMatch = $state('');
   let filterResult = $state('');
 
+  // Price band state
+  let bandMetric = $state('winrate');
+  let bandMinSamples = $state(5);
+  let bandLoading = $state(false);
+  /** @type {any} */ let bandChart = null;
+  let bandReady = $state(false);
+  /** @type {HTMLCanvasElement | null} */ let bandCanvas = $state(null);
+  /** @type {Record<string, any>} */ let priceBandsData = $state({});
+
+  /** @type {Record<string, string>} */
+  const metricLabels = {
+    winrate: 'Win Rate Score',
+    pnl: 'Net P&L ($)',
+    roi: 'ROI Score',
+    sharpe: 'Sharpe Score',
+  };
+
   // Mirror of strategies page color map so toggles stay consistent across pages.
   /** @type {Record<string, string>} */
   const strategyColors = {
@@ -340,6 +357,206 @@
     })();
   });
 
+  // --- Price band analysis (client-side, from settled orders) ---
+
+  /** @type {Record<string, (orders: any[]) => number>} */
+  const scoreFns = {
+    winrate: (orders) => {
+      if (orders.length === 0) return 0;
+      const wins = orders.filter((o) => o.won).length;
+      return (wins / orders.length) * Math.log(orders.length + 1);
+    },
+    pnl: (orders) => {
+      if (orders.length === 0) return 0;
+      const pnl = orders.reduce((s, o) => s + o.pnl, 0);
+      return (pnl / orders.length) * Math.log(orders.length + 1);
+    },
+    roi: (orders) => {
+      if (orders.length === 0) return 0;
+      const invested = orders.reduce((s, o) => s + o.suggested_size * o.market_price, 0);
+      const pnl = orders.reduce((s, o) => s + o.pnl, 0);
+      if (invested <= 0) return 0;
+      return (pnl / invested) * Math.log(orders.length + 1);
+    },
+    sharpe: (orders) => {
+      if (orders.length < 2) return 0;
+      const n = orders.length;
+      const sum = orders.reduce((s, o) => s + o.pnl, 0);
+      const mean = sum / n;
+      const sumSq = orders.reduce((s, o) => s + o.pnl * o.pnl, 0);
+      const variance = sumSq / n - mean * mean;
+      if (variance <= 0) return 0;
+      return (mean / Math.sqrt(variance)) * Math.sqrt(n);
+    },
+  };
+
+  /** @param {any[]} orders @param {(orders: any[]) => number} scoreFn @param {boolean} isPeak */
+  /** @returns {{min_price: number, max_price: number, signals: number, wins: number, win_rate: number, net_pnl: number, roi: number, avg_edge: number, score: number, is_peak: boolean}} */
+  function makeBand(orders, scoreFn, isPeak) {
+    const b = { min_price: 0, max_price: 0, signals: orders.length, wins: 0, win_rate: 0, net_pnl: 0, roi: 0, avg_edge: 0, score: 0, is_peak: isPeak };
+    if (orders.length === 0) return b;
+    b.min_price = orders[0].market_price;
+    b.max_price = orders[orders.length - 1].market_price;
+    let invested = 0, pnl = 0, edgeSum = 0;
+    for (const o of orders) {
+      if (o.won) b.wins++;
+      pnl += o.pnl;
+      invested += o.suggested_size * o.market_price;
+      edgeSum += o.edge_cents;
+    }
+    b.net_pnl = Math.round(pnl * 100) / 100;
+    b.win_rate = (b.wins / b.signals) * 100;
+    if (invested > 0) b.roi = (pnl / invested) * 100;
+    b.avg_edge = edgeSum / b.signals;
+    b.score = scoreFn(orders);
+    return b;
+  }
+
+  /** @param {any[]} orders @param {(orders: any[]) => number} scoreFn @param {number} minSamples @returns {any[]} */
+  function partition(orders, scoreFn, minSamples) {
+    if (orders.length < 2 * minSamples) return [makeBand(orders, scoreFn, false)];
+    const currentScore = scoreFn(orders);
+    let bestIdx = -1, bestImprovement = 0;
+    const threshold = Math.max(Math.abs(currentScore) * 0.10, 1e-9);
+    for (let i = minSamples; i <= orders.length - minSamples; i++) {
+      if (orders[i].market_price === orders[i - 1].market_price) continue;
+      const left = scoreFn(orders.slice(0, i));
+      const right = scoreFn(orders.slice(i));
+      const improvement = left + right - currentScore;
+      if (improvement > bestImprovement) { bestImprovement = improvement; bestIdx = i; }
+    }
+    if (bestIdx < 0 || bestImprovement < threshold) return [makeBand(orders, scoreFn, false)];
+    return [...partition(orders.slice(0, bestIdx), scoreFn, minSamples), ...partition(orders.slice(bestIdx), scoreFn, minSamples)];
+  }
+
+  /** @param {any[]} bands */
+  function detectPeaks(bands) {
+    if (bands.length < 3) return;
+    const scores = [...bands].map((b) => b.score).sort((a, b) => a - b);
+    const median = scores[Math.floor(scores.length / 2)];
+    for (let i = 0; i < bands.length; i++) {
+      if (bands[i].signals < 2) continue;
+      if (bands[i].score <= median) continue;
+      const left = i > 0;
+      const right = i < bands.length - 1;
+      const leftOK = !left || bands[i].score > bands[i - 1].score;
+      const rightOK = !right || bands[i].score > bands[i + 1].score;
+      if (leftOK && rightOK) bands[i].is_peak = true;
+    }
+  }
+
+  /** @param {any[]} orders @param {string} metricName @param {number} minSamples @returns {{bands: any[], peaks: any[]}} */
+  function computePriceBands(orders, metricName, minSamples) {
+    if (minSamples < 2) minSamples = 2;
+    const scoreFn = scoreFns[metricName] || scoreFns.winrate;
+    if (orders.length < 2 * minSamples) {
+      return { bands: [makeBand(orders, scoreFn, false)], peaks: [] };
+    }
+    const sorted = [...orders].sort((a, b) => a.market_price - b.market_price);
+    const bands = partition(sorted, scoreFn, minSamples);
+    detectPeaks(bands);
+    const peaks = bands.filter((b) => b.is_peak).sort((a, b) => b.score - a.score);
+    return { bands, peaks };
+  }
+
+  $effect(() => {
+    if (!browser || settledOrders.length === 0) return;
+    bandLoading = true;
+    try {
+      /** @type {Record<string, any[]>} */
+      const grouped = {};
+      for (const o of settledOrders) {
+        if (!grouped[o.strategy]) grouped[o.strategy] = [];
+        grouped[o.strategy].push(o);
+      }
+      /** @type {Record<string, any>} */
+      const result = {};
+      for (const [name, orders] of Object.entries(grouped)) {
+        result[name] = computePriceBands(orders, bandMetric, bandMinSamples);
+      }
+      priceBandsData = result;
+    } finally {
+      bandLoading = false;
+    }
+  });
+
+  $effect(() => {
+    if (!browser || !bandCanvas || Object.keys(priceBandsData).length === 0) return;
+    (async () => {
+      bandReady = false;
+      const Chart = await setupChart();
+      if (!Chart) return;
+      if (bandChart) { bandChart.destroy(); bandChart = null; }
+
+      const selNames = Object.keys(priceBandsData);
+      /** @type {any[]} */
+      const allPeaks = [];
+
+      const datasets = selNames.map((name) => {
+        const r = priceBandsData[name];
+        if (!r || !r.bands || r.bands.length === 0) return null;
+        for (const p of r.peaks || []) {
+          allPeaks.push({ min_price: p.min_price, max_price: p.max_price, strategy: name });
+        }
+        const points = [];
+        for (const b of r.bands) {
+          points.push({ x: b.min_price, y: b.score });
+          points.push({ x: b.max_price, y: b.score });
+        }
+        return {
+          label: name,
+          data: points,
+          borderColor: colorFor(name),
+          backgroundColor: colorFor(name) + '20',
+          borderWidth: 2, pointRadius: 0, stepped: 'after', tension: 0,
+        };
+      }).filter(Boolean);
+
+      if (datasets.length === 0) return;
+
+      const peakPlugin = {
+        id: 'peakRects',
+        beforeDatasetsDraw(/** @type {any} */ chart) {
+          const { ctx, scales } = chart;
+          if (!scales.x || !scales.y) return;
+          for (const peak of chart.$peaks || []) {
+            const x1 = scales.x.getPixelForValue(peak.min_price);
+            const x2 = scales.x.getPixelForValue(peak.max_price);
+            ctx.fillStyle = 'rgba(34, 197, 94, 0.35)';
+            ctx.fillRect(x1, scales.y.top, x2 - x1, scales.y.bottom - scales.y.top);
+            ctx.strokeStyle = 'rgba(34, 197, 94, 0.8)';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x1, scales.y.top, x2 - x1, scales.y.bottom - scales.y.top);
+          }
+        },
+      };
+
+      bandChart = new Chart(bandCanvas, {
+        type: 'line',
+        data: { datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+            tooltip: {
+              callbacks: {
+                title: (/** @type {any[]} */ items) => `Price: ${((items[0]?.parsed?.x ?? 0) * 100).toFixed(1)}c`,
+                label: (/** @type {any} */ item) => `${item.dataset.label}: ${item.parsed.y.toFixed(3)}`,
+              },
+            },
+          },
+          scales: {
+            x: { type: 'linear', min: 0, max: 1, ticks: { color: '#64748b', font: { size: 10 }, callback: (/** @type {number} */ v) => (v * 100).toFixed(0) + 'c' }, grid: { color: '#1e293b' }, title: { display: true, text: 'Entry Price', color: '#64748b' } },
+            y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' }, title: { display: true, text: metricLabels[bandMetric] || 'Score', color: '#64748b' } },
+          },
+        },
+        plugins: [peakPlugin],
+      });
+      bandChart.$peaks = allPeaks;
+      bandReady = true;
+    })();
+  });
+
   $effect(() => {
     if (!browser || !byHourCanvas || filteredOrders.length === 0) return;
     (async () => {
@@ -469,6 +686,40 @@
         {/if}
 
         {#if settledOrders.length > 0}
+          <CollapsibleSection title="Price Band Performance" count={settledOrders.length}>
+            <h3 style="font-size: 13px; font-weight: 600; color: var(--text-bright); margin: 0 0 10px;">
+              Price Band Performance <span style="font-weight: 400; color: var(--text-muted);">— {metricLabels[bandMetric] || bandMetric}</span>
+            </h3>
+            <div style="height: 300px; width: 100%; position: relative;"><canvas bind:this={bandCanvas}></canvas>{#if !bandReady && !bandLoading}<ChartLoading />{/if}{#if bandLoading}<ChartLoading />{/if}</div>
+            {#if Object.keys(priceBandsData).length > 0}
+              <div class="peak-cards">
+                {#each Object.keys(priceBandsData) as name}
+                  {@const r = priceBandsData[name]}
+                  {#if r && r.peaks && r.peaks.length > 0}
+                    <div class="peak-card">
+                      <div class="peak-card-header">
+                        <span class="dot" style="background: {colorFor(name)}"></span>
+                        {name}
+                        <span class="peak-count">{r.peaks.length} peak{r.peaks.length > 1 ? 's' : ''}</span>
+                      </div>
+                      {#each r.peaks as p}
+                        <div class="peak-row">
+                          <span class="peak-range">{(p.min_price * 100).toFixed(1)}c–{(p.max_price * 100).toFixed(1)}c</span>
+                          <span class="peak-stat">{p.win_rate.toFixed(1)}% WR</span>
+                          <span class="peak-stat">{p.signals} sig</span>
+                          <span class="peak-stat" class:positive={p.net_pnl > 0} class:negative={p.net_pnl < 0}>${p.net_pnl.toFixed(2)}</span>
+                          <span class="peak-stat">score {p.score.toFixed(3)}</span>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                {/each}
+              </div>
+            {/if}
+          </CollapsibleSection>
+        {/if}
+
+        {#if settledOrders.length > 0}
           <StatAnalysis orders={settledOrders} title="Statistical Analysis" count={settledOrders.length} />
         {/if}
 
@@ -583,6 +834,21 @@
         </div>
 
         <div class="filter-group">
+          <h3>Price Band Analysis</h3>
+          <label class="filter-label">Score Metric
+            <select bind:value={bandMetric}>
+              <option value="winrate">Win Rate</option>
+              <option value="pnl">Net P&L</option>
+              <option value="roi">ROI</option>
+              <option value="sharpe">Sharpe</option>
+            </select>
+          </label>
+          <label class="filter-label">Min Samples
+            <input type="number" bind:value={bandMinSamples} min="2" max="50" step="1" />
+          </label>
+        </div>
+
+        <div class="filter-group">
           <h3>Filters</h3>
           <label class="filter-label">Min Price
             <input type="number" bind:value={minPrice} min="0" max="1" step="0.05" placeholder="0 (off)" />
@@ -631,4 +897,13 @@
   .clickable { cursor: pointer; }
   .clickable:hover { background: var(--surface-hover); }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .peak-cards { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+  .peak-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+  .peak-card-header { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text-bright); margin-bottom: 8px; }
+  .peak-count { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+  .peak-row { display: flex; align-items: center; gap: 12px; padding: 4px 0; font-size: 12px; color: var(--text-muted); }
+  .peak-range { font-family: monospace; color: var(--text); min-width: 90px; }
+  .peak-stat { min-width: 60px; }
+  .peak-stat.positive { color: #34d399; }
+  .peak-stat.negative { color: #f87171; }
 </style>
