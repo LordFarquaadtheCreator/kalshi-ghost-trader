@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -26,7 +27,8 @@ type FadeLongshotConfig struct {
 	// Label: strategy name for logging.
 	Label string
 	// DynamicConvProb: if true, convProb is derived from live score context
-	// instead of using fixed 0.99. Requires point data.
+	// (set/game lead, match/set point) received via OnPoint. Falls back to
+	// fixed 0.99 when no score data is available.
 	DynamicConvProb bool
 }
 
@@ -41,6 +43,16 @@ func DefaultFadeLongshotConfig() FadeLongshotConfig {
 	}
 }
 
+// fadeScoreState tracks live score context for dynamic convProb.
+type fadeScoreState struct {
+	homeSetWins   int
+	awaySetWins   int
+	homeGames     int
+	awayGames     int
+	isMatchPoint  bool
+	isSetPoint    bool
+}
+
 // FadeLongshotStrategy buys the favorite (higher-priced YES) at a fixed
 // time before market close. Data shows favorites win 100% in sample
 // with +10c edge at T-10min.
@@ -48,6 +60,10 @@ func DefaultFadeLongshotConfig() FadeLongshotConfig {
 // This strategy needs close_ts for each event, provided via
 // RegisterCloseTime. In live mode, close_ts comes from the markets table.
 // In backtest, the backtest engine provides it.
+//
+// Implements ScoreObserver to track live score context for dynamic
+// conversion probability. Does NOT implement PreMatchGated — the
+// close_ts window gating prevents premature firing.
 type FadeLongshotStrategy struct {
 	mu          sync.RWMutex
 	prices      map[string]float64
@@ -56,6 +72,7 @@ type FadeLongshotStrategy struct {
 	closeTimes  map[string]int64
 	fired       map[string]bool
 	closeWarned map[string]bool // warn once per event when close_ts=0
+	scores      map[string]*fadeScoreState
 	emitter     OrderEmitter
 	db          *store.DB // nil in backtest mode
 	log         *slog.Logger
@@ -71,6 +88,7 @@ func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLon
 		closeTimes:  make(map[string]int64),
 		fired:       make(map[string]bool),
 		closeWarned: make(map[string]bool),
+		scores:      make(map[string]*fadeScoreState),
 		emitter:     emitter,
 		log:         log,
 		cfg:         cfg,
@@ -143,6 +161,7 @@ func (s *FadeLongshotStrategy) UnregisterMarkets(eventTicker string) {
 	delete(s.closeTimes, eventTicker)
 	delete(s.fired, eventTicker)
 	delete(s.closeWarned, eventTicker)
+	delete(s.scores, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -160,6 +179,27 @@ func (s *FadeLongshotStrategy) OnPriceAt(marketTicker string, price float64, ts 
 	s.priceTimes[marketTicker] = ts
 	s.mu.Unlock()
 	s.checkEntryAt(marketTicker, ts)
+}
+
+// OnPoint updates live score context for dynamic convProb calculation.
+// Implements ScoreObserver so MultiStrategyRuntime fans out point events.
+func (s *FadeLongshotStrategy) OnPoint(eventTicker string, p store.Point) {
+	s.mu.Lock()
+	ms, ok := s.scores[eventTicker]
+	if !ok {
+		ms = &fadeScoreState{}
+		s.scores[eventTicker] = ms
+	}
+	ms.homeSetWins = p.HomeSetGames
+	ms.awaySetWins = p.AwaySetGames
+	ms.homeGames = p.HomeGames
+	ms.awayGames = p.AwayGames
+	ms.isMatchPoint = p.IsMatchPoint
+	ms.isSetPoint = p.IsSetPoint
+	s.mu.Unlock()
+
+	// Re-check entry after score update — convProb may have changed
+	s.checkEntryForEvent(eventTicker)
 }
 
 func (s *FadeLongshotStrategy) SetReplayTime(ts time.Time) {
@@ -180,22 +220,75 @@ func (s *FadeLongshotStrategy) now() time.Time {
 	return time.Now()
 }
 
-// dynamicConvProb estimates conversion probability from price.
-// Without live score data, falls back to price-implied probability with small edge.
+// dynamicConvProb estimates conversion probability from live score context.
+// Higher when favorite has set/game lead, serving, or at match/set point.
+// Falls back to fixed 0.99 when no score data is available.
 func (s *FadeLongshotStrategy) dynamicConvProb(eventTicker string, favPrice float64) float64 {
-	return favPrice + 0.02
+	s.mu.RLock()
+	ms, ok := s.scores[eventTicker]
+	s.mu.RUnlock()
+	if !ok || ms == nil {
+		return 0.99
+	}
+
+	prob := 0.90 // base for favorite in final minutes
+
+	// Set lead: +3c per set lead
+	setLead := ms.homeSetWins - ms.awaySetWins
+	if setLead < 0 {
+		setLead = -setLead
+	}
+	prob += float64(setLead) * 0.03
+
+	// Game lead in current set: +1c per game
+	gameLead := ms.homeGames - ms.awayGames
+	if gameLead < 0 {
+		gameLead = -gameLead
+	}
+	prob += float64(gameLead) * 0.01
+
+	// Match point: near-certain conversion
+	if ms.isMatchPoint {
+		prob = 0.995
+	}
+
+	// Set point: high conversion
+	if ms.isSetPoint && !ms.isMatchPoint {
+		prob = math.Max(prob, 0.97)
+	}
+
+	// Clamp: must stay above favPrice to have edge, cap at 0.999
+	if prob <= favPrice {
+		prob = favPrice + 0.01
+	}
+	if prob > 0.999 {
+		prob = 0.999
+	}
+
+	return prob
 }
 
 func (s *FadeLongshotStrategy) checkEntry(marketTicker string) {
 	s.checkEntryAt(marketTicker, s.now())
 }
 
-func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
-	s.mu.Lock()
-	if s.fired[marketTicker] {
-		s.mu.Unlock()
+// checkEntryForEvent re-evaluates entry after a score update. Called by
+// OnPoint when score context changes (e.g. match point reached).
+func (s *FadeLongshotStrategy) checkEntryForEvent(eventTicker string) {
+	s.mu.RLock()
+	mkts, ok := s.markets[eventTicker]
+	s.mu.RUnlock()
+	if !ok || len(mkts) < 2 {
 		return
 	}
+	// Check entry from both markets' perspective
+	for _, mkt := range mkts {
+		s.checkEntryAt(mkt, s.now())
+	}
+}
+
+func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
+	s.mu.Lock()
 
 	eventTicker := ""
 	for et, mkts := range s.markets {
@@ -207,6 +300,11 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		}
 	}
 	if eventTicker == "" {
+		s.mu.Unlock()
+		return
+	}
+
+	if s.fired[eventTicker] {
 		s.mu.Unlock()
 		return
 	}
@@ -271,7 +369,6 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	s.fired[favMkt] = true
 	s.mu.Unlock()
 
 	convProb := 0.99
@@ -314,6 +411,9 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		s.log.Warn("fadelongshot: order dropped", "match", eventTicker, "market", favMkt)
 		return
 	}
+	s.mu.Lock()
+	s.fired[eventTicker] = true
+	s.mu.Unlock()
 	s.log.Info("fadelongshot: order emitted",
 		"match", eventTicker, "market", favMkt,
 		"price", favPrice, "edge_cents", edgeCents, "size", size)
