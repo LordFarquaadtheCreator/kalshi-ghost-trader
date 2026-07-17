@@ -12,9 +12,17 @@ go vet ./...
 
 ## Run
 
+Config now lives in SQLite (`app_config` table). Legacy `config.yaml` supported via
+`cmd/migrate-config` one-time migration.
+
 ```bash
+# First-time setup (migrate from YAML):
 cp config.yaml.example config.yaml
 # Edit config.yaml: set api_key_id, private_key_path, environment
+go run ./cmd/migrate-config    # seeds app_config, liquidity_pool, strategy_config
+# config.yaml can now be deleted
+
+# Run:
 go run ./cmd/ghost-trader
 ```
 
@@ -38,17 +46,23 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `cmd/validate/` — config + connectivity validation tool
 - `cmd/ws-debug/` — WS + REST debug tool
 - `cmd/backtest/` — replay historical data through trading strategies
-- `internal/config/` — YAML config loading
+- `cmd/backfill/` — backfill historical data
+- `cmd/migrate-config/` — one-time YAML→SQLite config migration tool
+- `internal/config/` — YAML config loading (legacy, superseded by app_config table)
 - `internal/kalshiauth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
 - `internal/kalshiclient/` — REST client (events, markets, pagination, rate limit)
-- `internal/store/` — SQLite (WAL, single writer, batched tick inserts)
+- `internal/store/` — SQLite (WAL, single writer, batched tick inserts, app_config, orders, liquidity_pool)
 - `internal/ws/` — WebSocket manager (auto-reconnect, re-subscribe, dispatch)
 - `internal/scanner/` — daily series scan, stores new events/markets
 - `internal/tracker/` — market subscription lifecycle (no per-match goroutine)
 - `internal/scheduler/` — schedules tracking at occurrence_datetime - lead
+- `internal/reconciler/` — resolves market results, settles orders
+- `internal/schedulechecker/` — validates scheduled match tracking
+- `internal/backtest/` — backtest engine, result cache (5min TTL), price band analysis
 - `internal/apitennis/` — API-Tennis WebSocket real-time scraper (optional)
 - `internal/algorithms/` — pluggable trading strategies (match-point detection, order emission)
 - `internal/signal/` — close-timer strategy, simulated order emission
+- `dashboard/` — SvelteKit + Vite dashboard (real orders, liquidity pool, config management, charts)
 
 ## Concurrency Model
 
@@ -81,9 +95,10 @@ Coverage classification on events at settlement:
 Payload retention: non-`full` events have `payload` NULLed in ticks/orderbook at settlement (P7).
 Orphan janitor (`CleanOrphans`) and late-parenting sweep (`AdoptOrphans`) run after each scan cycle.
 
-## Local Linux Box
+## Deployment (Linux Mint box)
 
-Linux Mint box on LAN for ad-hoc work. Passwordless SSH from Mac.
+Scraper runs on Linux Mint box on LAN — same machine as `ssh mint` (see below).
+Not a cloud instance. DB lives on local disk there (31GB+).
 
 ```bash
 ssh mint                                    # alias in ~/.ssh/config
@@ -91,18 +106,65 @@ ssh fahad@192.168.1.246                     # direct
 ```
 
 Key: `~/.ssh/id_ed25519` (copied via `ssh-copy-id`). Host: `linux-mint`,
-Linux Mint 24.04, x86_64.
+Linux Mint 24.04, x86_64. Passwordless sudo granted for `systemctl` + `journalctl`
+(via `/etc/sudoers.d/fahad-systemctl`).
 
-## Remote Deployment
+### systemd services
 
-App runs on remote ARM instance. DB is on remote disk — not accessible locally.
-See `deploy/README.md` for deployment instructions.
+- `kalshi-ghost-trader.service` — backend binary, `Restart=always`
+- `kalshi-dashboard.service` — Vite dev server, `BindsTo` backend
+
+Unit files: `/etc/systemd/system/kalshi-{ghost-trader,dashboard}.service`
+Repo: `/home/fahad/kalshi-ghost-trader`
+DB: `/home/fahad/kalshi-ghost-trader/kalshi_tennis.db`
+Ports: backend `6060` (all interfaces), dashboard `5173` (all interfaces)
+
+```bash
+ssh mint 'sudo -n systemctl status kalshi-ghost-trader --no-pager -n 20'
+ssh mint 'sudo -n journalctl -u kalshi-ghost-trader --no-pager -n 40 --since "5 min ago"'
+ssh mint 'sudo -n systemctl restart kalshi-ghost-trader kalshi-dashboard'
+```
+
+### Mint deploy tweaks (uncommitted, stashed on pull)
+
+Mint has local-only changes never committed — stashed before `git pull`, popped after:
+- `cmd/ghost-trader/main.go` — metrics binds `0.0.0.0` (not `127.0.0.1`)
+- `dashboard/src/lib/api.js` — empty API URLs (uses Vite proxy, not localhost)
+- `dashboard/vite.config.js` — `server.host=0.0.0.0`, proxy `/api`+`/metrics`+`/debug` to `127.0.0.1:6060`
+
+### Update workflow
+
+```bash
+ssh mint 'cd /home/fahad/kalshi-ghost-trader && \
+  git stash push -u -m "mint-deploy-tweaks" && \
+  git pull --ff-only origin main && \
+  git stash pop && \
+  go build -o ghost-trader ./cmd/ghost-trader && \
+  sudo -n systemctl restart kalshi-ghost-trader && sleep 2 && \
+  sudo -n systemctl restart kalshi-dashboard'
+```
+
+If schema changed, run migration first (see Config Migration below).
+
+### Config Migration (YAML → SQLite)
+
+Phase 1 moved config from `config.yaml` to SQLite tables: `app_config`, `liquidity_pool`, `strategy_config`.
+One-time migration tool: `cmd/migrate-config`. Reads `config.yaml`, seeds tables, then `config.yaml` can be deleted.
+
+```bash
+ssh mint 'cd /home/fahad/kalshi-ghost-trader && go run ./cmd/migrate-config'
+```
+
+Gotcha: `idx_orders_real` index references `is_real` column. On pre-existing DBs, `orders` table
+exists without `is_real` — `CREATE TABLE IF NOT EXISTS` won't recreate it. Index creation moved
+to post-migration step (after `addColumnIfMissing`). Fixed in c206378.
+
+`liquidity_pool` not seeded if `order_quota_budget_total=0` — set initial balance via dashboard.
 
 ## Snapshots (Remote → Local)
 
-Since DB lives on remote, `scripts/snapshot.sh` runs on remote via cron and exports
-gzipped JSON summaries + backtest output to `/data/snapshots/YYYYMMDD_HHMM/`.
-`scripts/fetch-snapshots.sh` rsyncs them locally to `snapshots/`.
+`scripts/snapshot.sh` runs on mint via cron, exports gzipped JSON summaries + backtest output
+to `snapshots/YYYYMMDD_HHMM/`. `scripts/fetch-snapshots.sh` rsyncs them locally to `snapshots/`.
 
 Exports:
 - `orders.json.gz` — all simulated orders with computed P&L
@@ -123,14 +185,14 @@ Tiered retention (both remote + local):
 - 30–90 days: keep 1 per week
 - 90+ days: delete
 
-Cron (on remote, every 6 hours):
+Cron (on mint, every 6 hours):
 ```
-0 */6 * * * /data/snapshot.sh >> /data/snapshots/cron.log 2>&1
+0 */6 * * * /home/fahad/kalshi-ghost-trader/scripts/snapshot.sh >> /home/fahad/kalshi-ghost-trader/snapshots/cron.log 2>&1
 ```
 
 Fetch locally:
 ```bash
-./scripts/fetch-snapshots.sh <instance-ip>
+./scripts/fetch-snapshots.sh 192.168.1.246
 ```
 
 Inspect:
@@ -141,10 +203,10 @@ zcat snapshots/<dir>/backtest.txt.gz
 
 ## Backup
 
-On remote — daily full DB backup, keep 7 days:
+On mint — daily full DB backup, keep 7 days:
 ```bash
-sqlite3 /data/kalshi_tennis.db ".backup /data/backups/kalshi_$(date +%Y%m%d).db"
-find /data/backups/ -name "kalshi_*.db" -mtime +7 -delete
+ssh mint 'sqlite3 /home/fahad/kalshi-ghost-trader/kalshi_tennis.db ".backup /home/fahad/kalshi-ghost-trader/backups/kalshi_$(date +%Y%m%d).db"'
+ssh mint 'find /home/fahad/kalshi-ghost-trader/backups/ -name "kalshi_*.db" -mtime +7 -delete'
 ```
 
 Locally — atomic snapshot while scraper running:
