@@ -51,6 +51,7 @@
 <div class="chart-section">
   {#if title}<h2>{title}</h2>{/if}
   <div style="height: 300px; width: 100%; position: relative;">
-    {#if ready}<canvas bind:this={canvas}></canvas>{:else}<ChartLoading />{/if}
+    <canvas bind:this={canvas}></canvas>
+    {#if !ready}<ChartLoading />{/if}
   </div>
 </div>

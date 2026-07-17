@@ -312,19 +312,19 @@
         <div class="chart-grid">
           <div class="chart-card">
             <h3>Cumulative P&L</h3>
-            <div class="chart-container">{#if pnlReady}<canvas bind:this={pnlCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
+            <div class="chart-container" style="position: relative;"><canvas bind:this={pnlCanvas}></canvas>{#if !pnlReady}<ChartLoading />{/if}</div>
           </div>
           <div class="chart-card">
             <h3>P&L by Strategy</h3>
-            <div class="chart-container">{#if stratPnlReady}<canvas bind:this={stratPnlCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
+            <div class="chart-container" style="position: relative;"><canvas bind:this={stratPnlCanvas}></canvas>{#if !stratPnlReady}<ChartLoading />{/if}</div>
           </div>
           <div class="chart-card">
             <h3>Win / Loss by Strategy</h3>
-            <div class="chart-container">{#if winlossReady}<canvas bind:this={winlossCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
+            <div class="chart-container" style="position: relative;"><canvas bind:this={winlossCanvas}></canvas>{#if !winlossReady}<ChartLoading />{/if}</div>
           </div>
           <div class="chart-card">
             <h3>Entry Price Distribution</h3>
-            <div class="chart-container">{#if priceDistReady}<canvas bind:this={priceDistCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
+            <div class="chart-container" style="position: relative;"><canvas bind:this={priceDistCanvas}></canvas>{#if !priceDistReady}<ChartLoading />{/if}</div>
           </div>
         </div>
       </CollapsibleSection>

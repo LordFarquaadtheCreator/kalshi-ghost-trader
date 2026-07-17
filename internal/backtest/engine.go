@@ -783,3 +783,27 @@ func (e *Engine) GetOrderCountsByEvent(ctx context.Context) (map[string]int, err
 	}
 	return counts, nil
 }
+
+// GetPendingOrderCountsByEvent returns a map of event_ticker → unsettled order count.
+func (e *Engine) GetPendingOrderCountsByEvent(ctx context.Context) (map[string]int, error) {
+	rows, err := e.db.QueryContext(ctx,
+		`SELECT o.match_ticker, COUNT(*)
+		 FROM orders o LEFT JOIN markets m ON o.market_ticker = m.market_ticker
+		 WHERE m.result IS NULL OR m.result = ''
+		 GROUP BY o.match_ticker`)
+	if err != nil {
+		return nil, fmt.Errorf("query pending order counts: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var ticker string
+		var count int
+		if err := rows.Scan(&ticker, &count); err != nil {
+			return nil, err
+		}
+		counts[ticker] = count
+	}
+	return counts, nil
+}

@@ -237,12 +237,9 @@
   {:else if !data || !data.markets || data.markets.length === 0}
     <EmptyState text="No tick data for this event." />
   {:else}
-    <div class="chart-container">
-      {#if !chartReady}
-        <ChartLoading />
-      {:else}
-        <canvas bind:this={canvas}></canvas>
-      {/if}
+    <div class="chart-container" style="position: relative;">
+      <canvas bind:this={canvas}></canvas>
+      {#if !chartReady}<ChartLoading />{/if}
     </div>
 
     <div class="markets-grid">

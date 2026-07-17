@@ -273,17 +273,17 @@
 
         <div class="chart-section">
           <h2>Cumulative P&L</h2>
-          <div style="height: 300px; width: 100%; position: relative;">{#if pnlReady}<canvas bind:this={pnlCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
+          <div style="height: 300px; width: 100%; position: relative;"><canvas bind:this={pnlCanvas}></canvas>{#if !pnlReady}<ChartLoading />{/if}</div>
         </div>
 
         <div class="chart-section">
           <h2>Win / Loss Comparison</h2>
-          <div style="height: 300px; width: 100%; position: relative;">{#if winlossReady}<canvas bind:this={winlossCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
+          <div style="height: 300px; width: 100%; position: relative;"><canvas bind:this={winlossCanvas}></canvas>{#if !winlossReady}<ChartLoading />{/if}</div>
         </div>
 
         <div class="chart-section">
           <h2>Entry Price Distribution</h2>
-          <div style="height: 300px; width: 100%; position: relative;">{#if priceDistReady}<canvas bind:this={priceDistCanvas}></canvas>{:else}<ChartLoading />{/if}</div>
+          <div style="height: 300px; width: 100%; position: relative;"><canvas bind:this={priceDistCanvas}></canvas>{#if !priceDistReady}<ChartLoading />{/if}</div>
         </div>
 
         <div class="orders-section">

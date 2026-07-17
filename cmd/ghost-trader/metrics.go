@@ -190,3 +190,20 @@ func orderCountsHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]any{"counts": counts})
 	}
 }
+
+func pendingOrderCountsHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=5")
+
+		counts, err := e.GetPendingOrderCountsByEvent(r.Context())
+		if err != nil {
+			log.Error("get pending order counts", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{"counts": counts})
+	}
+}

@@ -5,13 +5,15 @@
 
 <style>
   .chart-loading {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 10px;
-    height: 100%;
-    min-height: 200px;
+    background: var(--surface);
+    z-index: 1;
     color: var(--text-muted);
     font-size: 13px;
   }

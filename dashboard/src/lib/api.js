@@ -86,6 +86,10 @@ export const api = {
     return cachedFetch(`${STRATEGY_API_URL}/api/order-counts`, TTL.orderCounts);
   },
 
+  async getPendingOrderCounts() {
+    return cachedFetch(`${STRATEGY_API_URL}/api/pending-order-counts`, TTL.orderCounts);
+  },
+
   async getOrders() {
     return cachedFetch(`${STRATEGY_API_URL}/api/orders`, TTL.orders);
   },

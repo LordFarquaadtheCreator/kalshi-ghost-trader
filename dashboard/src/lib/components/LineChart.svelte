@@ -93,7 +93,8 @@
 
 <div class="chart-card">
   <div class="chart-title">{title}</div>
-  <div class="chart-canvas-wrap">
-    {#if ready}<canvas bind:this={canvas}></canvas>{:else}<ChartLoading />{/if}
+  <div class="chart-canvas-wrap" style="position: relative;">
+    <canvas bind:this={canvas}></canvas>
+    {#if !ready}<ChartLoading />{/if}
   </div>
 </div>

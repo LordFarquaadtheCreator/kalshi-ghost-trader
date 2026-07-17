@@ -10,6 +10,7 @@
 
   const trackedStore = createPoll(() => api.getTracked(), 2000, { data: null, error: null, connected: false });
   const countsStore = createPoll(() => api.getOrderCounts(), 5000, { data: null, error: null, connected: false });
+  const pendingStore = createPoll(() => api.getPendingOrderCounts(), 5000, { data: null, error: null, connected: false });
   const ordersStore = createPoll(() => api.getOrders(), 5000, { data: null, error: null, connected: false });
 
   let subs = $derived($trackedStore.data?.subs || []);
@@ -17,9 +18,10 @@
   let marketCount = $derived($trackedStore.data?.market_count || 0);
   /** @type {Record<string, number>} */
   let orderCounts = $derived($countsStore.data?.counts || {});
+  let pendingCounts = $derived($pendingStore.data?.counts || {});
   let netPnl = $derived(ordersStore.data?.summary?.net_pnl ?? 0);
-  let paperOrders = $derived(ordersStore.data?.summary?.total_orders ?? 0);
-  let realOrders = $derived(0);
+  let paperOrders = $derived(Object.values(orderCounts).reduce((/** @type {number} */ a, /** @type {number} */ b) => a + b, 0));
+  let liveOrders = $derived(Object.values(pendingCounts).reduce((/** @type {number} */ a, /** @type {number} */ b) => a + b, 0));
 
   const columns = [
     { key: 'event_ticker', label: 'Event Ticker', class: 'mono' },
@@ -27,7 +29,7 @@
     { key: 'series', label: 'Series', class: 'series' },
     { key: 'market_ticker', label: 'Market Ticker', class: 'mono' },
     { key: 'sim_orders', label: 'Sim Orders', align: 'right' },
-    { key: 'real_orders', label: 'Real Orders', align: 'right', class: 'num muted' },
+    { key: 'live_orders', label: 'Live Orders', align: 'right' },
   ];
 
   let rows = $derived(subs.map((/** @type {any} */ s) => ({
@@ -35,7 +37,7 @@
     title: s.title || fmtTicker(s.event_ticker),
     series: seriesFromTicker(s.event_ticker),
     sim_orders: orderCounts[s.event_ticker] || 0,
-    real_orders: 0,
+    live_orders: pendingCounts[s.event_ticker] || 0,
   })));
 
   function handleRowClick(/** @type {any} */ row) {
@@ -55,7 +57,7 @@
     <StatCard label="Markets" value={marketCount} />
     <StatCard label="Net P&L" value={`$${netPnl.toFixed(2)}`} />
     <StatCard label="Paper Orders" value={paperOrders} />
-    <StatCard label="Real Orders" value={realOrders} />
+    <StatCard label="Live Orders" value={liveOrders} />
   </div>
 
   {#if $trackedStore.connected && subs.length === 0}
