@@ -23,6 +23,7 @@ type BreakPointStrategy struct {
 	states     map[string]*bpMatchState
 	emitter    OrderEmitter
 	model      *MarkovModel
+	cfg        BreakPointConfig
 	log        *slog.Logger
 	replayNow  *time.Time
 }
@@ -61,6 +62,7 @@ func NewBreakPointStrategy(emitter OrderEmitter, log *slog.Logger, cfg BreakPoin
 		states:     make(map[string]*bpMatchState),
 		emitter:    emitter,
 		model:      NewMarkovModelWithProb(cfg.PServe),
+		cfg:        cfg,
 		log:        log,
 	}
 }
@@ -110,13 +112,12 @@ func (s *BreakPointStrategy) RegisterMarkets(eventTicker string, marketTickers [
 
 func (s *BreakPointStrategy) UnregisterMarkets(eventTicker string) {
 	s.mu.Lock()
-	delete(s.markets, eventTicker)
-	delete(s.states, eventTicker)
-	// Clean prices for this event's markets
 	for _, mkt := range s.markets[eventTicker] {
 		delete(s.prices, mkt)
 		delete(s.priceTimes, mkt)
 	}
+	delete(s.markets, eventTicker)
+	delete(s.states, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -216,16 +217,15 @@ func (s *BreakPointStrategy) processBreakPoint(eventTicker string, p store.Point
 
 	edgeCents := int((fv - price) * 100)
 
-	cfg := DefaultBreakPointConfig()
-	if edgeCents < cfg.MinEdgeCents {
+	if edgeCents < s.cfg.MinEdgeCents {
 		s.log.Debug("breakpoint: edge too small",
 			"event", eventTicker, "fv", fv, "price", price, "edge", edgeCents)
 		return
 	}
-	if price < cfg.MinMarketPrice {
+	if price < s.cfg.MinMarketPrice {
 		return
 	}
-	if cfg.MaxMarketPrice > 0 && price > cfg.MaxMarketPrice {
+	if s.cfg.MaxMarketPrice > 0 && price > s.cfg.MaxMarketPrice {
 		return
 	}
 
@@ -241,7 +241,7 @@ func (s *BreakPointStrategy) processBreakPoint(eventTicker string, p store.Point
 		EdgeCents:     edgeCents,
 		SuggestedSize: size,
 		SetNumber:     p.SetNumber,
-		Strategy:      cfg.Label,
+		Strategy:      s.cfg.Label,
 	})
 
 	s.log.Debug("breakpoint signal",
