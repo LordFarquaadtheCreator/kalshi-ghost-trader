@@ -66,15 +66,21 @@ func NewMultiStrategyFromFactories(shared OrderEmitter, log *slog.Logger,
 
 func (m *MultiStrategyRuntime) OnPrice(marketTicker string, price float64) {
 	m.mu.RLock()
-	if eventTicker, ok := m.marketEvent[marketTicker]; ok {
-		if !m.matchStarted[eventTicker] {
-			m.mu.RUnlock()
-			return
-		}
+	eventTicker, hasEvent := m.marketEvent[marketTicker]
+	started := true
+	if hasEvent {
+		started = m.matchStarted[eventTicker]
 	}
 	m.mu.RUnlock()
 
 	for _, ns := range m.strategies {
+		// Gate PreMatchGated strategies until first point received —
+		// prevents premature orders from pre-match price movements.
+		// Price+time strategies (fadelongshot, nofade) are not gated;
+		// their own close_ts window prevents premature firing.
+		if _, gated := ns.Strat.(PreMatchGated); gated && hasEvent && !started {
+			continue
+		}
 		ns.Strat.OnPrice(marketTicker, price)
 	}
 }

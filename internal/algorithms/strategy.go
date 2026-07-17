@@ -51,6 +51,16 @@ type ScoreObserver interface {
 	OnPoint(eventTicker string, p store.Point)
 }
 
+// PreMatchGated marks strategies that should not receive OnPrice until
+// the match has started (first OnPoint received). Strategies with
+// price-based firing logic (breakback, setdown, server1530, tiebreak)
+// implement this to prevent premature orders from pre-match price
+// movements. Price+time strategies (fadelongshot, nofade) do NOT
+// implement this — their own close_ts gating prevents premature firing.
+type PreMatchGated interface {
+	PreMatchGated()
+}
+
 // TickWriterEmitter adapts store.TickWriter to the OrderEmitter interface.
 type TickWriterEmitter struct {
 	tw *store.TickWriter
