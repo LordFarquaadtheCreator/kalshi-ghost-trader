@@ -29,6 +29,8 @@ API-Tennis names: "S. Bejlek", "R. Zarazua"
 Kalshi titles: "Bejlek vs Zarazua"
 Last-name normalization: lowercase, strip accents, extract last token.
 
+Doubles names: "Furlanetto/Parizzia" — '/' replaced with space before extracting last name. Kalshi doubles titles: "Furlanetto / Parizzia vs Fumagalli / LIUSSO". Both sides of '/' are parsed independently.
+
 ## Gotchas
 
 - API-Tennis sends full point-by-point data on every push, not just new points.
@@ -36,3 +38,4 @@ Last-name normalization: lowercase, strip accents, extract last token.
 - Scraper implements `tracker.ScorePoller` interface.
 - `event_serve` field: "First Player" = home (server=1), "Second Player" = away (server=2).
 - No per-point timestamps from API-Tennis. Uses receive time.
+- Doubles player names use '/' separator (e.g. "Furlanetto/Parizzia"). `extractLastName` replaces '/' with space before parsing. Without this, last name extraction fails and doubles events never match.
