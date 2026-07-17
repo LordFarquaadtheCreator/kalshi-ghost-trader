@@ -107,9 +107,9 @@ type Config struct {
 	PaperBankroll      float64
 
 	// Real order config
-	RealOrderMaxContracts int
-	RealOrderTimeInForce  string
-	RealOrderTimeoutS     int
+	RealBankroll         float64
+	RealOrderTimeInForce string
+	RealOrderTimeoutS    int
 }
 
 // LoadFromDB reads all configuration from the app_config table in the SQLite DB.
@@ -256,7 +256,7 @@ func (c *Config) applyFromMap(m map[string]string) {
 	c.KellyFraction = atof(m["kelly_fraction"])
 	c.PaperBankroll = atof(m["paper_bankroll"])
 
-	c.RealOrderMaxContracts = atoi(m["real_order_max_contracts"])
+	c.RealBankroll = atof(m["real_bankroll"])
 	c.RealOrderTimeInForce = m["real_order_time_in_force"]
 	c.RealOrderTimeoutS = atoi(m["real_order_timeout_s"])
 }
@@ -355,8 +355,8 @@ func (c *Config) applyNewDefaults() {
 	if c.PaperBankroll == 0 {
 		c.PaperBankroll = 1000
 	}
-	if c.RealOrderMaxContracts == 0 {
-		c.RealOrderMaxContracts = 50
+	if c.RealBankroll == 0 {
+		c.RealBankroll = 1000
 	}
 	if c.RealOrderTimeInForce == "" {
 		c.RealOrderTimeInForce = "immediate_or_cancel"

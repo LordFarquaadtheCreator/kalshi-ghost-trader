@@ -86,7 +86,8 @@ func main() {
 	}
 	_ = config.NewConfigCache(db, cfg) // used in Phase 3 for real order pipeline
 	algorithms.SetSizingParams(cfg.PaperBankroll, cfg.KellyFraction)
-	log.Info("config loaded from DB", "env", cfg.Environment, "db", cfg.DBPath, "series_count", len(cfg.SeriesTickers), "bankroll", cfg.PaperBankroll, "kelly", cfg.KellyFraction)
+	algorithms.SetRealBankroll(cfg.RealBankroll)
+	log.Info("config loaded from DB", "env", cfg.Environment, "db", cfg.DBPath, "series_count", len(cfg.SeriesTickers), "paper_bankroll", cfg.PaperBankroll, "real_bankroll", cfg.RealBankroll, "kelly", cfg.KellyFraction)
 
 	// Load signer
 	signer, err := kalshiauth.NewSignerFromFile(cfg.APIKeyID, cfg.PrivateKeyPath)
@@ -125,11 +126,11 @@ func main() {
 	var realGuard *algorithms.QuotaGuard
 	if cfg.RealTradingEnabled {
 		log.Warn("REAL TRADING ENABLED — live orders will be submitted to Kalshi",
-			"environment", cfg.Environment, "max_contracts", cfg.RealOrderMaxContracts)
+			"environment", cfg.Environment, "bankroll", cfg.RealBankroll)
 
 		realEmitter := algorithms.NewKalshiOrderEmitter(restClient, db, algorithms.RealOrderConfig{
 			Enabled:       true,
-			MaxContracts:  cfg.RealOrderMaxContracts,
+			Bankroll:      cfg.RealBankroll,
 			Environment:   cfg.Environment,
 			TimeInForce:   cfg.RealOrderTimeInForce,
 			OrderTimeoutS: cfg.RealOrderTimeoutS,
@@ -370,6 +371,7 @@ func main() {
 		mux.HandleFunc("/api/real-orders", corsHandler(realOrdersHandler(db, log)))
 		mux.HandleFunc("/api/liquidity-pool", corsHandler(liquidityPoolHandler(db, log)))
 		mux.HandleFunc("/api/strategy-config", corsHandler(strategyConfigHandler(db, log)))
+		mux.HandleFunc("/api/trigger-ranges", corsHandler(triggerRangesHandler(db, log)))
 		mux.HandleFunc("/api/app-config", corsHandler(appConfigHandler(db, log)))
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{

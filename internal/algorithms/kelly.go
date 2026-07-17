@@ -3,21 +3,27 @@ package algorithms
 // Package-level sizing params, set from config via SetSizingParams.
 var (
 	paperBankroll  float64 = 1000
+	realBankroll   float64 = 1000
 	kellyFractionP float64 = 0.25
 )
 
-// SetSizingParams sets the global bankroll and Kelly fraction used by all strategies.
+// SetSizingParams sets the global paper bankroll and Kelly fraction used by all strategies.
 func SetSizingParams(bankroll, fraction float64) {
 	paperBankroll = bankroll
 	kellyFractionP = fraction
 }
 
-// kellySize computes order size using fractional Kelly criterion.
+// SetRealBankroll sets the bankroll used for real order Kelly sizing.
+func SetRealBankroll(bankroll float64) {
+	realBankroll = bankroll
+}
+
+// kellySizeRaw computes order size using fractional Kelly criterion without cost cap.
 // fKelly = (convProb - marketPrice) / (1 - marketPrice)
 // size = kellyFraction * fKelly * bankroll
 //
 // Returns 0 if inputs are invalid or edge is non-positive.
-func kellySize(convProb, marketPrice, bankroll, kellyFraction float64) float64 {
+func kellySizeRaw(convProb, marketPrice, bankroll, kellyFraction float64) float64 {
 	if bankroll <= 0 || kellyFraction <= 0 || marketPrice >= 1 || marketPrice <= 0 {
 		return 0
 	}
@@ -25,8 +31,15 @@ func kellySize(convProb, marketPrice, bankroll, kellyFraction float64) float64 {
 	if fKelly <= 0 {
 		return 0
 	}
-	size := kellyFraction * fKelly * bankroll
-	// cap total cost at $5 (size * price)
+	return kellyFraction * fKelly * bankroll
+}
+
+// kellySize computes order size with a $5 cost cap (paper trading safety).
+func kellySize(convProb, marketPrice, bankroll, kellyFraction float64) float64 {
+	size := kellySizeRaw(convProb, marketPrice, bankroll, kellyFraction)
+	if size <= 0 {
+		return 0
+	}
 	maxSize := 5.0 / marketPrice
 	if size > maxSize {
 		size = maxSize

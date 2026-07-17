@@ -195,7 +195,7 @@ Submits real IOC bid orders to `POST /portfolio/events/orders` (V2 endpoint).
 
 Safety:
 - IOC by default (no resting orders)
-- Hard contract cap (`MaxContracts`, default 50) — clamps oversized orders
+- Kelly sizing with real bankroll (no $5 paper cap)
 - Per-order context timeout (default 10s)
 - `taker_at_cross` self-trade prevention
 - All submissions logged with order_id, fill_count, remaining_count

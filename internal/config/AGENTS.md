@@ -30,8 +30,8 @@ DB-based configuration loading. All config read from `app_config` table in SQLit
 - `order_quota_enabled`, `order_quota_cooldown_secs`, `order_quota_max_per_sec`, `order_quota_daily_limit`
 - `order_quota_budget_total`, `order_quota_budget_floor`
 - `per_strategy_cooldown_secs`
-- `real_trading_enabled`, `kelly_fraction`, `paper_bankroll`
-- `real_order_max_contracts`, `real_order_time_in_force`, `real_order_timeout_s`
+- `real_trading_enabled`, `kelly_fraction`, `paper_bankroll`, `real_bankroll`
+- `real_order_time_in_force`, `real_order_timeout_s`
 
 ## Derived Fields
 

@@ -169,7 +169,7 @@ func buildConfigPairs(yc *yamlConfig) []store.AppConfigKV {
 		{Key: "real_trading_enabled", Value: "false"},
 		{Key: "kelly_fraction", Value: "0.25"},
 		{Key: "paper_bankroll", Value: "1000"},
-		{Key: "real_order_max_contracts", Value: "50"},
+		{Key: "real_bankroll", Value: "1000"},
 		{Key: "real_order_time_in_force", Value: "immediate_or_cancel"},
 		{Key: "real_order_timeout_s", Value: "10"},
 	}

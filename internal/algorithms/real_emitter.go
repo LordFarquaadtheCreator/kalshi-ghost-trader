@@ -14,10 +14,10 @@ import (
 // RealOrderConfig controls real order submission to Kalshi.
 type RealOrderConfig struct {
 	Enabled       bool
-	MaxContracts  int    // hard cap on contracts per order
-	Environment   string // "demo" or "prod" — logged for safety
-	TimeInForce   string // "immediate_or_cancel" or "good_till_canceled"
-	OrderTimeoutS int    // per-order HTTP timeout
+	Bankroll      float64 // Kelly bankroll for real order sizing
+	Environment   string  // "demo" or "prod" — logged for safety
+	TimeInForce   string  // "immediate_or_cancel" or "good_till_canceled"
+	OrderTimeoutS int     // per-order HTTP timeout
 }
 
 // createOrderV2Request maps to Kalshi's POST /portfolio/events/orders body.
@@ -55,8 +55,8 @@ type KalshiOrderEmitter struct {
 }
 
 func NewKalshiOrderEmitter(client *kalshiclient.Client, db *store.DB, cfg RealOrderConfig, log *slog.Logger) *KalshiOrderEmitter {
-	if cfg.MaxContracts <= 0 {
-		cfg.MaxContracts = 50
+	if cfg.Bankroll <= 0 {
+		cfg.Bankroll = 1000
 	}
 	if cfg.TimeInForce == "" {
 		cfg.TimeInForce = "immediate_or_cancel"
@@ -72,13 +72,8 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 		return false
 	}
 
-	// hard cap — never submit more than MaxContracts
-	count := o.SuggestedSize
-	if count > float64(e.cfg.MaxContracts) {
-		count = float64(e.cfg.MaxContracts)
-		e.log.Warn("real: clamped order size to max",
-			"market", o.MarketTicker, "requested", o.SuggestedSize, "clamped", count)
-	}
+	// re-size using real bankroll via Kelly (no $5 paper cap)
+	count := kellySizeRaw(o.ConvProb, o.MarketPrice, e.cfg.Bankroll, kellyFractionP)
 	if count <= 0 {
 		e.log.Warn("real: skipped zero-size order", "market", o.MarketTicker)
 		return false

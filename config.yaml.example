@@ -95,7 +95,7 @@ paper_budget_floor: 50.00      # stop paper orders when remaining drops below th
 # When false: paper only (no real orders submitted).
 # When true: IOC bid orders submitted via REST after passing real quota guard.
 real_trading_enabled: false
-real_max_contracts: 50          # hard cap on contracts per order
+real_bankroll: 1000             # Kelly bankroll for real order sizing
 real_order_timeout_secs: 10     # per-order HTTP timeout
 
 # Real trading budget (live spend tracking)
