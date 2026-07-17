@@ -145,9 +145,9 @@ Logic:
 
 Config (`ConvexPoolConfig`):
 - `PServe` — serve win probability (default 0.64)
-- `Alpha` — Markov weight in blend (default 0.30). `α=0` = pure market, `α=1` = pure Markov.
+- `Alpha` — Markov weight in blend (default 0.50). `α=0` = pure market, `α=1` = pure Markov.
 - `MinEdgeCents` — minimum blended edge (default 3)
-- `MaxMarketPrice` — max price to buy at (default 0.85)
+- `MaxMarketPrice` — max price to buy at (default 0.95)
 - `SuggestedSize` — order size (default 10)
 - `Label` — strategy label (default "convexpool")
 
