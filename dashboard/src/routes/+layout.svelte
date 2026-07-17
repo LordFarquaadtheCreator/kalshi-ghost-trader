@@ -1,5 +1,8 @@
 <script>
+	import '../app.css';
+	import '$lib/styles.css';
 	import favicon from '$lib/assets/favicon.svg';
+	import { systemStore } from '$lib/system-store.js';
 
 	let { children } = $props();
 </script>
@@ -9,9 +12,10 @@
 </svelte:head>
 
 <nav class="topnav">
-	<a href="/">Metrics</a>
 	<a href="/matches">Matches</a>
-	<a href="/strategies">Strategies</a>
+	<a href="/orders">Paper Orders</a>
+	<a href="/strategies">Simulated Outcomes</a>
+	<a href="/system">System</a>
 </nav>
 
 {@render children()}
@@ -21,17 +25,17 @@
 		display: flex;
 		gap: 16px;
 		padding: 10px 20px;
-		background: #0f172a;
-		border-bottom: 1px solid #1e293b;
+		background: var(--surface);
+		border-bottom: 1px solid var(--border);
 	}
 	.topnav a {
-		color: #64748b;
+		color: var(--text-muted);
 		text-decoration: none;
 		font-size: 13px;
 		font-weight: 600;
 		padding: 4px 0;
 	}
 	.topnav a:hover {
-		color: #e2e8f0;
+		color: var(--text);
 	}
 </style>

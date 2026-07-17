@@ -1,249 +1,79 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
-  import { browser } from '$app/environment';
+  import { createPoll } from '$lib/poll.js';
+  import { api } from '$lib/api.js';
+  import { fmtTicker, seriesFromTicker } from '$lib/utils.js';
+  import PageHeader from '$lib/components/PageHeader.svelte';
+  import StatCard from '$lib/components/StatCard.svelte';
+  import EmptyState from '$lib/components/EmptyState.svelte';
+  import { goto } from '$app/navigation';
 
-  const API_URL = 'http://127.0.0.1:6060';
-  const POLL_MS = 2000;
+  const trackedStore = createPoll(() => api.getTracked(), 2000, { data: null, error: null, connected: false });
+  const countsStore = createPoll(() => api.getOrderCounts(), 5000, { data: null, error: null, connected: false });
 
-  /** @type {{market_ticker: string, event_ticker: string}[]}} */
-  let subs = $state([]);
-  let eventCount = $state(0);
-  let marketCount = $state(0);
-  let connected = $state(false);
-  let error = $state('');
-  /** @type {ReturnType<typeof setInterval> | null} */
-  let timer = null;
+  let subs = $derived($trackedStore.data?.subs || []);
+  let eventCount = $derived($trackedStore.data?.event_count || 0);
+  let marketCount = $derived($trackedStore.data?.market_count || 0);
+  /** @type {Record<string, number>} */
+  let orderCounts = $derived($countsStore.data?.counts || {});
 
-  async function poll() {
-    try {
-      const res = await fetch(`${API_URL}/api/tracked`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      subs = data.subs || [];
-      eventCount = data.event_count || 0;
-      marketCount = data.market_count || 0;
-      connected = true;
-      error = '';
-    } catch (err) {
-      connected = false;
-      error = err instanceof Error ? err.message : String(err);
-    }
+  const columns = [
+    { key: 'event_ticker', label: 'Event Ticker', class: 'mono' },
+    { key: 'match', label: 'Match' },
+    { key: 'series', label: 'Series', class: 'series' },
+    { key: 'market_ticker', label: 'Market Ticker', class: 'mono' },
+    { key: 'sim_orders', label: 'Sim Orders', align: 'right' },
+    { key: 'real_orders', label: 'Real Orders', align: 'right', class: 'num muted' },
+  ];
+
+  let rows = $derived(subs.map((/** @type {any} */ s) => ({
+    ...s,
+    match: fmtTicker(s.event_ticker),
+    series: seriesFromTicker(s.event_ticker),
+    sim_orders: orderCounts[s.event_ticker] || 0,
+    real_orders: 0,
+  })));
+
+  function handleRowClick(/** @type {any} */ row) {
+    goto(`/matches/${encodeURIComponent(row.event_ticker)}`);
   }
-
-  /** @param {string} t */
-  function fmtTicker(t) {
-    if (!t) return '';
-    const parts = t.split('-');
-    if (parts.length <= 1) return t;
-    return parts.slice(1).join(' vs ');
-  }
-
-  /** @param {string} t */
-  function seriesFromTicker(t) {
-    if (!t) return '';
-    const idx = t.indexOf('-');
-    return idx > 0 ? t.substring(0, idx) : '';
-  }
-
-  onMount(() => {
-    if (browser) {
-      poll();
-      timer = setInterval(poll, POLL_MS);
-    }
-  });
-
-  onDestroy(() => {
-    if (timer) clearInterval(timer);
-  });
 </script>
 
 <svelte:head>
   <title>Tracked Matches — Ghost Trader</title>
 </svelte:head>
 
-<div class="matches">
-  <header>
-    <h1>Tracked Matches</h1>
-    <div class="status">
-      {#if connected}
-        <span class="badge ok">Connected</span>
-      {:else}
-        <span class="badge err">Disconnected</span>
-      {/if}
-      {#if error}
-        <span class="error">{error}</span>
-      {/if}
-    </div>
-  </header>
+<div class="page-container">
+  <PageHeader title="Tracked Matches" connected={$trackedStore.connected} error={$trackedStore.error || ''} />
 
-  <div class="summary">
-    <div class="stat-card">
-      <div class="stat-label">Events</div>
-      <div class="stat-value">{eventCount}</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Markets</div>
-      <div class="stat-value">{marketCount}</div>
-    </div>
+  <div class="stats-grid">
+    <StatCard label="Events" value={eventCount} />
+    <StatCard label="Markets" value={marketCount} />
   </div>
 
-  {#if connected && subs.length === 0}
-    <div class="empty">No matches currently tracked.</div>
-  {:else if !connected}
-    <div class="empty">Cannot reach ghost-trader on :6060. Is it running?</div>
+  {#if $trackedStore.connected && subs.length === 0}
+    <EmptyState text="No matches currently tracked." />
+  {:else if !$trackedStore.connected}
+    <EmptyState text="Cannot reach ghost-trader on :6060. Is it running?" variant="error" />
   {:else}
-    <table>
-      <thead>
-        <tr>
-          <th>Event Ticker</th>
-          <th>Match</th>
-          <th>Series</th>
-          <th>Market Ticker</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each subs as sub}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
           <tr>
-            <td class="mono">{sub.event_ticker}</td>
-            <td>{fmtTicker(sub.event_ticker)}</td>
-            <td class="series">{seriesFromTicker(sub.event_ticker)}</td>
-            <td class="mono">{sub.market_ticker}</td>
+            {#each columns as col}
+              <th class={col.align === 'right' ? 'num' : ''}>{col.label}</th>
+            {/each}
           </tr>
-        {/each}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {#each rows as row}
+            <tr class="clickable" onclick={() => handleRowClick(row)}>
+              {#each columns as col}
+                <td class={col.class || (col.align === 'right' ? 'num' : '')}>{row[col.key]}</td>
+              {/each}
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
   {/if}
 </div>
-
-<style>
-  .matches {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 20px;
-  }
-
-  header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-  }
-
-  h1 {
-    font-size: 22px;
-    font-weight: 700;
-    margin: 0;
-    color: #f1f5f9;
-  }
-
-  .status {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .badge {
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  .badge.ok {
-    background: #064e3b;
-    color: #34d399;
-  }
-
-  .badge.err {
-    background: #450a0a;
-    color: #f87171;
-  }
-
-  .error {
-    font-size: 12px;
-    color: #f87171;
-  }
-
-  .summary {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-    gap: 10px;
-    margin-bottom: 20px;
-  }
-
-  .stat-card {
-    background: #0f172a;
-    border: 1px solid #1e293b;
-    border-radius: 8px;
-    padding: 12px;
-  }
-
-  .stat-label {
-    font-size: 11px;
-    color: #64748b;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .stat-value {
-    font-size: 20px;
-    font-weight: 700;
-    color: #f1f5f9;
-    margin-top: 4px;
-  }
-
-  .empty {
-    background: #0f172a;
-    border: 1px solid #1e293b;
-    border-radius: 8px;
-    padding: 40px;
-    text-align: center;
-    color: #64748b;
-    font-size: 14px;
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    background: #0f172a;
-    border: 1px solid #1e293b;
-    border-radius: 8px;
-    overflow: hidden;
-  }
-
-  thead {
-    background: #1e293b;
-  }
-
-  th {
-    text-align: left;
-    padding: 10px 14px;
-    font-size: 11px;
-    color: #94a3b8;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-weight: 600;
-  }
-
-  td {
-    padding: 10px 14px;
-    font-size: 13px;
-    color: #e2e8f0;
-    border-top: 1px solid #1e293b;
-  }
-
-  .mono {
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    font-size: 12px;
-    color: #94a3b8;
-  }
-
-  .series {
-    color: #60a5fa;
-    font-size: 12px;
-  }
-
-  tbody tr:hover {
-    background: #1e293b;
-  }
-</style>

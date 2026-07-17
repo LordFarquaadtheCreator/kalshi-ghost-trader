@@ -16,5 +16,16 @@ export default defineConfig({
 			// See https://svelte.dev/docs/kit/adapters for more information about adapters.
 			adapter: adapter()
 		})
-	]
+	],
+	build: {
+		target: 'es2022',
+		cssMinify: true,
+		rollupOptions: {
+			output: {
+				manualChunks: (id) => {
+					if (id.includes('node_modules/chart.js')) return 'chart.js';
+				},
+			},
+		},
+	},
 });
