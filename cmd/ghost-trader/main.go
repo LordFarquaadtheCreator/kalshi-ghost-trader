@@ -200,6 +200,7 @@ func main() {
 			return algorithms.NewConvexPoolStrategy(e, log, algorithms.DefaultConvexPoolConfig())
 		},
 	})
+	multi.SetDB(db)
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())
 
 	// Close timer strategy (buy favorite N min before close)

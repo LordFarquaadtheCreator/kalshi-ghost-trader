@@ -1,9 +1,11 @@
 package algorithms
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
@@ -33,10 +35,13 @@ type StrategyFactoryFn func(emitter OrderEmitter) Strategy
 // the strategy name before forwarding to the shared emitter.
 // Implements Strategy and ws.PriceUpdater.
 type MultiStrategyRuntime struct {
-	mu         sync.RWMutex
-	strategies []NamedStrategy
-	shared     OrderEmitter
-	log        *slog.Logger
+	mu           sync.RWMutex
+	strategies   []NamedStrategy
+	shared       OrderEmitter
+	log          *slog.Logger
+	db           *store.DB
+	occurrenceTS map[string]int64  // event_ticker → match start time (ms)
+	marketEvent  map[string]string // market_ticker → event_ticker
 }
 
 // NewMultiStrategyFromFactories creates strategies from factory functions.
@@ -45,8 +50,10 @@ type MultiStrategyRuntime struct {
 func NewMultiStrategyFromFactories(shared OrderEmitter, log *slog.Logger,
 	factories map[string]StrategyFactoryFn) *MultiStrategyRuntime {
 	runtime := &MultiStrategyRuntime{
-		shared: shared,
-		log:    log,
+		shared:       shared,
+		log:          log,
+		occurrenceTS: make(map[string]int64),
+		marketEvent:  make(map[string]string),
 	}
 	for name, factory := range factories {
 		te := &tagEmitter{inner: shared, strategy: name}
@@ -57,24 +64,63 @@ func NewMultiStrategyFromFactories(shared OrderEmitter, log *slog.Logger,
 }
 
 func (m *MultiStrategyRuntime) OnPrice(marketTicker string, price float64) {
+	m.mu.RLock()
+	if eventTicker, ok := m.marketEvent[marketTicker]; ok {
+		if occTS, has := m.occurrenceTS[eventTicker]; has && time.Now().UnixMilli() < occTS {
+			m.mu.RUnlock()
+			return
+		}
+	}
+	m.mu.RUnlock()
+
 	for _, ns := range m.strategies {
 		ns.Strat.OnPrice(marketTicker, price)
 	}
 }
 
 func (m *MultiStrategyRuntime) RegisterMarkets(eventTicker string, marketTickers []string) {
+	m.mu.Lock()
+	for _, mkt := range marketTickers {
+		m.marketEvent[mkt] = eventTicker
+	}
+	if m.db != nil {
+		mkts, err := m.db.GetMarketsByEvent(context.Background(), eventTicker)
+		if err == nil {
+			for _, mk := range mkts {
+				if mk.OccurrenceTS > 0 {
+					m.occurrenceTS[eventTicker] = mk.OccurrenceTS
+					break
+				}
+			}
+		}
+	}
+	m.mu.Unlock()
+
 	for _, ns := range m.strategies {
 		ns.Strat.RegisterMarkets(eventTicker, marketTickers)
 	}
 }
 
 func (m *MultiStrategyRuntime) UnregisterMarkets(eventTicker string) {
+	m.mu.Lock()
+	delete(m.occurrenceTS, eventTicker)
+	for mkt, ev := range m.marketEvent {
+		if ev == eventTicker {
+			delete(m.marketEvent, mkt)
+		}
+	}
+	m.mu.Unlock()
+
 	for _, ns := range m.strategies {
 		ns.Strat.UnregisterMarkets(eventTicker)
 	}
 }
 
 func (m *MultiStrategyRuntime) DeletePrice(marketTicker string) {
+	m.mu.Lock()
+	delete(m.marketEvent, marketTicker)
+	m.mu.Unlock()
+
 	for _, ns := range m.strategies {
 		ns.Strat.DeletePrice(marketTicker)
 	}
@@ -87,6 +133,14 @@ func (m *MultiStrategyRuntime) OnPoint(eventTicker string, p store.Point) {
 			obs.OnPoint(eventTicker, p)
 		}
 	}
+}
+
+// SetDB enables pre-match order gating. When set, OnPrice calls are dropped
+// for markets whose occurrence_ts hasn't been reached yet.
+func (m *MultiStrategyRuntime) SetDB(db *store.DB) {
+	m.mu.Lock()
+	m.db = db
+	m.mu.Unlock()
 }
 
 func (m *MultiStrategyRuntime) String() string {

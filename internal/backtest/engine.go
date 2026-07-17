@@ -137,6 +137,77 @@ func (e *Engine) EventTitle(eventTicker string) string {
 	return e.eventTitles[eventTicker]
 }
 
+// LiveScore is the latest point-by-point score for a tracked match.
+type LiveScore struct {
+	EventTicker  string `json:"event_ticker"`
+	SetNumber    int    `json:"set_number"`
+	GameNumber   int    `json:"game_number"`
+	PointNumber  int    `json:"point_number"`
+	Server       int    `json:"server"`
+	HomePoints   string `json:"home_points"`
+	AwayPoints   string `json:"away_points"`
+	HomeGames    int    `json:"home_games"`
+	AwayGames    int    `json:"away_games"`
+	HomeSetGames int    `json:"home_set_games"`
+	AwaySetGames int    `json:"away_set_games"`
+	IsTiebreak   bool   `json:"is_tiebreak"`
+	IsBreakPoint bool   `json:"is_break_point"`
+	IsSetPoint   bool   `json:"is_set_point"`
+	IsMatchPoint bool   `json:"is_match_point"`
+}
+
+// LatestScores returns the most recent point for each given event ticker.
+func (e *Engine) LatestScores(ctx context.Context, eventTickers []string) (map[string]*LiveScore, error) {
+	if len(eventTickers) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(eventTickers))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(eventTickers))
+	for i, t := range eventTickers {
+		args[i] = t
+	}
+	query := fmt.Sprintf(`
+		SELECT match_ticker, set_number, game_number, point_number,
+		       server, home_points, away_points,
+		       home_games, away_games,
+		       COALESCE(home_set_games, 0), COALESCE(away_set_games, 0),
+		       is_tiebreak, is_break_point, is_set_point, is_match_point
+		FROM (
+			SELECT *, ROW_NUMBER() OVER (
+				PARTITION BY match_ticker
+				ORDER BY ts_ms DESC, set_number DESC, game_number DESC, point_number DESC
+			) as rn
+			FROM points
+			WHERE match_ticker IN (%s)
+		) WHERE rn = 1
+	`, placeholders)
+	rows, err := e.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("latest scores: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]*LiveScore, len(eventTickers))
+	for rows.Next() {
+		var s LiveScore
+		var isTB, isBP, isSP, isMP int
+		if err := rows.Scan(
+			&s.EventTicker, &s.SetNumber, &s.GameNumber, &s.PointNumber,
+			&s.Server, &s.HomePoints, &s.AwayPoints,
+			&s.HomeGames, &s.AwayGames, &s.HomeSetGames, &s.AwaySetGames,
+			&isTB, &isBP, &isSP, &isMP,
+		); err != nil {
+			return nil, fmt.Errorf("scan live score: %w", err)
+		}
+		s.IsTiebreak = isTB != 0
+		s.IsBreakPoint = isBP != 0
+		s.IsSetPoint = isSP != 0
+		s.IsMatchPoint = isMP != 0
+		out[s.EventTicker] = &s
+	}
+	return out, rows.Err()
+}
+
 // MarketTick is a single price point for a market, returned by GetEventTickPrices.
 type MarketTick struct {
 	TS    int64   `json:"ts"`
