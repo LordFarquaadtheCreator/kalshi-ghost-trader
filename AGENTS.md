@@ -137,3 +137,9 @@ Must implement `replayStrategy` (Strategy + `SetReplayTime` + `OnPriceAt`).
 go build ./...   # compiles
 go vet ./...     # no issues
 ```
+
+## Simulated Trades
+
+Simulated trades **always** run all strategies. No strategy skipping, filtering, or conditional activation.
+Every strategy registered in the system participates in every match — no exceptions.
+This ensures complete paper-trail data for comparison and backtesting.
