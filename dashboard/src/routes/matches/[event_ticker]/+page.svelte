@@ -7,6 +7,7 @@
   import { fmtTime } from '$lib/utils.js';
   import PageHeader from '$lib/components/PageHeader.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
 
   const POLL_MS = 3000;
 
@@ -55,80 +56,150 @@
     }));
 
     if (data.orders && data.orders.length > 0) {
-      for (let i = 0; i < data.markets.length; i++) {
-        const m = data.markets[i];
-        const orders = data.orders.filter((o) => o.market_ticker === m.market_ticker);
-        if (orders.length > 0) {
-          datasets.push(/** @type {any} */ ({
-            label: `Orders: ${m.player_name || m.market_ticker}`,
-            data: orders.map((o) => ({ x: o.ts, y: o.market_price })),
-            borderColor: '#fbbf24',
-            backgroundColor: '#fbbf24',
-            showLine: false,
-            pointRadius: 6,
-            pointHoverRadius: 8,
-            pointStyle: 'triangle',
-            pointBorderColor: '#f59e0b',
-            pointBorderWidth: 1.5,
-          }));
-        }
-      }
-    }
+      const orderTimes = data.orders.map((o) => o.ts);
 
-    chart = new Chart(canvas, {
-      type: 'line',
-      data: { datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        plugins: {
-          legend: { labels: { color: '#94a3b8', font: { size: 12 } } },
-          tooltip: {
-            mode: 'index',
-            intersect: false,
-            callbacks: {
-              label: (/** @type {any} */ ctx) => {
-                const raw = /** @type {{x: number, y: number}} */ (ctx.raw);
-                if (raw && typeof raw === 'object' && 'y' in raw) {
-                  return `${ctx.dataset.label}: ${(raw.y * 100).toFixed(1)}c`;
-                }
-                return `${ctx.dataset.label}: ${ctx.raw}`;
+      const allOrderLines = {
+        id: 'orderLines',
+        afterDatasetsDraw(/** @type {any} */ chart) {
+          const { ctx, chartArea, scales } = chart;
+          if (!chartArea) return;
+          ctx.save();
+          ctx.strokeStyle = '#fb923c';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 3]);
+          for (const t of orderTimes) {
+            const x = scales.x.getPixelForValue(t);
+            if (x >= chartArea.left && x <= chartArea.right) {
+              ctx.beginPath();
+              ctx.moveTo(x, chartArea.top);
+              ctx.lineTo(x, chartArea.bottom);
+              ctx.stroke();
+            }
+          }
+          ctx.restore();
+        },
+      };
+
+      // placeholder dataset so plugin has access — invisible point at each order
+      datasets.push(/** @type {any} */ ({
+        label: 'Orders',
+        data: orderTimes.map((t) => ({ x: t, y: null })),
+        showLine: false,
+        pointRadius: 0,
+        orderLines: true,
+      }));
+
+      chart = new Chart(canvas, {
+        type: 'line',
+        data: { datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          plugins: {
+            legend: { labels: { color: '#94a3b8', font: { size: 12 } } },
+            tooltip: {
+              mode: 'index',
+              intersect: false,
+              callbacks: {
+                label: (/** @type {any} */ ctx) => {
+                  const raw = /** @type {{x: number, y: number}} */ (ctx.raw);
+                  if (raw && typeof raw === 'object' && 'y' in raw && raw.y !== null) {
+                    return `${ctx.dataset.label}: ${(raw.y * 100).toFixed(1)}c`;
+                  }
+                  return null;
+                },
               },
+            },
+          },
+          scales: {
+            x: {
+              type: 'linear',
+              ticks: {
+                color: '#64748b',
+                font: { size: 10 },
+                callback: (/** @type {number} */ v) => {
+                  const d = new Date(v);
+                  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                },
+              },
+              grid: { color: '#1e293b' },
+              title: { display: true, text: 'Time', color: '#64748b' },
+            },
+            y: {
+              min: 0,
+              max: 1,
+              ticks: {
+                color: '#64748b',
+                font: { size: 10 },
+                callback: (/** @type {number} */ v) => {
+                  const val = Number(v);
+                  return val.toFixed(2);
+                },
+              },
+              grid: { color: '#1e293b' },
+              title: { display: true, text: 'Price (cents)', color: '#64748b' },
             },
           },
         },
-        scales: {
-          x: {
-            type: 'linear',
-            ticks: {
-              color: '#64748b',
-              font: { size: 10 },
-              callback: (/** @type {number} */ v) => {
-                const d = new Date(v);
-                return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        plugins: [allOrderLines],
+      });
+    } else {
+      chart = new Chart(canvas, {
+        type: 'line',
+        data: { datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          plugins: {
+            legend: { labels: { color: '#94a3b8', font: { size: 12 } } },
+            tooltip: {
+              mode: 'index',
+              intersect: false,
+              callbacks: {
+                label: (/** @type {any} */ ctx) => {
+                  const raw = /** @type {{x: number, y: number}} */ (ctx.raw);
+                  if (raw && typeof raw === 'object' && 'y' in raw) {
+                    return `${ctx.dataset.label}: ${(raw.y * 100).toFixed(1)}c`;
+                  }
+                  return `${ctx.dataset.label}: ${ctx.raw}`;
+                },
               },
             },
-            grid: { color: '#1e293b' },
-            title: { display: true, text: 'Time', color: '#64748b' },
           },
-          y: {
-            min: 0,
-            max: 1,
-            ticks: {
-              color: '#64748b',
-              font: { size: 10 },
-              callback: (/** @type {number} */ v) => {
-                const val = Number(v);
-                return val.toFixed(2);
+          scales: {
+            x: {
+              type: 'linear',
+              ticks: {
+                color: '#64748b',
+                font: { size: 10 },
+                callback: (/** @type {number} */ v) => {
+                  const d = new Date(v);
+                  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                },
               },
+              grid: { color: '#1e293b' },
+              title: { display: true, text: 'Time', color: '#64748b' },
             },
-            grid: { color: '#1e293b' },
-            title: { display: true, text: 'Price (cents)', color: '#64748b' },
+            y: {
+              min: 0,
+              max: 1,
+              ticks: {
+                color: '#64748b',
+                font: { size: 10 },
+                callback: (/** @type {number} */ v) => {
+                  const val = Number(v);
+                  return val.toFixed(2);
+                },
+              },
+              grid: { color: '#1e293b' },
+              title: { display: true, text: 'Price (cents)', color: '#64748b' },
+            },
           },
         },
-      },
-    });
+      });
+    }
   }
 
   onMount(() => {
@@ -182,8 +253,7 @@
     </div>
 
     {#if data.orders && data.orders.length > 0}
-      <div class="orders-section">
-        <h2>Simulated Orders ({data.orders.length})</h2>
+      <CollapsibleSection title="Simulated Orders" count={data.orders.length}>
         <div class="table-wrap">
           <table class="data-table">
             <thead>
@@ -212,13 +282,12 @@
             </tbody>
           </table>
         </div>
-      </div>
+      </CollapsibleSection>
     {/if}
 
-    <div class="orders-section">
-      <h2>Real Orders (0)</h2>
+    <CollapsibleSection title="Real Orders" count={0} defaultOpen={false}>
       <EmptyState text="No real orders yet." />
-    </div>
+    </CollapsibleSection>
   {/if}
 </div>
 
@@ -231,6 +300,4 @@
   .market-ticker { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
   .market-stats { display: flex; gap: 12px; margin-top: 8px; }
   .market-stats .stat { font-size: 12px; color: #94a3b8; background: var(--surface-hover); padding: 3px 8px; border-radius: var(--radius-xs); }
-  .orders-section { margin-top: 20px; }
-  .orders-section h2 { font-size: 16px; font-weight: 600; color: var(--text-bright); margin: 0 0 10px; }
 </style>

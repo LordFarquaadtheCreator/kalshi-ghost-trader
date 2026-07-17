@@ -2,9 +2,12 @@
   import { createPoll } from '$lib/poll.js';
   import { api } from '$lib/api.js';
   import { fmtTime, fmtTicker, seriesFromTicker, fmtPnL, fmtPct } from '$lib/utils.js';
+  import { setupChart } from '$lib/chart-init.js';
+  import { browser } from '$app/environment';
   import PageHeader from '$lib/components/PageHeader.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
 
   const store = createPoll(() => api.getOrders(), 5000, { data: null, error: null, connected: false });
 
@@ -50,6 +53,168 @@
   let strategies = $derived.by(() => {
     if (!data || !data.orders) return [];
     return [...new Set(data.orders.map((/** @type {any} */ o) => o.strategy))].sort();
+  });
+
+  // Chart refs
+  /** @type {HTMLCanvasElement | null} */ let pnlCanvas = $state(null);
+  /** @type {HTMLCanvasElement | null} */ let stratPnlCanvas = $state(null);
+  /** @type {HTMLCanvasElement | null} */ let winlossCanvas = $state(null);
+  /** @type {HTMLCanvasElement | null} */ let priceDistCanvas = $state(null);
+  /** @type {any} */ let pnlChart = null;
+  /** @type {any} */ let stratPnlChart = null;
+  /** @type {any} */ let winlossChart = null;
+  /** @type {any} */ let priceDistChart = null;
+
+  const chartColors = ['#60a5fa', '#a78bfa', '#34d399', '#fbbf24', '#f472b0', '#f87171', '#22d3ee', '#c084fc'];
+
+  $effect(() => {
+    if (!browser || !pnlCanvas || settledOrders.length === 0) return;
+    (async () => {
+      const Chart = await setupChart();
+      if (!Chart) return;
+      if (pnlChart) pnlChart.destroy();
+
+      const sorted = [...settledOrders].sort((a, b) => a.ts - b.ts);
+      let cum = 0;
+      const cumData = sorted.map((o) => { cum += o.pnl; return Math.round(cum * 100) / 100; });
+
+      pnlChart = new Chart(pnlCanvas, {
+        type: 'line',
+        data: {
+          labels: sorted.map((_, i) => i + 1),
+          datasets: [{
+            label: 'Cumulative P&L',
+            data: cumData,
+            borderColor: '#60a5fa',
+            backgroundColor: '#60a5fa20',
+            borderWidth: 2, pointRadius: 0, tension: 0.2, fill: true,
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
+          scales: {
+            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' }, title: { display: true, text: 'Order #', color: '#64748b' } },
+            y: { ticks: { color: '#64748b', font: { size: 10 }, callback: (/** @type {number} */ v) => '$' + v }, grid: { color: '#1e293b' }, title: { display: true, text: 'P&L ($)', color: '#64748b' } },
+          },
+        },
+      });
+    })();
+  });
+
+  $effect(() => {
+    if (!browser || !stratPnlCanvas || filteredOrders.length === 0) return;
+    (async () => {
+      const Chart = await setupChart();
+      if (!Chart) return;
+      if (stratPnlChart) stratPnlChart.destroy();
+
+      /** @type {Record<string, number>} */
+      const byStrat = {};
+      for (const o of filteredOrders) {
+        if (!o.result) continue;
+        byStrat[o.strategy] = (byStrat[o.strategy] || 0) + o.pnl;
+      }
+      const labels = Object.keys(byStrat);
+      const values = labels.map((k) => Math.round(byStrat[k] * 100) / 100);
+
+      stratPnlChart = new Chart(stratPnlCanvas, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Net P&L',
+            data: values,
+            backgroundColor: values.map((v) => v >= 0 ? '#34d39980' : '#f8717180'),
+            borderColor: values.map((v) => v >= 0 ? '#34d399' : '#f87171'),
+            borderWidth: 1,
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' } },
+            y: { ticks: { color: '#64748b', font: { size: 10 }, callback: (/** @type {number} */ v) => '$' + v }, grid: { color: '#1e293b' } },
+          },
+        },
+      });
+    })();
+  });
+
+  $effect(() => {
+    if (!browser || !winlossCanvas || filteredOrders.length === 0) return;
+    (async () => {
+      const Chart = await setupChart();
+      if (!Chart) return;
+      if (winlossChart) winlossChart.destroy();
+
+      /** @type {Record<string, {wins: number, losses: number}>} */
+      const byStrat = {};
+      for (const o of filteredOrders) {
+        if (!o.result) continue;
+        if (!byStrat[o.strategy]) byStrat[o.strategy] = { wins: 0, losses: 0 };
+        if (o.won) byStrat[o.strategy].wins++;
+        else byStrat[o.strategy].losses++;
+      }
+      const labels = Object.keys(byStrat);
+
+      winlossChart = new Chart(winlossCanvas, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Wins', data: labels.map((k) => byStrat[k].wins), backgroundColor: '#34d399' },
+            { label: 'Losses', data: labels.map((k) => byStrat[k].losses), backgroundColor: '#f87171' },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
+          scales: {
+            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' } },
+            y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' }, beginAtZero: true },
+          },
+        },
+      });
+    })();
+  });
+
+  $effect(() => {
+    if (!browser || !priceDistCanvas || filteredOrders.length === 0) return;
+    (async () => {
+      const Chart = await setupChart();
+      if (!Chart) return;
+      if (priceDistChart) priceDistChart.destroy();
+
+      const bins = new Array(10).fill(0);
+      for (const o of filteredOrders) {
+        const idx = Math.min(Math.floor(o.market_price * 10), 9);
+        bins[idx]++;
+      }
+
+      priceDistChart = new Chart(priceDistCanvas, {
+        type: 'bar',
+        data: {
+          labels: Array.from({ length: 10 }, (_, i) => `${i * 10}-${(i + 1) * 10}c`),
+          datasets: [{
+            label: 'Orders',
+            data: bins,
+            backgroundColor: '#60a5fa80',
+            borderColor: '#60a5fa',
+            borderWidth: 1,
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' }, title: { display: true, text: 'Entry Price', color: '#64748b' } },
+            y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' }, beginAtZero: true },
+          },
+        },
+      });
+    })();
   });
 </script>
 
@@ -128,86 +293,111 @@
       <span class="filter-count">{filteredOrders.length} shown ({settledOrders.length} settled, {pendingOrders.length} pending)</span>
     </div>
 
+    {#if filteredOrders.length > 0}
+      <CollapsibleSection title="Analysis" count={filteredOrders.length}>
+        <div class="chart-grid">
+          <div class="chart-card">
+            <h3>Cumulative P&L</h3>
+            <div class="chart-container"><canvas bind:this={pnlCanvas}></canvas></div>
+          </div>
+          <div class="chart-card">
+            <h3>P&L by Strategy</h3>
+            <div class="chart-container"><canvas bind:this={stratPnlCanvas}></canvas></div>
+          </div>
+          <div class="chart-card">
+            <h3>Win / Loss by Strategy</h3>
+            <div class="chart-container"><canvas bind:this={winlossCanvas}></canvas></div>
+          </div>
+          <div class="chart-card">
+            <h3>Entry Price Distribution</h3>
+            <div class="chart-container"><canvas bind:this={priceDistCanvas}></canvas></div>
+          </div>
+        </div>
+      </CollapsibleSection>
+    {/if}
+
     {#if pendingOrders.length > 0}
-      <h2 class="section-title">Open Positions — {pendingOrders.length}</h2>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Match</th>
-              <th>Series</th>
-              <th>Player</th>
-              <th>Context</th>
-              <th>Strategy</th>
-              <th>Price</th>
-              <th>Edge</th>
-              <th>Size</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each pendingOrders as o}
-              <tr class="row-pending">
-                <td class="mono">{fmtTime(o.ts)}</td>
-                <td>{fmtTicker(o.match_ticker)}</td>
-                <td class="series">{seriesFromTicker(o.match_ticker)}</td>
-                <td>{o.player_name || o.market_ticker}</td>
-                <td>{o.context}</td>
-                <td>{o.strategy}</td>
-                <td>{(o.market_price * 100).toFixed(0)}c</td>
-                <td>{o.edge_cents}c</td>
-                <td>{o.suggested_size}</td>
-                <td><Badge variant="pending" text="PENDING" /></td>
+      <CollapsibleSection title="Open Positions" count={pendingOrders.length}>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Match</th>
+                <th>Series</th>
+                <th>Player</th>
+                <th>Context</th>
+                <th>Strategy</th>
+                <th>Price</th>
+                <th>Edge</th>
+                <th>Size</th>
+                <th>Status</th>
               </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {#each pendingOrders as o}
+                <tr class="row-pending">
+                  <td class="mono">{fmtTime(o.ts)}</td>
+                  <td>{fmtTicker(o.match_ticker)}</td>
+                  <td class="series">{seriesFromTicker(o.match_ticker)}</td>
+                  <td>{o.player_name || o.market_ticker}</td>
+                  <td>{o.context}</td>
+                  <td>{o.strategy}</td>
+                  <td>{(o.market_price * 100).toFixed(0)}c</td>
+                  <td>{o.edge_cents}c</td>
+                  <td>{o.suggested_size}</td>
+                  <td><Badge variant="pending" text="PENDING" /></td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </CollapsibleSection>
     {/if}
 
     {#if settledOrders.length > 0}
-      <h2 class="section-title">Settled Trades — {settledOrders.length}</h2>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Match</th>
-              <th>Series</th>
-              <th>Player</th>
-              <th>Context</th>
-              <th>Strategy</th>
-              <th>Price</th>
-              <th>Edge</th>
-              <th>Size</th>
-              <th>Result</th>
-              <th>P&L</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each settledOrders as o}
-              <tr class={o.won ? 'row-win' : 'row-loss'}>
-                <td class="mono">{fmtTime(o.ts)}</td>
-                <td>{fmtTicker(o.match_ticker)}</td>
-                <td class="series">{seriesFromTicker(o.match_ticker)}</td>
-                <td>{o.player_name || o.market_ticker}</td>
-                <td>{o.context}</td>
-                <td>{o.strategy}</td>
-                <td>{(o.market_price * 100).toFixed(0)}c</td>
-                <td>{o.edge_cents}c</td>
-                <td>{o.suggested_size}</td>
-                <td>
-                  <Badge variant={o.won ? 'ok' : 'err'} text={o.won ? 'WON' : 'LOST'} />
-                </td>
-                <td class={o.pnl >= 0 ? 'pnl-win' : 'pnl-loss'}>
-                  {fmtPnL(o.pnl)}
-                </td>
+      <CollapsibleSection title="Settled Trades" count={settledOrders.length}>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Match</th>
+                <th>Series</th>
+                <th>Player</th>
+                <th>Context</th>
+                <th>Strategy</th>
+                <th>Price</th>
+                <th>Edge</th>
+                <th>Size</th>
+                <th>Result</th>
+                <th>P&L</th>
               </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {#each settledOrders as o}
+                <tr class={o.won ? 'row-win' : 'row-loss'}>
+                  <td class="mono">{fmtTime(o.ts)}</td>
+                  <td>{fmtTicker(o.match_ticker)}</td>
+                  <td class="series">{seriesFromTicker(o.match_ticker)}</td>
+                  <td>{o.player_name || o.market_ticker}</td>
+                  <td>{o.context}</td>
+                  <td>{o.strategy}</td>
+                  <td>{(o.market_price * 100).toFixed(0)}c</td>
+                  <td>{o.edge_cents}c</td>
+                  <td>{o.suggested_size}</td>
+                  <td>
+                    <Badge variant={o.won ? 'ok' : 'err'} text={o.won ? 'WON' : 'LOST'} />
+                  </td>
+                  <td class={o.pnl >= 0 ? 'pnl-win' : 'pnl-loss'}>
+                    {fmtPnL(o.pnl)}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </CollapsibleSection>
     {/if}
 
     {#if pendingOrders.length === 0 && settledOrders.length === 0}
@@ -217,5 +407,9 @@
 </div>
 
 <style>
-  .section-title { font-size: 16px; font-weight: 600; color: var(--text-bright); margin: 20px 0 10px; }
+  .filter-count { font-size: 12px; color: var(--text-muted); }
+  .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+  .chart-card h3 { font-size: 13px; font-weight: 600; color: var(--text-bright); margin: 0 0 10px; }
+  .chart-container { height: 240px; position: relative; }
 </style>

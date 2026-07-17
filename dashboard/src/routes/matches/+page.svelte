@@ -5,6 +5,7 @@
   import PageHeader from '$lib/components/PageHeader.svelte';
   import StatCard from '$lib/components/StatCard.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
   import { goto } from '$app/navigation';
 
   const trackedStore = createPoll(() => api.getTracked(), 2000, { data: null, error: null, connected: false });
@@ -55,25 +56,27 @@
   {:else if !$trackedStore.connected}
     <EmptyState text="Cannot reach ghost-trader on :6060. Is it running?" variant="error" />
   {:else}
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr>
-            {#each columns as col}
-              <th class={col.align === 'right' ? 'num' : ''}>{col.label}</th>
-            {/each}
-          </tr>
-        </thead>
-        <tbody>
-          {#each rows as row}
-            <tr class="clickable" onclick={() => handleRowClick(row)}>
+    <CollapsibleSection title="Tracked Markets" count={subs.length}>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
               {#each columns as col}
-                <td class={col.class || (col.align === 'right' ? 'num' : '')}>{row[col.key]}</td>
+                <th class={col.align === 'right' ? 'num' : ''}>{col.label}</th>
               {/each}
             </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {#each rows as row}
+              <tr class="clickable" onclick={() => handleRowClick(row)}>
+                {#each columns as col}
+                  <td class={col.class || (col.align === 'right' ? 'num' : '')}>{row[col.key]}</td>
+                {/each}
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </CollapsibleSection>
   {/if}
 </div>

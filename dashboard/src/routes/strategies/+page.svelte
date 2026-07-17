@@ -6,6 +6,7 @@
   import PageHeader from '$lib/components/PageHeader.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
 
   /** @type {string[]} */
   let strategies = $state([]);
@@ -19,8 +20,6 @@
   let lastRun = $state(0);
   let filterResult = $state('');
   let filterMatch = $state('');
-  /** @type {Set<string>} */
-  let collapsed = $state(new Set());
 
   /** @type {any} */ let pnlChart = null;
   /** @type {any} */ let winlossChart = null;
@@ -82,13 +81,6 @@
   function toggleAll() {
     if (selected.size === strategies.length) selected = new Set();
     else selected = new Set(strategies);
-  }
-
-  function toggleCollapse(/** @type {string} */ name) {
-    const next = new Set(collapsed);
-    if (next.has(name)) next.delete(name);
-    else next.add(name);
-    collapsed = next;
   }
 
   function filterOrders(/** @type {any[]} */ orders) {
@@ -305,13 +297,7 @@
         {@const r = results[name]}
         {@const filtered = r ? filterOrders(r.orders) : []}
         {#if r && filtered.length > 0}
-          <div class="orders-table-wrap">
-            <button class="table-title collapsable" onclick={() => toggleCollapse(name)}>
-              <span class="collapse-icon">{collapsed.has(name) ? '\u25B6' : '\u25BC'}</span>
-              <span class="dot" style="background: {colorFor(name)}"></span>
-              {name} — {filtered.length} orders{filtered.length !== r.orders.length ? ` (${r.orders.length} total)` : ''}
-            </button>
-            {#if !collapsed.has(name)}
+          <CollapsibleSection title={name} count={filtered.length}>
             <table class="data-table">
               <thead><tr><th>Match</th><th>Context</th><th>Price</th><th>Edge</th><th>Size</th><th>Won</th><th>P&L</th></tr></thead>
               <tbody>
@@ -327,8 +313,7 @@
               </tbody>
             </table>
             {#if filtered.length > 50}<div class="more-rows">...and {filtered.length - 50} more</div>{/if}
-            {/if}
-          </div>
+          </CollapsibleSection>
         {/if}
       {/each}
     </div>
@@ -367,10 +352,5 @@
   .orders-filters h2 { margin: 0; }
   .orders-filters input { background: var(--surface-hover); border: 1px solid var(--border-strong); color: var(--text); padding: 5px 10px; border-radius: var(--radius-xs); font-size: 13px; width: 200px; }
   .orders-filters select { background: var(--surface-hover); border: 1px solid var(--border-strong); color: var(--text); padding: 5px 10px; border-radius: var(--radius-xs); font-size: 13px; }
-  .orders-table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; overflow-x: auto; }
-  .table-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #cbd5e1; margin-bottom: 10px; }
-  .table-title.collapsable { background: none; border: none; cursor: pointer; padding: 0; width: 100%; text-align: left; font: inherit; }
-  .table-title.collapsable:hover { color: var(--text-bright); }
-  .collapse-icon { font-size: 10px; color: var(--text-muted); width: 14px; }
   .more-rows { text-align: center; color: var(--text-muted); font-size: 12px; padding: 8px; }
 </style>
