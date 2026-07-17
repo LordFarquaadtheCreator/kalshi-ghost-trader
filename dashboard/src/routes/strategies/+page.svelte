@@ -36,6 +36,14 @@
     if (browser && Object.keys(results).length > 0) renderCharts();
   });
 
+  $effect(() => {
+    bandMetric;
+    bandMinSamples;
+    selected.size;
+    Object.keys(results).length;
+    if (browser && Object.keys(results).length > 0) loadPriceBands();
+  });
+
   /** @type {any} */ let pnlChart = null;
   /** @type {any} */ let winlossChart = null;
   /** @type {any} */ let priceDistChart = null;
@@ -45,6 +53,24 @@
   /** @type {HTMLCanvasElement | null} */ let pnlCanvas = $state(null);
   /** @type {HTMLCanvasElement | null} */ let winlossCanvas = $state(null);
   /** @type {HTMLCanvasElement | null} */ let priceDistCanvas = $state(null);
+
+  // Price band state
+  /** @type {Record<string, any>} */
+  let priceBandsData = $state({});
+  let bandMetric = $state('winrate');
+  let bandMinSamples = $state(5);
+  let bandLoading = $state(false);
+  /** @type {any} */ let bandChart = null;
+  let bandReady = $state(false);
+  /** @type {HTMLCanvasElement | null} */ let bandCanvas = $state(null);
+
+  /** @type {Record<string, string>} */
+  const metricLabels = {
+    winrate: 'Win Rate Score',
+    pnl: 'Net P&L ($)',
+    roi: 'ROI Score',
+    sharpe: 'Sharpe Score',
+  };
 
   /** @type {Record<string, string>} */
   const strategyColors = {
@@ -231,6 +257,123 @@
     }
   }
 
+  async function loadPriceBands() {
+    if (selected.size === 0) return;
+    bandLoading = true;
+    try {
+      const data = await api.getPriceBands([...selected], bandMetric, bandMinSamples);
+      priceBandsData = data.results || {};
+      await renderPriceBandChart();
+    } catch {
+      // supplementary chart — silent on error
+    } finally {
+      bandLoading = false;
+    }
+  }
+
+  async function renderPriceBandChart() {
+    if (!browser || Object.keys(priceBandsData).length === 0) return;
+    const Chart = await setupChart();
+    if (!Chart) return;
+
+    bandReady = false;
+    if (bandChart) { bandChart.destroy(); bandChart = null; }
+    if (!bandCanvas) return;
+
+    const selNames = [...selected];
+    /** @type {any[]} */
+    const allPeaks = [];
+
+    const datasets = selNames.map((name) => {
+      const r = priceBandsData[name];
+      if (!r || !r.bands || r.bands.length === 0) return null;
+
+      for (const p of r.peaks || []) {
+        allPeaks.push({ min_price: p.min_price, max_price: p.max_price, strategy: name });
+      }
+
+      const points = [];
+      for (const b of r.bands) {
+        points.push({ x: b.min_price, y: b.score });
+        points.push({ x: b.max_price, y: b.score });
+      }
+
+      return {
+        label: name,
+        data: points,
+        borderColor: colorFor(name),
+        backgroundColor: colorFor(name) + '20',
+        borderWidth: 2,
+        pointRadius: 0,
+        stepped: 'after',
+        tension: 0,
+      };
+    }).filter(Boolean);
+
+    if (datasets.length === 0) return;
+
+    const peakPlugin = {
+      id: 'peakRects',
+      beforeDatasetsDraw(/** @type {any} */ chart) {
+        const { ctx, scales } = chart;
+        if (!scales.x || !scales.y) return;
+        const peaks = chart.$peaks || [];
+        for (const peak of peaks) {
+          const x1 = scales.x.getPixelForValue(peak.min_price);
+          const x2 = scales.x.getPixelForValue(peak.max_price);
+          const yTop = scales.y.top;
+          const yBot = scales.y.bottom;
+          ctx.fillStyle = 'rgba(34, 197, 94, 0.35)';
+          ctx.fillRect(x1, yTop, x2 - x1, yBot - yTop);
+          ctx.strokeStyle = 'rgba(34, 197, 94, 0.8)';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(x1, yTop, x2 - x1, yBot - yTop);
+        }
+      },
+    };
+
+    bandChart = new Chart(bandCanvas, {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+          legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              title: (/** @type {any[]} */ items) => `Price: ${((items[0]?.parsed?.x ?? 0) * 100).toFixed(1)}c`,
+              label: (/** @type {any} */ item) => `${item.dataset.label}: ${item.parsed.y.toFixed(3)}`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: 'linear',
+            min: 0,
+            max: 1,
+            ticks: {
+              color: '#64748b',
+              font: { size: 10 },
+              callback: (/** @type {number} */ v) => (v * 100).toFixed(0) + 'c',
+            },
+            grid: { color: '#1e293b' },
+            title: { display: true, text: 'Entry Price', color: '#64748b' },
+          },
+          y: {
+            ticks: { color: '#64748b', font: { size: 10 } },
+            grid: { color: '#1e293b' },
+            title: { display: true, text: metricLabels[bandMetric] || 'Score', color: '#64748b' },
+          },
+        },
+      },
+      plugins: [peakPlugin],
+    });
+    bandChart.$peaks = allPeaks;
+    bandReady = true;
+  }
+
   onMount(() => {
     if (browser) loadStrategies().then(() => runBacktest());
   });
@@ -239,6 +382,7 @@
     if (pnlChart) pnlChart.destroy();
     if (winlossChart) winlossChart.destroy();
     if (priceDistChart) priceDistChart.destroy();
+    if (bandChart) bandChart.destroy();
   });
 </script>
 
@@ -299,6 +443,36 @@
         <div class="chart-section">
           <h2>Entry Price Distribution</h2>
           <div style="height: 300px; width: 100%; position: relative;"><canvas bind:this={priceDistCanvas}></canvas>{#if !priceDistReady}<ChartLoading />{/if}</div>
+        </div>
+
+        <div class="chart-section">
+          <h2>Price Band Performance <span class="chart-subtitle">— {metricLabels[bandMetric] || bandMetric}</span></h2>
+          <div style="height: 300px; width: 100%; position: relative;"><canvas bind:this={bandCanvas}></canvas>{#if !bandReady && !bandLoading}<ChartLoading />{/if}{#if bandLoading}<ChartLoading />{/if}</div>
+          {#if Object.keys(priceBandsData).length > 0}
+            <div class="peak-cards">
+              {#each [...selected] as name}
+                {@const r = priceBandsData[name]}
+                {#if r && r.peaks && r.peaks.length > 0}
+                  <div class="peak-card">
+                    <div class="peak-card-header">
+                      <span class="dot" style="background: {colorFor(name)}"></span>
+                      {name}
+                      <span class="peak-count">{r.peaks.length} peak{r.peaks.length > 1 ? 's' : ''}</span>
+                    </div>
+                    {#each r.peaks as p}
+                      <div class="peak-row">
+                        <span class="peak-range">{(p.min_price * 100).toFixed(1)}c–{(p.max_price * 100).toFixed(1)}c</span>
+                        <span class="peak-stat">{p.win_rate.toFixed(1)}% WR</span>
+                        <span class="peak-stat">{p.signals} sig</span>
+                        <span class="peak-stat" class:positive={p.net_pnl > 0} class:negative={p.net_pnl < 0}>${p.net_pnl.toFixed(2)}</span>
+                        <span class="peak-stat">score {p.score.toFixed(3)}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              {/each}
+            </div>
+          {/if}
         </div>
 
         {#if allFiltered.length > 0}
@@ -392,6 +566,21 @@
       </div>
 
       <div class="filter-group">
+        <h3>Price Band Analysis</h3>
+        <label class="filter-label">Score Metric
+          <select bind:value={bandMetric}>
+            <option value="winrate">Win Rate</option>
+            <option value="pnl">Net P&L</option>
+            <option value="roi">ROI</option>
+            <option value="sharpe">Sharpe</option>
+          </select>
+        </label>
+        <label class="filter-label">Min Samples
+          <input type="number" bind:value={bandMinSamples} min="2" max="50" step="1" />
+        </label>
+      </div>
+
+      <div class="filter-group">
         <h3>Filters</h3>
         <label class="filter-label">Match
           <input type="text" placeholder="Search match..." bind:value={filterMatch} oninput={() => { orderPages = {}; }} />
@@ -447,4 +636,14 @@
   .page-btn:hover:not(:disabled) { background: var(--border-strong); }
   .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .page-info { font-size: 12px; color: var(--text-muted); }
+  .chart-subtitle { font-size: 12px; color: var(--text-muted); font-weight: 400; }
+  .peak-cards { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+  .peak-card { background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px; }
+  .peak-card-header { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text-bright); margin-bottom: 8px; }
+  .peak-count { font-size: 11px; color: var(--text-muted); font-weight: 400; margin-left: auto; }
+  .peak-row { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-muted); padding: 3px 0; }
+  .peak-range { font-weight: 600; color: var(--text); min-width: 100px; }
+  .peak-stat { min-width: 70px; }
+  .peak-stat.positive { color: var(--win); }
+  .peak-stat.negative { color: var(--loss); }
 </style>

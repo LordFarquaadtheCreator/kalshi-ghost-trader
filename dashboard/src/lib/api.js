@@ -21,6 +21,7 @@ const TTL = {
   ticks: 3_000,
   strategies: 300_000,
   backtest: 30_000,
+  priceBands: 30_000,
   passedMatches: 10_000,
 };
 
@@ -114,6 +115,15 @@ export const api = {
     const params = new URLSearchParams({ strategies: strategies.join(',') });
     if (minPrice > 0) params.set('min_price', String(minPrice));
     return cachedFetch(`${STRATEGY_API_URL}/api/backtest?${params}`, TTL.backtest);
+  },
+
+  async getPriceBands(/** @type {string[]} */ strategies, /** @type {string} */ metric, /** @type {number} */ minSamples) {
+    const params = new URLSearchParams({
+      strategies: strategies.join(','),
+      metric,
+      min_samples: String(minSamples),
+    });
+    return cachedFetch(`${STRATEGY_API_URL}/api/price-bands?${params}`, TTL.priceBands);
   },
 
   get pollInterval() { return pollInterval; },

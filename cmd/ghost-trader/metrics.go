@@ -231,3 +231,44 @@ func passedMatchesHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc
 		json.NewEncoder(w).Encode(map[string]any{"matches": matches})
 	}
 }
+
+func priceBandsHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		strategiesParam := r.URL.Query().Get("strategies")
+		metricName := r.URL.Query().Get("metric")
+		if metricName == "" {
+			metricName = "winrate"
+		}
+		minSamples := 5
+		if v := r.URL.Query().Get("min_samples"); v != "" {
+			fmt.Sscanf(v, "%d", &minSamples)
+		}
+
+		var selected []string
+		if strategiesParam == "" || strategiesParam == "all" {
+			selected = e.AvailableStrategies()
+		} else {
+			selected = strings.Split(strategiesParam, ",")
+		}
+
+		btMu.Lock()
+		defer btMu.Unlock()
+
+		results := make(map[string]*backtest.PriceBandResult)
+		for _, name := range selected {
+			res, err := e.ComputePriceBands(name, metricName, minSamples)
+			if err != nil {
+				log.Error("compute price bands", "name", name, "err", err)
+				continue
+			}
+			results[name] = res
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"metric":  metricName,
+			"results": results,
+		})
+	}
+}

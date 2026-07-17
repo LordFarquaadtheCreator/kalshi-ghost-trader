@@ -310,6 +310,7 @@ func main() {
 		mux.HandleFunc("/api/tracked", trackedHandler(tr, btEngine))
 		mux.HandleFunc("/api/strategies", corsHandler(strategyListHandler(btEngine)))
 		mux.HandleFunc("/api/backtest", corsHandler(backtestHandler(btEngine, log)))
+		mux.HandleFunc("/api/price-bands", corsHandler(priceBandsHandler(btEngine, log)))
 		mux.HandleFunc("/api/ticks", corsHandler(ticksHandler(btEngine, log)))
 		mux.HandleFunc("/api/orders", corsHandler(ordersHandler(btEngine, log)))
 		mux.HandleFunc("/api/order-counts", corsHandler(orderCountsHandler(btEngine, log)))
