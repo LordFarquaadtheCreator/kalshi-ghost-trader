@@ -260,10 +260,11 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	s.fired[eventTicker] = true
 	s.mu.Unlock()
 
-	convProb := 0.99
+	// convProb derived from MaxNoPrice: if underdog YES <= 0.05,
+	// favorite conversion >= 0.95
+	convProb := 1.0 - s.cfg.MaxNoPrice
 	edgeCents := int((convProb-favPrice)*100 + 1e-9)
 	if edgeCents < 1 {
 		return
@@ -301,6 +302,9 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		s.log.Warn("nofade: order dropped", "match", eventTicker, "market", favMkt)
 		return
 	}
+	s.mu.Lock()
+	s.fired[eventTicker] = true
+	s.mu.Unlock()
 	s.log.Info("nofade: order emitted",
 		"match", eventTicker, "market", favMkt,
 		"price", favPrice, "underdog_yes", underdogPrice,
