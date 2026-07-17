@@ -22,7 +22,7 @@ import (
 	wsclient "github.com/farquaad/kalshi-ghost-trader/internal/ws"
 )
 
-// ScorePoller is implemented by score data sources (FlashScore, API-Tennis)
+// ScorePoller is implemented by score data sources (API-Tennis)
 // to receive lifecycle commands driven by market subscriptions.
 type ScorePoller interface {
 	StartPolling(eventTicker string)
@@ -31,7 +31,7 @@ type ScorePoller interface {
 
 // PriceCleaner removes price tracking state for a market. Implemented by
 // signal.Generator. Called on unsubscribe to prevent unbounded price map
-// growth when FlashScore is disabled (UnregisterMarkets only runs via FS).
+// growth (UnregisterMarkets only runs via score poller).
 type PriceCleaner interface {
 	DeletePrice(marketTicker string)
 }
@@ -84,7 +84,7 @@ func (t *Tracker) SetMarketRegistrar(mr MarketRegistrar) {
 }
 
 // StartMatch begins tracking a market. Idempotent — already-tracked returns nil.
-// eventTicker associates the market with its parent event for FlashScore polling.
+// eventTicker associates the market with its parent event for score polling.
 func (t *Tracker) StartMatch(ctx context.Context, market, eventTicker string) error {
 	t.mu.Lock()
 	if _, ok := t.subs[market]; ok {

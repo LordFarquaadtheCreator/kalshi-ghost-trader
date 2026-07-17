@@ -2,7 +2,7 @@
 
 ## What We're Doing
 
-Ghost trader: real-time WebSocket scraper for Kalshi tennis match-winner markets. Stores every tick, trade, orderbook delta, and lifecycle event to SQLite. Optional point-by-point score feeds from FlashScore and API-Tennis. Pluggable strategy framework for backtesting algorithms against historical data.
+Ghost trader: real-time WebSocket scraper for Kalshi tennis match-winner markets. Stores every tick, trade, orderbook delta, and lifecycle event to SQLite. Optional real-time score feed from API-Tennis via WebSocket. Pluggable strategy framework for backtesting algorithms against historical data.
 
 Core thesis: tennis match markets on Kalshi are inefficient enough to exploit using point-by-point score data combined with orderbook dynamics. The edge comes from having faster/better information than the average market participant.
 
@@ -332,8 +332,8 @@ Core thesis: tennis match markets on Kalshi are inefficient enough to exploit us
 1. Tournament data feeds (Sportradar, Stats Perform): 0.5-1.5s delay
 2. Courtsiders (people at court with phone): 2-5s delay
 3. TV/stream: 10-20s delay
-4. Public APIs (FlashScore etc): 5-15s delay
-- **Our position**: API-Tennis WebSocket and FlashScore are 5-15s. Better than TV but worse than premium feeds. Edge comes from model quality, not raw latency.
+4. Public APIs: 5-15s delay
+- **Our position**: API-Tennis WebSocket is 5-15s. Better than TV but worse than premium feeds. Edge comes from model quality, not raw latency.
 
 ---
 
@@ -362,7 +362,7 @@ Core thesis: tennis match markets on Kalshi are inefficient enough to exploit us
 
 ### Structural Advantages We Have
 - Real-time WebSocket data from Kalshi (not polling REST).
-- Point-by-point score feeds (FlashScore + API-Tennis) for fair value computation.
+- Real-time score feed (API-Tennis WebSocket) for fair value computation.
 - SQLite historical data for backtesting strategies.
 - Go performance for low-latency order management.
 - Match-point detection algorithm already implemented.

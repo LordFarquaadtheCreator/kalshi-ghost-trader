@@ -46,47 +46,37 @@ func DefaultNoFadeConfig() NoFadeConfig {
 // At favPrice 0.93, edge = 2c. At favPrice 0.94, edge = 1c.
 // Fires when edge >= 1 cent.
 type NoFadeStrategy struct {
-	mu            sync.RWMutex
-	prices        map[string]float64
-	priceTimes    map[string]time.Time
-	markets       map[string][]string
-	closeTimes    map[string]int64
-	fired         map[string]bool // event_ticker -> fired
-	closeWarned   map[string]bool
-	emitter       OrderEmitter
-	db            *store.DB
-	log           *slog.Logger
-	cfg           NoFadeConfig
-	bankroll      float64
-	kellyFraction float64
-	replayNow     *time.Time
+	mu          sync.RWMutex
+	prices      map[string]float64
+	priceTimes  map[string]time.Time
+	markets     map[string][]string
+	closeTimes  map[string]int64
+	fired       map[string]bool
+	closeWarned map[string]bool
+	emitter     OrderEmitter
+	db          *store.DB
+	log         *slog.Logger
+	cfg         NoFadeConfig
+	replayNow   *time.Time
 }
 
-func NewNoFadeStrategy(emitter OrderEmitter, log *slog.Logger, cfg NoFadeConfig, bankroll, kellyFraction float64) *NoFadeStrategy {
+func NewNoFadeStrategy(emitter OrderEmitter, log *slog.Logger, cfg NoFadeConfig) *NoFadeStrategy {
 	return &NoFadeStrategy{
-		prices:        make(map[string]float64),
-		priceTimes:    make(map[string]time.Time),
-		markets:       make(map[string][]string),
-		closeTimes:    make(map[string]int64),
-		fired:         make(map[string]bool),
-		closeWarned:   make(map[string]bool),
-		emitter:       emitter,
-		log:           log,
-		cfg:           cfg,
-		bankroll:      bankroll,
-		kellyFraction: kellyFraction,
+		prices:      make(map[string]float64),
+		priceTimes:  make(map[string]time.Time),
+		markets:     make(map[string][]string),
+		closeTimes:  make(map[string]int64),
+		fired:       make(map[string]bool),
+		closeWarned: make(map[string]bool),
+		emitter:     emitter,
+		log:         log,
+		cfg:         cfg,
 	}
 }
 
-func NewNoFadeStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg NoFadeConfig, bankroll, kellyFraction float64) *NoFadeStrategy {
-	s := NewNoFadeStrategy(emitter, log, cfg, bankroll, kellyFraction)
+func NewNoFadeStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg NoFadeConfig) *NoFadeStrategy {
+	s := NewNoFadeStrategy(emitter, log, cfg)
 	s.db = db
-	if fired, err := db.LoadFiredEvents(context.Background(), cfg.Label); err == nil {
-		s.fired = fired
-		log.Info("nofade: loaded fired state from DB", "count", len(fired))
-	} else {
-		log.Error("nofade: load fired state", "err", err)
-	}
 	return s
 }
 
@@ -179,14 +169,16 @@ func (s *NoFadeStrategy) now() time.Time {
 	return time.Now()
 }
 
-func (s *NoFadeStrategy) OnPoints([]store.Point) {}
-
 func (s *NoFadeStrategy) checkEntry(marketTicker string) {
 	s.checkEntryAt(marketTicker, s.now())
 }
 
 func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 	s.mu.Lock()
+	if s.fired[marketTicker] {
+		s.mu.Unlock()
+		return
+	}
 
 	eventTicker := ""
 	for et, mkts := range s.markets {
@@ -198,11 +190,6 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		}
 	}
 	if eventTicker == "" {
-		s.mu.Unlock()
-		return
-	}
-
-	if s.fired[eventTicker] {
 		s.mu.Unlock()
 		return
 	}
@@ -275,15 +262,8 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	s.fired[eventTicker] = true
+	s.fired[favMkt] = true
 	s.mu.Unlock()
-
-	// Persist fired state so restart doesn't re-fire
-	if s.db != nil {
-		if err := s.db.MarkFired(context.Background(), eventTicker, s.cfg.Label); err != nil {
-			s.log.Error("nofade: persist fired state", "event", eventTicker, "err", err)
-		}
-	}
 
 	// convProb derived from MaxNoPrice: if underdog NO <= 0.05,
 	// favorite conversion >= 0.95
@@ -293,10 +273,7 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	size := kellySize(convProb, favPrice, s.bankroll, s.kellyFraction)
-	if size <= 0 {
-		size = s.cfg.BaseSize
-	}
+	size := s.cfg.BaseSize
 
 	payload, _ := json.Marshal(map[string]any{
 		"window_s":     s.cfg.WindowSeconds,
@@ -322,8 +299,6 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		SetNumber:     0,
 		Strategy:      "nofade",
 		Payload:       string(payload),
-		Bankroll:      s.bankroll,
-		KellyFraction: s.kellyFraction,
 	}
 
 	if !s.emitter.EmitOrder(o) {

@@ -17,9 +17,6 @@ const (
 	// orderbookChanBuffer sizes the orderbook event ingest channel.
 	// Deltas can be high-frequency during active trading.
 	orderbookChanBuffer = 8192
-	// pointsChanBuffer sizes the FlashScore point ingest channel.
-	// Lower frequency — tennis points are slower than market ticks.
-	pointsChanBuffer = 1024
 	// ordersChanBuffer sizes the signal order ingest channel.
 	// Low frequency — only fires on match points.
 	ordersChanBuffer = 256
@@ -33,7 +30,6 @@ type TickWriter struct {
 	lifecycleIn      chan LifecycleEvent
 	eventLifecycleIn chan EventLifecycleEvent
 	orderbookIn      chan OrderbookEvent
-	pointsIn         chan Point
 	ordersIn         chan Order
 	batchSize        int
 	flushTimeout     time.Duration
@@ -43,7 +39,6 @@ type TickWriter struct {
 	OrderbookDrops    atomic.Int64
 	LifecycleDrops    atomic.Int64
 	EvtLifecycleDrops atomic.Int64
-	PointsDrops       atomic.Int64
 	OrdersDrops       atomic.Int64
 }
 
@@ -55,7 +50,6 @@ func (d *DB) NewTickWriter(batchSize, flushTimeoutMS int, log *slog.Logger) *Tic
 		lifecycleIn:      make(chan LifecycleEvent, lifecycleChanBuffer),
 		eventLifecycleIn: make(chan EventLifecycleEvent, eventLifecycleChanBuffer),
 		orderbookIn:      make(chan OrderbookEvent, orderbookChanBuffer),
-		pointsIn:         make(chan Point, pointsChanBuffer),
 		ordersIn:         make(chan Order, ordersChanBuffer),
 		batchSize:        batchSize,
 		flushTimeout:     time.Duration(flushTimeoutMS) * time.Millisecond,
@@ -103,20 +97,6 @@ func (w *TickWriter) IngestOrderbook(oe OrderbookEvent) {
 	}
 }
 
-// IngestPoints enqueues a batch of FlashScore points for write.
-// Non-blocking; drops on full buffer.
-func (w *TickWriter) IngestPoints(pts []Point) {
-	for _, p := range pts {
-		select {
-		case w.pointsIn <- p:
-		default:
-			w.PointsDrops.Add(1)
-			w.log.Warn("points buffer full, dropping", "match", p.MatchTicker, "total_drops", w.PointsDrops.Load())
-			return
-		}
-	}
-}
-
 // IngestOrder enqueues a simulated order for batched write.
 // Non-blocking; drops on full buffer. Returns false if dropped.
 func (w *TickWriter) IngestOrder(o Order) bool {
@@ -134,7 +114,6 @@ func (w *TickWriter) IngestOrder(o Order) bool {
 func (w *TickWriter) Run(ctx context.Context) error {
 	batch := make([]Tick, 0, w.batchSize)
 	obBatch := make([]OrderbookEvent, 0, w.batchSize)
-	ptBatch := make([]Point, 0, w.batchSize)
 	ordBatch := make([]Order, 0, 16)
 	timer := time.NewTimer(w.flushTimeout)
 	defer timer.Stop()
@@ -157,16 +136,6 @@ func (w *TickWriter) Run(ctx context.Context) error {
 			w.log.Error("write orderbook batch failed", "err", err, "n", len(obBatch))
 		}
 		obBatch = obBatch[:0]
-	}
-
-	flushPoints := func() {
-		if len(ptBatch) == 0 {
-			return
-		}
-		if err := w.db.InsertPointsBatch(ctx, ptBatch); err != nil {
-			w.log.Error("write points batch failed", "err", err, "n", len(ptBatch))
-		}
-		ptBatch = ptBatch[:0]
 	}
 
 	flushOrders := func() {
@@ -220,14 +189,11 @@ func (w *TickWriter) Run(ctx context.Context) error {
 					batch = append(batch, t)
 				case oe := <-w.orderbookIn:
 					obBatch = append(obBatch, oe)
-				case p := <-w.pointsIn:
-					ptBatch = append(ptBatch, p)
 				case o := <-w.ordersIn:
 					ordBatch = append(ordBatch, o)
 				default:
 					flush()
 					flushOrderbook()
-					flushPoints()
 					flushOrders()
 					flushLifecycle()
 					flushEventLifecycle()
@@ -249,16 +215,6 @@ func (w *TickWriter) Run(ctx context.Context) error {
 			obBatch = append(obBatch, oe)
 			if len(obBatch) >= w.batchSize {
 				flushOrderbook()
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(w.flushTimeout)
-			}
-
-		case p := <-w.pointsIn:
-			ptBatch = append(ptBatch, p)
-			if len(ptBatch) >= w.batchSize {
-				flushPoints()
 				if !timer.Stop() {
 					<-timer.C
 				}
@@ -300,7 +256,6 @@ func (w *TickWriter) Run(ctx context.Context) error {
 		case <-timer.C:
 			flush()
 			flushOrderbook()
-			flushPoints()
 			flushOrders()
 			flushLifecycle()
 			flushEventLifecycle()

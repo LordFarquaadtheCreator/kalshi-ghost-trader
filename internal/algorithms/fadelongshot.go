@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math"
 	"sync"
 	"time"
 
@@ -50,54 +49,39 @@ func DefaultFadeLongshotConfig() FadeLongshotConfig {
 // RegisterCloseTime. In live mode, close_ts comes from the markets table.
 // In backtest, the backtest engine provides it.
 type FadeLongshotStrategy struct {
-	mu            sync.RWMutex
-	prices        map[string]float64
-	priceTimes    map[string]time.Time
-	markets       map[string][]string
-	closeTimes    map[string]int64
-	fired         map[string]bool // event_ticker -> fired
-	closeWarned   map[string]bool // warn once per event when close_ts=0
-	emitter       OrderEmitter
-	db            *store.DB // nil in backtest mode
-	log           *slog.Logger
-	cfg           FadeLongshotConfig
-	bankroll      float64
-	kellyFraction float64
-	replayNow     *time.Time
-
-	// Live score state from OnPoints
-	scores map[string]*matchScore // event_ticker -> score
+	mu          sync.RWMutex
+	prices      map[string]float64
+	priceTimes  map[string]time.Time
+	markets     map[string][]string
+	closeTimes  map[string]int64
+	fired       map[string]bool
+	closeWarned map[string]bool // warn once per event when close_ts=0
+	emitter     OrderEmitter
+	db          *store.DB // nil in backtest mode
+	log         *slog.Logger
+	cfg         FadeLongshotConfig
+	replayNow   *time.Time
 }
 
-func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLongshotConfig, bankroll, kellyFraction float64) *FadeLongshotStrategy {
+func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLongshotConfig) *FadeLongshotStrategy {
 	return &FadeLongshotStrategy{
-		prices:        make(map[string]float64),
-		priceTimes:    make(map[string]time.Time),
-		markets:       make(map[string][]string),
-		closeTimes:    make(map[string]int64),
-		fired:         make(map[string]bool),
-		closeWarned:   make(map[string]bool),
-		scores:        make(map[string]*matchScore),
-		emitter:       emitter,
-		log:           log,
-		cfg:           cfg,
-		bankroll:      bankroll,
-		kellyFraction: kellyFraction,
+		prices:      make(map[string]float64),
+		priceTimes:  make(map[string]time.Time),
+		markets:     make(map[string][]string),
+		closeTimes:  make(map[string]int64),
+		fired:       make(map[string]bool),
+		closeWarned: make(map[string]bool),
+		emitter:     emitter,
+		log:         log,
+		cfg:         cfg,
 	}
 }
 
 // NewFadeLongshotStrategyWithDB creates a live-mode fadelongshot that
 // auto-loads close_ts from the markets table on RegisterMarkets.
-// Also loads persisted fired state so restarts don't cause duplicate orders.
-func NewFadeLongshotStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg FadeLongshotConfig, bankroll, kellyFraction float64) *FadeLongshotStrategy {
-	s := NewFadeLongshotStrategy(emitter, log, cfg, bankroll, kellyFraction)
+func NewFadeLongshotStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg FadeLongshotConfig) *FadeLongshotStrategy {
+	s := NewFadeLongshotStrategy(emitter, log, cfg)
 	s.db = db
-	if fired, err := db.LoadFiredEvents(context.Background(), cfg.Label); err == nil {
-		s.fired = fired
-		log.Info("fadelongshot: loaded fired state from DB", "count", len(fired))
-	} else {
-		log.Error("fadelongshot: load fired state", "err", err)
-	}
 	return s
 }
 
@@ -159,7 +143,6 @@ func (s *FadeLongshotStrategy) UnregisterMarkets(eventTicker string) {
 	delete(s.closeTimes, eventTicker)
 	delete(s.fired, eventTicker)
 	delete(s.closeWarned, eventTicker)
-	delete(s.scores, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -197,110 +180,10 @@ func (s *FadeLongshotStrategy) now() time.Time {
 	return time.Now()
 }
 
-// matchScore tracks the latest known score for an event from point data.
-// Used to compute dynamic conversion probability.
-type matchScore struct {
-	setNumber    int
-	homeGames    int // games in current set
-	awayGames    int
-	homeSetWins  int // sets won
-	awaySetWins  int
-	server       int // 1=home, 2=away
-	isMatchPoint bool
-	isSetPoint   bool
-}
-
-func (s *FadeLongshotStrategy) OnPoints(pts []store.Point) {
-	for _, p := range pts {
-		s.mu.Lock()
-		ms, ok := s.scores[p.MatchTicker]
-		if !ok {
-			ms = &matchScore{}
-			s.scores[p.MatchTicker] = ms
-		}
-		ms.setNumber = p.SetNumber
-		ms.homeGames = p.HomeGames
-		ms.awayGames = p.AwayGames
-		ms.server = p.Server
-		ms.isMatchPoint = p.IsMatchPoint
-		ms.isSetPoint = p.IsSetPoint
-		// Derive set wins from set number + game leader
-		if p.SetNumber > 0 {
-			if p.HomeGames > p.AwayGames {
-				ms.homeSetWins = p.SetNumber - 1
-				ms.awaySetWins = 0
-			} else if p.AwayGames > p.HomeGames {
-				ms.awaySetWins = p.SetNumber - 1
-				ms.homeSetWins = 0
-			}
-		}
-		s.mu.Unlock()
-	}
-	// Re-check entry after score update — convProb may have changed
-	for _, p := range pts {
-		s.mu.RLock()
-		mkts, ok := s.markets[p.MatchTicker]
-		s.mu.RUnlock()
-		if !ok {
-			continue
-		}
-		for _, mkt := range mkts {
-			s.mu.RLock()
-			pr := s.prices[mkt]
-			s.mu.RUnlock()
-			if pr > 0 {
-				s.checkEntry(mkt)
-			}
-		}
-	}
-}
-
-// dynamicConvProb estimates conversion probability from live score context.
-// Higher when favorite has set/game lead, serving, or at match/set point.
+// dynamicConvProb estimates conversion probability from price.
+// Without live score data, falls back to price-implied probability with small edge.
 func (s *FadeLongshotStrategy) dynamicConvProb(eventTicker string, favPrice float64) float64 {
-	s.mu.RLock()
-	ms, ok := s.scores[eventTicker]
-	s.mu.RUnlock()
-	if !ok || ms == nil {
-		// No score data — fall back to price-implied probability with small edge
-		return favPrice + 0.02
-	}
-
-	prob := 0.90 // base for favorite in final minutes
-
-	// Set lead: +3c per set lead
-	setLead := ms.homeSetWins - ms.awaySetWins
-	if setLead < 0 {
-		setLead = -setLead
-	}
-	prob += float64(setLead) * 0.03
-
-	// Game lead in current set: +1c per game
-	gameLead := ms.homeGames - ms.awayGames
-	if gameLead < 0 {
-		gameLead = -gameLead
-	}
-	prob += float64(gameLead) * 0.01
-
-	// Match point: near-certain conversion
-	if ms.isMatchPoint {
-		prob = 0.995
-	}
-
-	// Set point: high conversion
-	if ms.isSetPoint && !ms.isMatchPoint {
-		prob = math.Max(prob, 0.97)
-	}
-
-	// Clamp: must stay above favPrice to have edge, cap at 0.999
-	if prob <= favPrice {
-		prob = favPrice + 0.01
-	}
-	if prob > 0.999 {
-		prob = 0.999
-	}
-
-	return prob
+	return favPrice + 0.02
 }
 
 func (s *FadeLongshotStrategy) checkEntry(marketTicker string) {
@@ -309,6 +192,10 @@ func (s *FadeLongshotStrategy) checkEntry(marketTicker string) {
 
 func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 	s.mu.Lock()
+	if s.fired[marketTicker] {
+		s.mu.Unlock()
+		return
+	}
 
 	eventTicker := ""
 	for et, mkts := range s.markets {
@@ -320,11 +207,6 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		}
 	}
 	if eventTicker == "" {
-		s.mu.Unlock()
-		return
-	}
-
-	if s.fired[eventTicker] {
 		s.mu.Unlock()
 		return
 	}
@@ -389,15 +271,8 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	s.fired[eventTicker] = true
+	s.fired[favMkt] = true
 	s.mu.Unlock()
-
-	// Persist fired state so restart doesn't re-fire
-	if s.db != nil {
-		if err := s.db.MarkFired(context.Background(), eventTicker, s.cfg.Label); err != nil {
-			s.log.Error("fadelongshot: persist fired state", "event", eventTicker, "err", err)
-		}
-	}
 
 	convProb := 0.99
 	if s.cfg.DynamicConvProb {
@@ -408,10 +283,7 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	size := kellySize(convProb, favPrice, s.bankroll, s.kellyFraction)
-	if size <= 0 {
-		size = s.cfg.BaseSize
-	}
+	size := s.cfg.BaseSize
 
 	payload, _ := json.Marshal(map[string]any{
 		"window_s":    s.cfg.WindowSeconds,
@@ -436,8 +308,6 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		SetNumber:     0,
 		Strategy:      "fadelongshot",
 		Payload:       string(payload),
-		Bankroll:      s.bankroll,
-		KellyFraction: s.kellyFraction,
 	}
 
 	if !s.emitter.EmitOrder(o) {

@@ -25,7 +25,6 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
-	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
 // replayStrategy extends algorithms.Strategy with backtest-specific
@@ -37,7 +36,7 @@ type replayStrategy interface {
 }
 
 // strategyFactory creates a new strategy instance for backtest.
-type strategyFactory func(emitter algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) replayStrategy
+type strategyFactory func(emitter algorithms.OrderEmitter, log *slog.Logger) replayStrategy
 
 // closeTimeStrategy is an optional interface for strategies that need
 // close_ts (e.g. fade-longshot). The backtest engine calls RegisterCloseTime
@@ -47,10 +46,10 @@ type closeTimeStrategy interface {
 }
 
 var strategies = map[string]strategyFactory{
-	"matchpoint": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) replayStrategy {
-		return algorithms.NewMatchPointStrategy(em, log, bankroll, kellyFraction)
+	"matchpoint": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewMatchPointStrategy(em, log)
 	},
-	"matchpoint-aggro": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) replayStrategy {
+	"matchpoint-aggro": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		return algorithms.NewSetPointStrategy(em, log, algorithms.SetPointConfig{
 			IncludeSetPoints: false,
 			IncludeReturning: true,
@@ -59,40 +58,26 @@ var strategies = map[string]strategyFactory{
 			MinMarketPrice:   0.05,
 			MinEdgeCents:     1,
 			Label:            "matchpoint-aggro",
-		}, bankroll, kellyFraction)
+		})
 	},
-	"setpoint": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) replayStrategy {
-		return algorithms.NewSetPointStrategy(em, log, algorithms.DefaultSetPointConfig(), bankroll, kellyFraction)
+	"setpoint": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewSetPointStrategy(em, log, algorithms.DefaultSetPointConfig())
 	},
-	"setpoint-serve": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) replayStrategy {
+	"setpoint-serve": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		cfg := algorithms.DefaultSetPointConfig()
 		cfg.IncludeReturning = false
 		cfg.Label = "setpoint-serve"
-		return algorithms.NewSetPointStrategy(em, log, cfg, bankroll, kellyFraction)
+		return algorithms.NewSetPointStrategy(em, log, cfg)
 	},
-	"setpoint-cheap": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) replayStrategy {
+	"setpoint-cheap": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		cfg := algorithms.DefaultSetPointConfig()
 		cfg.MaxMarketPrice = 0.50
 		cfg.Label = "setpoint-cheap"
-		return algorithms.NewSetPointStrategy(em, log, cfg, bankroll, kellyFraction)
+		return algorithms.NewSetPointStrategy(em, log, cfg)
 	},
-	"fadelongshot": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) replayStrategy {
-		return algorithms.NewFadeLongshotStrategy(em, log, algorithms.DefaultFadeLongshotConfig(), bankroll, kellyFraction)
+	"fadelongshot": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewFadeLongshotStrategy(em, log, algorithms.DefaultFadeLongshotConfig())
 	},
-}
-
-type pointRow struct {
-	ts         int64
-	setNum     int
-	gameNum    int
-	pointNum   int
-	server     int
-	scorer     int
-	homePts    string
-	awayPts    string
-	homeGames  int
-	awayGames  int
-	isTiebreak bool
 }
 
 type marketRow struct {
@@ -127,8 +112,6 @@ func main() {
 	dbPath := flag.String("db", "kalshi_tennis.db", "path to SQLite DB")
 	strategyName := flag.String("strategy", "all", "strategy to backtest (use 'all' for all strategies)")
 	minPrice := flag.Float64("min-price", 0.0, "skip signals below this market price (0=disabled)")
-	bankroll := flag.Float64("bankroll", 1000.0, "bankroll for Kelly sizing")
-	kellyFraction := flag.Float64("kelly-fraction", 0.25, "Kelly fraction for sizing")
 	debugMode := flag.Bool("debug", false, "enable debug logging to see strategy filter reasons")
 	flag.Parse()
 
@@ -230,44 +213,13 @@ func main() {
 	fmt.Printf("Loaded %d tick prices across %d markets\n", count, len(tickPrices))
 
 	// Load points
-	fmt.Println("Loading points...")
-	pointsByMatch := make(map[string][]pointRow)
-	pointRows, err := db.QueryContext(ctx, `
-		SELECT match_ticker, ts_ms, set_number, game_number, point_number,
-		       server, scorer, home_points, away_points, home_games, away_games,
-		       is_tiebreak
-		FROM points WHERE ts_ms IS NOT NULL
-		ORDER BY match_ticker, ts_ms`)
-	if err != nil {
-		log.Error("query points", "err", err)
-		os.Exit(1)
-	}
-	for pointRows.Next() {
-		var mt string
-		var ts int64
-		var setNum, gameNum, pointNum, server, scorer, homeGames, awayGames int
-		var homePts, awayPts string
-		var isTB int
-		if err := pointRows.Scan(&mt, &ts, &setNum, &gameNum, &pointNum, &server, &scorer, &homePts, &awayPts, &homeGames, &awayGames, &isTB); err != nil {
-			log.Error("scan point", "err", err)
-			os.Exit(1)
-		}
-		pointsByMatch[mt] = append(pointsByMatch[mt], pointRow{
-			ts: ts, setNum: setNum, gameNum: gameNum, pointNum: pointNum,
-			server: server, scorer: scorer, homePts: homePts, awayPts: awayPts,
-			homeGames: homeGames, awayGames: awayGames, isTiebreak: isTB == 1,
-		})
-	}
-	pointRows.Close()
-
-	fmt.Printf("Matches with points: %d\n", len(pointsByMatch))
 	fmt.Printf("Matches with markets: %d\n", len(markets))
 
 	for _, name := range selected {
 		fmt.Printf("\n%s\n", strings.Repeat("=", 80))
 		fmt.Printf("STRATEGY: %s\n", name)
 		fmt.Printf("%s\n", strings.Repeat("=", 80))
-		runStrategy(name, strategies[name], log, markets, marketCloseTs, tickPrices, pointsByMatch, *minPrice, *bankroll, *kellyFraction)
+		runStrategy(name, strategies[name], log, markets, marketCloseTs, tickPrices, *minPrice)
 	}
 
 	// Aggregate summary across all strategies
@@ -287,16 +239,12 @@ func runStrategy(
 	markets map[string][]marketRow,
 	marketCloseTs map[string]int64,
 	tickPrices map[string][]tickPrice,
-	pointsByMatch map[string][]pointRow,
 	minPrice float64,
-	bankroll float64,
-	kellyFraction float64,
 ) {
 	var orders []order
 	both := 0
-	for matchTicker, pts := range pointsByMatch {
-		mkts, ok := markets[matchTicker]
-		if !ok || len(mkts) < 2 {
+	for matchTicker, mkts := range markets {
+		if len(mkts) < 2 {
 			continue
 		}
 		both++
@@ -304,36 +252,15 @@ func runStrategy(
 		homeMkt, awayMkt := orderMarketsByTitle(matchTicker, mkts)
 
 		collector := algorithms.NewOrderCollector()
-		strat := factory(collector, log, bankroll, kellyFraction)
+		strat := factory(collector, log)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
 
-		sort.Slice(pts, func(i, j int) bool { return pts[i].ts < pts[j].ts })
-
-		tickIdx := map[string]int{homeMkt: 0, awayMkt: 0}
-		for _, p := range pts {
-			ptTime := time.UnixMilli(p.ts)
-			strat.SetReplayTime(ptTime)
-			for _, mkt := range []string{homeMkt, awayMkt} {
-				ticks := tickPrices[mkt]
-				for tickIdx[mkt] < len(ticks) && ticks[tickIdx[mkt]].ts <= p.ts {
-					strat.OnPriceAt(mkt, ticks[tickIdx[mkt]].price, time.UnixMilli(ticks[tickIdx[mkt]].ts))
-					tickIdx[mkt]++
-				}
+		for _, mkt := range []string{homeMkt, awayMkt} {
+			ticks := tickPrices[mkt]
+			for _, t := range ticks {
+				strat.SetReplayTime(time.UnixMilli(t.ts))
+				strat.OnPriceAt(mkt, t.price, time.UnixMilli(t.ts))
 			}
-			strat.OnPoints([]store.Point{{
-				MatchTicker: matchTicker,
-				SetNumber:   p.setNum,
-				GameNumber:  p.gameNum,
-				PointNumber: p.pointNum,
-				Server:      p.server,
-				Scorer:      p.scorer,
-				HomePoints:  p.homePts,
-				AwayPoints:  p.awayPts,
-				HomeGames:   p.homeGames,
-				AwayGames:   p.awayGames,
-				IsTiebreak:  p.isTiebreak,
-				TsMs:        p.ts,
-			}})
 		}
 
 		for _, o := range collector.Orders() {
@@ -366,7 +293,7 @@ func runStrategy(
 	}
 
 	// Close-time backtest path
-	closeOrders := runCloseTimeBacktest(factory, log, markets, marketCloseTs, tickPrices, eventTitles, minPrice, bankroll, kellyFraction)
+	closeOrders := runCloseTimeBacktest(factory, log, markets, marketCloseTs, tickPrices, eventTitles, minPrice)
 	orders = append(orders, closeOrders...)
 	allOrders = append(allOrders, closeOrders...)
 
@@ -375,7 +302,7 @@ func runStrategy(
 
 // printSummary prints backtest results for a single strategy.
 func printSummary(name string, orders []order, both int) {
-	fmt.Printf("Matches with both points and markets: %d\n", both)
+	fmt.Printf("Matches with markets: %d\n", both)
 	fmt.Printf("Total signals: %d\n", len(orders))
 
 	if len(orders) == 0 {
@@ -569,11 +496,9 @@ func runCloseTimeBacktest(
 	tickPrices map[string][]tickPrice,
 	eventTitles map[string]string,
 	minPrice float64,
-	bankroll float64,
-	kellyFraction float64,
 ) []order {
 	collector := algorithms.NewOrderCollector()
-	strat := factory(collector, log, bankroll, kellyFraction)
+	strat := factory(collector, log)
 
 	cts, ok := strat.(closeTimeStrategy)
 	if !ok {

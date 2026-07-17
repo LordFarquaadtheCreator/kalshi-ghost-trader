@@ -10,10 +10,10 @@ import (
 // both the backtest CLI and the strategy API server.
 func DefaultFactories() map[string]StrategyFactory {
 	return map[string]StrategyFactory{
-		"matchpoint": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) ReplayStrategy {
-			return algorithms.NewMatchPointStrategy(em, log, bankroll, kellyFraction)
+		"matchpoint": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewMatchPointStrategy(em, log)
 		},
-		"matchpoint-aggro": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) ReplayStrategy {
+		"matchpoint-aggro": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewSetPointStrategy(em, log, algorithms.SetPointConfig{
 				IncludeSetPoints: false,
 				IncludeReturning: true,
@@ -22,28 +22,28 @@ func DefaultFactories() map[string]StrategyFactory {
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     1,
 				Label:            "matchpoint-aggro",
-			}, bankroll, kellyFraction)
+			})
 		},
-		"setpoint": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) ReplayStrategy {
-			return algorithms.NewSetPointStrategy(em, log, algorithms.DefaultSetPointConfig(), bankroll, kellyFraction)
+		"setpoint": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewSetPointStrategy(em, log, algorithms.DefaultSetPointConfig())
 		},
-		"setpoint-serve": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) ReplayStrategy {
+		"setpoint-serve": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			cfg := algorithms.DefaultSetPointConfig()
 			cfg.IncludeReturning = false
 			cfg.Label = "setpoint-serve"
-			return algorithms.NewSetPointStrategy(em, log, cfg, bankroll, kellyFraction)
+			return algorithms.NewSetPointStrategy(em, log, cfg)
 		},
-		"setpoint-cheap": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) ReplayStrategy {
+		"setpoint-cheap": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			cfg := algorithms.DefaultSetPointConfig()
 			cfg.MaxMarketPrice = 0.50
 			cfg.Label = "setpoint-cheap"
-			return algorithms.NewSetPointStrategy(em, log, cfg, bankroll, kellyFraction)
+			return algorithms.NewSetPointStrategy(em, log, cfg)
 		},
-		"fadelongshot": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) ReplayStrategy {
-			return algorithms.NewFadeLongshotStrategy(em, log, algorithms.DefaultFadeLongshotConfig(), bankroll, kellyFraction)
+		"fadelongshot": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewFadeLongshotStrategy(em, log, algorithms.DefaultFadeLongshotConfig())
 		},
-		"nofade": func(em algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) ReplayStrategy {
-			return algorithms.NewNoFadeStrategy(em, log, algorithms.DefaultNoFadeConfig(), bankroll, kellyFraction)
+		"nofade": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewNoFadeStrategy(em, log, algorithms.DefaultNoFadeConfig())
 		},
 	}
 }

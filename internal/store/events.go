@@ -33,17 +33,13 @@ func (d *DB) EventExists(ctx context.Context, eventTicker string) (bool, error) 
 // SetCoverage computes and stores the coverage tag for an event's markets.
 // Called after settlement in ApplyLifecycleEvent. Classification:
 //
-//	full        — winner market has >=100 ticks spanning >=290s in the final 5-min window
-//	low_freq    — winner market has 1-99 ticks in that window
-//	points_only — no ticks on either market, but has FlashScore points
-//	none        — no ticks and no points
+//	full     — winner market has >=100 ticks spanning >=290s in the final 5-min window
+//	low_freq — winner market has 1-99 ticks in that window
+//	none     — no ticks on either market
 func (d *DB) SetCoverage(ctx context.Context, eventTicker string) error {
 	_, err := d.db.ExecContext(ctx, `
 UPDATE events SET coverage = (
     SELECT CASE
-        WHEN (SELECT COUNT(*) FROM points WHERE match_ticker = ?1) > 0
-         AND NOT EXISTS (SELECT 1 FROM ticks t JOIN markets m ON t.market_ticker = m.market_ticker WHERE m.event_ticker = ?1)
-            THEN 'points_only'
         WHEN COALESCE((SELECT COUNT(*) FROM ticks t JOIN markets m ON t.market_ticker = m.market_ticker
              WHERE m.event_ticker = ?1 AND m.result = 'yes'
              AND t.ts >= (SELECT close_ts - 300000 FROM markets WHERE event_ticker = ?1 AND result = 'yes' LIMIT 1)), 0) >= 100
@@ -124,7 +120,7 @@ func (d *DB) FinalizeEventIfNeeded(ctx context.Context, eventTicker string) erro
 	return nil
 }
 
-// GetAllEventsForMatching returns all events for FlashScore name matching.
+// GetAllEventsForMatching returns all events for API-Tennis name matching.
 // Ordered by last_updated descending so recent events are matched first.
 func (d *DB) GetAllEventsForMatching(ctx context.Context) ([]Event, error) {
 	rows, err := d.db.QueryContext(ctx, `

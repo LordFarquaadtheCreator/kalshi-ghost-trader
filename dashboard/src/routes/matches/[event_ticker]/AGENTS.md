@@ -9,7 +9,7 @@ Real-time tick price chart + market cards + simulated orders for a single event.
 
 ## Data
 
-- `api.getTicks(eventTicker)` → `GET :6061/api/ticks?event=...` → `{event_ticker, title, markets: [{market_ticker, player_name, ticks: [{ts, price}]}], orders: [{ts, market_ticker, context, market_price, edge_cents, suggested_size, strategy}]}`
+- `api.getTicks(eventTicker)` → `GET :6060/api/ticks?event=...` → `{event_ticker, title, markets: [{market_ticker, player_name, ticks: [{ts, price}]}], orders: [{ts, market_ticker, context, market_price, edge_cents, suggested_size, strategy}]}`
 
 ## Chart
 

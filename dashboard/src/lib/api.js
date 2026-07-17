@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
 
 const GHOST_TRADER_URL = 'http://127.0.0.1:6060';
-const STRATEGY_API_URL = 'http://127.0.0.1:6061';
+const STRATEGY_API_URL = 'http://127.0.0.1:6060';
 
 /** @typedef {{ data: any, timestamp: number, ttl: number }} CacheEntry */
 /** @type {Map<string, CacheEntry>} */

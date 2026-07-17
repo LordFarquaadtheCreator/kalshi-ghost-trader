@@ -62,12 +62,6 @@ func (m *MultiStrategyRuntime) OnPrice(marketTicker string, price float64) {
 	}
 }
 
-func (m *MultiStrategyRuntime) OnPoints(pts []store.Point) {
-	for _, ns := range m.strategies {
-		ns.Strat.OnPoints(pts)
-	}
-}
-
 func (m *MultiStrategyRuntime) RegisterMarkets(eventTicker string, marketTickers []string) {
 	for _, ns := range m.strategies {
 		ns.Strat.RegisterMarkets(eventTicker, marketTickers)

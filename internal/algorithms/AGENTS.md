@@ -21,7 +21,6 @@ backtest engine — one source of truth for signal logic.
 
 Core interface for all strategies. Methods:
 - `OnPrice(marketTicker, price)` — called on every WS ticker or historical replay
-- `OnPoints(pts)` — called when new point-by-point score data arrives
 - `RegisterMarkets(eventTicker, marketTickers)` — associate event with its markets
 - `UnregisterMarkets(eventTicker)` — cleanup all state for a match
 - `DeletePrice(marketTicker)` — remove single market's price tracking
@@ -42,10 +41,8 @@ Receives orders from strategies. Implementations:
 
 ## MatchPointStrategy
 
-Detects match points from point data, looks up live market prices,
-emits simulated buy orders.
+Tracks market prices and emits buy orders when edge exceeds threshold.
 
-- Only fires when the match-point player is SERVING (97.3% conversion vs 88.5% returning)
 - Buy only — never sell (comeback bets have 7.1% hit rate, catastrophic)
 - Uses empirical conversion rate (97%) instead of hand-tuned formula
 - Edge = (0.97 - market_price) * 100 cents; fires if edge >= 1 cent
@@ -54,7 +51,6 @@ emits simulated buy orders.
 
 - `MatchPointStrategy` holds thread-safe map of market_ticker -> latest YES price
 - `OnPrice` called by WS manager on every ticker message
-- `OnPoints` called by FlashScore/API-Tennis scraper after ingesting new points
 - Orders emitted via `OrderEmitter` — same logic in live and backtest
 
 ## QuotaGuard
@@ -88,11 +84,9 @@ Safety:
 
 ## Gotchas
 
-- Markets must be registered before match-point signals can fire
+- Markets must be registered before signals can fire
 - No price = no order. WS must be actively subscribed to the market
 - Stale price (>60s) = no order. Protects against WS disconnects
-- Match point detection is conservative — requires both set and game position
-- Set tracking relies on sequential point arrival — late/out-of-order points may miscount
 - Paper trail always complete — `QuotaGuard.paper` receives every order regardless of throttle
 - Real orders only when `real_trading_enabled: true` — otherwise inner is `NoopEmitter`
 - `QuotaGuard` budget tracking is local (no REST balance query). `SuggestedSize` = spend per order.

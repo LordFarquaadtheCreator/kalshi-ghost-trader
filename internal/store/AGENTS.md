@@ -6,7 +6,7 @@ SQLite layer. Single-writer architecture via TickWriter.
 
 - `store.go` — DB struct, New, Close, migrate, nowMillis helper
 - `schema.go` — schemaDDL constant (full DDL for all tables + cascade triggers)
-- `types.go` — Event, Market, Tick, LifecycleEvent, EventLifecycleEvent, OrderbookEvent, FSMatch, Point
+- `types.go` — Event, Market, Tick, LifecycleEvent, EventLifecycleEvent, OrderbookEvent, Order
 - `events.go` — UpsertEvent, UpsertEventCheckNew, DeleteEvent, EventExists, SetCoverage, DropOrphanPayloads, GetCoverage, GetAllEventsForMatching
 - `markets.go` — UpsertMarket, UpsertMarketCheckNew, GetActiveMarkets, GetMarketsByEvent, scanMarket helper
 - `ticks.go` — InsertTickBatch
@@ -14,9 +14,7 @@ SQLite layer. Single-writer architecture via TickWriter.
 - `lifecycle.go` — InsertLifecycleEvent, InsertEventLifecycleEvent, ApplyLifecycleEvent
 - `scan.go` — RecordScanRun
 - `janitor.go` — CleanOrphans, AdoptOrphans
-- `points.go` — InsertPointsBatch, GetPointCount
-- `fs_matches.go` — UpsertFSMatch, UpdateFSMatchPolled, MapFSMatchToEvent, GetFSMatch, GetUnmappedFSMatches, GetActiveFSMatches, GetFSMatchesByEvent
-- `tickwriter.go` — TickWriter goroutine (batched writes across 5 channels)
+- `tickwriter.go` — TickWriter goroutine (batched writes across 4 channels)
 
 ## PRAGMA
 
@@ -36,6 +34,7 @@ MaxOpenConns=1, MaxIdleConns=1. Single writer. SQLite serializes writes anyway.
 - `orderbook_events` — orderbook snapshots + deltas. No FK. Same reason. Delta: price/delta/side extracted. Snapshot: full levels in payload.
 - `lifecycle_events` — market_lifecycle_v2 WS events. No FK. Same reason.
 - `event_lifecycle_events` — event_lifecycle WS messages (event creation). No FK.
+- `orders` — simulated orders from strategy signals. No FK. Traceable via match_ticker + market_ticker.
 - `scan_runs` — scan audit log.
 
 ## Why no FK on ticks/orderbook_events/lifecycle_events/event_lifecycle_events
@@ -50,7 +49,7 @@ Flush triggers: batch full, timer fires, lifecycle event arrives, ctx cancelled.
 
 After inserting a lifecycle event, calls `ApplyLifecycleEvent` to update `markets` table status. Maps: activated→active (also updates open_ts if present), deactivated→inactive, determined→determined (updates result+settlement_ts), settled→finalized (updates result+settlement_ts), close_date_updated→close_ts only. Each type only updates its own columns — preserves close_ts/settlement_ts from other sources. Implicit transitions (initialized→active, active→closed) emit no WS event — rely on REST scan.
 
-On `settled`: after both markets in an event are finalized, classifies coverage (`full`/`low_freq`/`points_only`/`none`). If `none`, prunes the event entirely. If not `full`, drops raw payloads from ticks/orderbook (saves disk space).
+On `settled`: after both markets in an event are finalized, classifies coverage (`full`/`low_freq`/`none`). If `none`, prunes the event entirely. If not `full`, drops raw payloads from ticks/orderbook (saves disk space).
 
 ## Upsert pattern
 

@@ -57,7 +57,7 @@ WHERE market_ticker=?`,
 		return err
 
 	case "settled":
-		// P6: Prune the event if it has zero ticks AND zero points after settlement.
+		// P6: Prune the event if it has zero ticks after settlement.
 		// P5: Classify coverage for events that survive.
 		_, err := d.db.ExecContext(ctx, `
 UPDATE markets SET status='finalized', result=?, settlement_ts=?, settlement_value=?, last_updated_ts=?

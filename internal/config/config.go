@@ -3,7 +3,7 @@
 // The Config struct holds all tunable parameters for the ghost-trader service:
 // Kalshi API credentials, environment selection (demo/prod), SQLite path,
 // tennis series tickers, scanner/scheduler intervals, WebSocket backoff,
-// batch sizes, rate limits, metrics port, and FlashScore scraper settings.
+// batch sizes, rate limits, metrics port, and API-Tennis scraper settings.
 //
 // Configuration is loaded via [Load], which reads config.yaml (or the path
 // specified by the CONFIG_PATH environment variable), applies defaults for
@@ -67,12 +67,6 @@ type Config struct {
 	// pprof/metrics HTTP server port (0 = disabled)
 	MetricsPort int `yaml:"metrics_port"`
 
-	// FlashScore scraper settings
-	FlashScoreEnabled       bool `yaml:"flashscore_enabled"`
-	FlashScoreScanInterval  int  `yaml:"flashscore_scan_interval_secs"` // feed scan interval
-	FlashScorePollInterval  int  `yaml:"flashscore_poll_interval_secs"` // point poll interval
-	FlashScoreLookaheadDays int  `yaml:"flashscore_lookahead_days"`     // days to look ahead in feed
-
 	// API-Tennis scraper settings (WebSocket real-time push)
 	APITennisEnabled  bool   `yaml:"apitennis_enabled"`
 	APITennisAPIKey   string `yaml:"apitennis_api_key"`
@@ -86,27 +80,14 @@ type Config struct {
 	CloseTimerPollSecs int     `yaml:"close_timer_poll_secs"`    // DB poll interval
 	CloseTimerSize     float64 `yaml:"close_timer_size"`         // shares per order
 
-	// Order quota — throttles order emission. Enabled by default.
-	// Paper budget/floor track simulated spend. Real budget/floor track live spend.
-	// Both enforced independently — paper trades always logged regardless.
+	// Order quota — throttles order emission to prevent exhausting API quota.
+	// When disabled, all orders are paper trades only (current behavior).
 	OrderQuotaEnabled      bool    `yaml:"order_quota_enabled"`
 	OrderQuotaCooldownSecs int     `yaml:"order_quota_cooldown_secs"` // per-market cooldown window
 	OrderQuotaMaxPerSec    int     `yaml:"order_quota_max_per_sec"`   // global rate limit (0 = unlimited)
 	OrderQuotaDailyLimit   int     `yaml:"order_quota_daily_limit"`   // hard daily ceiling (0 = unlimited)
-	PaperBudgetTotal       float64 `yaml:"paper_budget_total"`        // paper trading budget (0 = no tracking)
-	PaperBudgetFloor       float64 `yaml:"paper_budget_floor"`        // paper floor
-	RealBudgetTotal        float64 `yaml:"real_budget_total"`         // real trading budget (0 = no tracking)
-	RealBudgetFloor        float64 `yaml:"real_budget_floor"`         // real floor
-
-	// Real trading — submits live orders to Kalshi. DANGEROUS.
-	// When false, inner emitter is NoopEmitter (paper only).
-	// When true, inner emitter is KalshiOrderEmitter submitting IOC bids.
-	RealTradingEnabled   bool `yaml:"real_trading_enabled"`
-	RealMaxContracts     int  `yaml:"real_max_contracts"`      // hard cap per order
-	RealOrderTimeoutSecs int  `yaml:"real_order_timeout_secs"` // per-order HTTP timeout
-
-	// Kelly sizing — fraction of bankroll to risk per order (0 = no Kelly sizing)
-	KellyFraction float64 `yaml:"kelly_fraction"`
+	OrderQuotaBudgetTotal  float64 `yaml:"order_quota_budget_total"`  // starting budget in dollars (0 = no tracking)
+	OrderQuotaBudgetFloor  float64 `yaml:"order_quota_budget_floor"`  // stop when remaining drops below this
 }
 
 // Load reads config from config.yaml in the working directory.
@@ -202,15 +183,6 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	if c.MetricsPort == 0 {
 		c.MetricsPort = 6060
 	}
-	if c.FlashScoreScanInterval == 0 {
-		c.FlashScoreScanInterval = 300 // 5 min
-	}
-	if c.FlashScorePollInterval == 0 {
-		c.FlashScorePollInterval = 10 // 10 sec
-	}
-	if c.FlashScoreLookaheadDays == 0 {
-		c.FlashScoreLookaheadDays = 1
-	}
 	if c.APITennisTimezone == "" {
 		c.APITennisTimezone = "+00:00"
 	}
@@ -238,20 +210,8 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	if c.OrderQuotaDailyLimit == 0 {
 		c.OrderQuotaDailyLimit = 100
 	}
-	if c.PaperBudgetFloor == 0 && c.PaperBudgetTotal > 0 {
-		c.PaperBudgetFloor = 5.0
-	}
-	if c.RealBudgetFloor == 0 && c.RealBudgetTotal > 0 {
-		c.RealBudgetFloor = 5.0
-	}
-	if c.RealMaxContracts == 0 {
-		c.RealMaxContracts = 50
-	}
-	if c.RealOrderTimeoutSecs == 0 {
-		c.RealOrderTimeoutSecs = 10
-	}
-	if c.KellyFraction == 0 {
-		c.KellyFraction = 0.25
+	if c.OrderQuotaBudgetFloor == 0 && c.OrderQuotaBudgetTotal > 0 {
+		c.OrderQuotaBudgetFloor = 5.0
 	}
 }
 

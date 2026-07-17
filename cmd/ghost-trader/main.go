@@ -8,7 +8,6 @@
 //   - WebSocket Manager — auto-reconnecting connection to Kalshi's real-time feed
 //   - Scanner — periodic REST scan for new tennis events and markets
 //   - Scheduler — starts per-market WS tracking at occurrence_datetime minus lead time
-//   - FlashScore Scraper — optional point-by-point tennis data polling
 //   - Metrics Server — runtime stats + pprof on 127.0.0.1 (default port 6060)
 //
 // SIGINT/SIGTERM triggers graceful shutdown: root context is cancelled, errgroup
@@ -32,8 +31,8 @@ import (
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/apitennis"
+	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
-	"github.com/farquaad/kalshi-ghost-trader/internal/flashscore"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
@@ -94,62 +93,19 @@ func main() {
 	restClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
 		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
 
-	// Order emission pipeline:
-	//
-	//   strategies → paperGuard → paperEmitter (TickWriter, always)
-	//                    ↓ (inner, if quota approved)
-	//                 realGuard → KalshiOrderEmitter (if real_trading_enabled)
-	//                    ↓ (inner, if real quota approved)
-	//                 NoopEmitter (if real trading disabled)
-	//
-	// Paper guard: always active, tracks paper budget, writes to DB.
-	// Real guard: only active when real_trading_enabled, tracks real budget.
-	// Both have independent cooldowns, rate limits, and daily quotas.
-	//
-	// When order_quota_enabled=false: paper guard passes all through (no throttle).
-	// When real_trading_enabled=false: inner is NoopEmitter (no real orders).
-
+	// Quota guard — throttles orders when enabled. Paper trail always complete.
+	// When order_quota_enabled=false, all orders are paper trades (current behavior).
+	// When enabled, per-market cooldown prevents N strategies from firing N orders
+	// on the same market simultaneously.
 	paperEmitter := algorithms.NewTickWriterEmitter(tickWriter)
-
-	// Build inner emitter: real order submission or noop
-	var realInner algorithms.OrderEmitter = algorithms.NoopEmitter{}
-	if cfg.RealTradingEnabled {
-		realEmitter := algorithms.NewKalshiOrderEmitter(restClient,
-			algorithms.RealOrderConfig{
-				Enabled:       true,
-				MaxContracts:  cfg.RealMaxContracts,
-				Environment:   cfg.Environment,
-				OrderTimeoutS: cfg.RealOrderTimeoutSecs,
-			}, log)
-		// Real guard wraps real emitter with its own budget/quota
-		realGuard := algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter,
-			algorithms.QuotaConfig{
-				Enabled:      cfg.OrderQuotaEnabled,
-				CooldownSecs: cfg.OrderQuotaCooldownSecs,
-				MaxPerSec:    cfg.OrderQuotaMaxPerSec,
-				DailyLimit:   cfg.OrderQuotaDailyLimit,
-				BudgetTotal:  cfg.RealBudgetTotal,
-				BudgetFloor:  cfg.RealBudgetFloor,
-			}, log)
-		defer realGuard.Close()
-		realInner = realGuard
-		log.Warn("REAL TRADING ENABLED",
-			"environment", cfg.Environment,
-			"max_contracts", cfg.RealMaxContracts,
-			"real_budget", cfg.RealBudgetTotal,
-			"real_floor", cfg.RealBudgetFloor)
-	}
-
-	// Paper guard: strategies emit here. Paper trail always written.
-	// Inner = realInner (real guard or noop).
-	guard := algorithms.NewQuotaGuard(paperEmitter, realInner,
+	guard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{},
 		algorithms.QuotaConfig{
 			Enabled:      cfg.OrderQuotaEnabled,
 			CooldownSecs: cfg.OrderQuotaCooldownSecs,
 			MaxPerSec:    cfg.OrderQuotaMaxPerSec,
 			DailyLimit:   cfg.OrderQuotaDailyLimit,
-			BudgetTotal:  cfg.PaperBudgetTotal,
-			BudgetFloor:  cfg.PaperBudgetFloor,
+			BudgetTotal:  cfg.OrderQuotaBudgetTotal,
+			BudgetFloor:  cfg.OrderQuotaBudgetFloor,
 		}, log)
 	defer guard.Close()
 
@@ -158,22 +114,21 @@ func main() {
 			"cooldown_secs", cfg.OrderQuotaCooldownSecs,
 			"max_per_sec", cfg.OrderQuotaMaxPerSec,
 			"daily_limit", cfg.OrderQuotaDailyLimit,
-			"paper_budget", cfg.PaperBudgetTotal,
-			"paper_floor", cfg.PaperBudgetFloor,
-			"real_trading", cfg.RealTradingEnabled)
+			"budget_total", cfg.OrderQuotaBudgetTotal,
+			"budget_floor", cfg.OrderQuotaBudgetFloor)
 	}
 
 	// matchPoint is the primary strategy and also serves as PriceLookup for CloseTimer
-	matchPoint := algorithms.NewMatchPointStrategy(guard, log, cfg.PaperBudgetTotal, cfg.KellyFraction)
+	matchPoint := algorithms.NewMatchPointStrategy(guard, log)
 
 	// FadeLongshot: buy favorite at T-10min before close. Highest Sharpe (1.01).
 	// Created outside factory because it needs DB for live close_ts loading.
 	// All orders are paper trades — TickWriterEmitter writes to orders table, no real execution.
 	fadeLongshot := algorithms.NewFadeLongshotStrategyWithDB(guard, db, log,
-		algorithms.DefaultFadeLongshotConfig(), cfg.PaperBudgetTotal, cfg.KellyFraction)
+		algorithms.DefaultFadeLongshotConfig())
 
 	noFade := algorithms.NewNoFadeStrategyWithDB(guard, db, log,
-		algorithms.DefaultNoFadeConfig(), cfg.PaperBudgetTotal, cfg.KellyFraction)
+		algorithms.DefaultNoFadeConfig())
 
 	// Multi-strategy runtime: all point-based strategies run simultaneously.
 	// Each strategy's orders are tagged with its name in the orders table.
@@ -188,7 +143,7 @@ func main() {
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     1,
 				Label:            "matchpoint-aggro",
-			}, cfg.PaperBudgetTotal, cfg.KellyFraction)
+			})
 		},
 		"setpoint": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
@@ -199,7 +154,7 @@ func main() {
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     1,
 				Label:            "setpoint",
-			}, cfg.PaperBudgetTotal, cfg.KellyFraction)
+			})
 		},
 		"setpoint-serve": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
@@ -210,7 +165,7 @@ func main() {
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     1,
 				Label:            "setpoint-serve",
-			}, cfg.PaperBudgetTotal, cfg.KellyFraction)
+			})
 		},
 		"setpoint-cheap": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
@@ -222,7 +177,7 @@ func main() {
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     1,
 				Label:            "setpoint-cheap",
-			}, cfg.PaperBudgetTotal, cfg.KellyFraction)
+			})
 		},
 		"fadelongshot": func(e algorithms.OrderEmitter) algorithms.Strategy { return fadeLongshot },
 		"nofade":       func(e algorithms.OrderEmitter) algorithms.Strategy { return noFade },
@@ -247,17 +202,6 @@ func main() {
 		log)
 	wsMgr.SetPriceUpdater(multi)
 
-	// FlashScore scraper (optional — created before tracker so tracker can drive polling)
-	var fsScraper *flashscore.Scraper
-	if cfg.FlashScoreEnabled {
-		fsScan := time.Duration(cfg.FlashScoreScanInterval) * time.Second
-		fsPoll := time.Duration(cfg.FlashScorePollInterval) * time.Second
-		fsScraper = flashscore.New(db, tickWriter, multi, fsScan, fsPoll,
-			cfg.FlashScoreLookaheadDays, log)
-		log.Info("flashscore scraper enabled",
-			"scan_interval", fsScan, "poll_interval", fsPoll)
-	}
-
 	// API-Tennis scraper (optional — WebSocket real-time push, no polling delay)
 	var atScraper *apitennis.Scraper
 	if cfg.APITennisEnabled {
@@ -265,7 +209,7 @@ func main() {
 			log.Error("apitennis_enabled but apitennis_api_key is empty")
 			os.Exit(1)
 		}
-		atScraper = apitennis.New(db, tickWriter, multi, cfg.APITennisAPIKey,
+		atScraper = apitennis.New(db, multi, cfg.APITennisAPIKey,
 			cfg.APITennisTimezone, log)
 		log.Info("apitennis scraper enabled", "timezone", cfg.APITennisTimezone)
 	}
@@ -275,8 +219,6 @@ func main() {
 	var scorePoller tracker.ScorePoller
 	if atScraper != nil {
 		scorePoller = atScraper
-	} else if fsScraper != nil {
-		scorePoller = fsScraper
 	}
 	tr := tracker.New(wsMgr, scorePoller, log)
 	tr.SetPriceCleaner(multi)
@@ -291,11 +233,24 @@ func main() {
 	// errgroup for top-level goroutines
 	g, ctx := errgroup.WithContext(ctx)
 
-	// pprof + runtime metrics server
+	// Backtest engine for dashboard strategy API
+	btEngine, err := backtest.NewEngine(cfg.DBPath, log)
+	if err != nil {
+		log.Error("backtest engine init failed", "err", err)
+		os.Exit(1)
+	}
+	defer btEngine.Close()
+
+	// pprof + runtime metrics + strategy API server
 	if cfg.MetricsPort > 0 {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/metrics", metricsHandler)
 		mux.HandleFunc("/api/tracked", trackedHandler(tr))
+		mux.HandleFunc("/api/strategies", corsHandler(strategyListHandler(btEngine)))
+		mux.HandleFunc("/api/backtest", corsHandler(backtestHandler(btEngine, log)))
+		mux.HandleFunc("/api/ticks", corsHandler(ticksHandler(btEngine, log)))
+		mux.HandleFunc("/api/orders", corsHandler(ordersHandler(btEngine, log)))
+		mux.HandleFunc("/api/order-counts", corsHandler(orderCountsHandler(btEngine, log)))
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{
 			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),
@@ -348,14 +303,7 @@ func main() {
 		return recon.Run(ctx, reconInterval)
 	})
 
-	// 5. FlashScore scraper goroutine (optional — polls tennis point-by-point data)
-	if fsScraper != nil {
-		g.Go(func() error {
-			return fsScraper.Run(ctx)
-		})
-	}
-
-	// 5b. API-Tennis scraper goroutine (optional — WS real-time push)
+	// 5. API-Tennis scraper goroutine (optional — WS real-time push)
 	if atScraper != nil {
 		g.Go(func() error {
 			return atScraper.Run(ctx)

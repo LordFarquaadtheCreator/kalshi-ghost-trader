@@ -17,21 +17,6 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
-// PointRow maps a point-by-point score row from the DB.
-type PointRow struct {
-	TS         int64
-	SetNum     int
-	GameNum    int
-	PointNum   int
-	Server     int
-	Scorer     int
-	HomePts    string
-	AwayPts    string
-	HomeGames  int
-	AwayGames  int
-	IsTiebreak bool
-}
-
 // MarketRow maps a market row from the DB.
 type MarketRow struct {
 	MarketTicker string
@@ -97,7 +82,7 @@ type ReplayStrategy interface {
 }
 
 // StrategyFactory creates a strategy instance for backtest.
-type StrategyFactory func(emitter algorithms.OrderEmitter, log *slog.Logger, bankroll, kellyFraction float64) ReplayStrategy
+type StrategyFactory func(emitter algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy
 
 // CloseTimeStrategy is an optional interface for strategies needing close_ts.
 type CloseTimeStrategy interface {
@@ -111,12 +96,8 @@ type Engine struct {
 	markets       map[string][]MarketRow
 	marketCloseTs map[string]int64
 	tickPrices    map[string][]TickPrice
-	pointsByMatch map[string][]PointRow
 	eventTitles   map[string]string
 	factories     map[string]StrategyFactory
-	bankroll      float64
-	kellyFraction float64
-	trackedEvents map[string]bool // events that had live ticks (actually tracked)
 }
 
 // NewEngine creates a backtest engine from a read-only SQLite DB.
@@ -133,12 +114,8 @@ func NewEngine(dbPath string, log *slog.Logger) (*Engine, error) {
 		markets:       make(map[string][]MarketRow),
 		marketCloseTs: make(map[string]int64),
 		tickPrices:    make(map[string][]TickPrice),
-		pointsByMatch: make(map[string][]PointRow),
 		eventTitles:   make(map[string]string),
 		factories:     DefaultFactories(),
-		bankroll:      1000.0,
-		kellyFraction: 0.25,
-		trackedEvents: make(map[string]bool),
 	}
 
 	if err := e.load(); err != nil {
@@ -313,60 +290,22 @@ func (e *Engine) load() error {
 	}
 	mRows.Close()
 
-	// Load tick prices — only for markets belonging to tracked events
-	tRows, err := e.db.QueryContext(ctx, `
-		SELECT t.market_ticker, t.ts, t.price, m.event_ticker
-		FROM ticks t
-		JOIN markets m ON t.market_ticker = m.market_ticker
-		WHERE t.price IS NOT NULL AND t.price > 0
-		ORDER BY t.market_ticker, t.ts`)
+	// Load tick prices
+	tRows, err := e.db.QueryContext(ctx, `SELECT market_ticker, ts, price FROM ticks WHERE price IS NOT NULL AND price > 0 ORDER BY market_ticker, ts`)
 	if err != nil {
 		return fmt.Errorf("query ticks: %w", err)
 	}
 	for tRows.Next() {
-		var mt, et string
+		var mt string
 		var ts int64
 		var price float64
-		if err := tRows.Scan(&mt, &ts, &price, &et); err != nil {
+		if err := tRows.Scan(&mt, &ts, &price); err != nil {
 			tRows.Close()
 			return err
 		}
 		e.tickPrices[mt] = append(e.tickPrices[mt], TickPrice{ts, price})
-		e.trackedEvents[et] = true
 	}
 	tRows.Close()
-
-	// Load points — only for matches that were actually tracked (had live ticks)
-	pRows, err := e.db.QueryContext(ctx, `
-		SELECT match_ticker, ts_ms, set_number, game_number, point_number,
-		       server, scorer, home_points, away_points, home_games, away_games,
-		       is_tiebreak
-		FROM points WHERE ts_ms IS NOT NULL
-		ORDER BY match_ticker, ts_ms`)
-	if err != nil {
-		return fmt.Errorf("query points: %w", err)
-	}
-	for pRows.Next() {
-		var mt string
-		var ts int64
-		var setNum, gameNum, pointNum, server, scorer, homeGames, awayGames int
-		var homePts, awayPts string
-		var isTB int
-		if err := pRows.Scan(&mt, &ts, &setNum, &gameNum, &pointNum, &server, &scorer, &homePts, &awayPts, &homeGames, &awayGames, &isTB); err != nil {
-			pRows.Close()
-			return err
-		}
-		// Only include points for matches that were actually tracked live
-		if !e.trackedEvents[mt] {
-			continue
-		}
-		e.pointsByMatch[mt] = append(e.pointsByMatch[mt], PointRow{
-			TS: ts, SetNum: setNum, GameNum: gameNum, PointNum: pointNum,
-			Server: server, Scorer: scorer, HomePts: homePts, AwayPts: awayPts,
-			HomeGames: homeGames, AwayGames: awayGames, IsTiebreak: isTB == 1,
-		})
-	}
-	pRows.Close()
 
 	return nil
 }
@@ -378,16 +317,12 @@ func (e *Engine) RunStrategy(name string, minPrice float64) (*StrategyResult, er
 		return nil, fmt.Errorf("unknown strategy %q", name)
 	}
 
-	orders := make([]Order, 0)
+	var orders []Order
 	both := 0
 
-	// Point-based replay path — only for tracked events with points
-	for matchTicker, pts := range e.pointsByMatch {
-		if !e.trackedEvents[matchTicker] {
-			continue
-		}
-		mkts, ok := e.markets[matchTicker]
-		if !ok || len(mkts) < 2 {
+	// Tick replay path
+	for matchTicker, mkts := range e.markets {
+		if len(mkts) < 2 {
 			continue
 		}
 		both++
@@ -395,48 +330,21 @@ func (e *Engine) RunStrategy(name string, minPrice float64) (*StrategyResult, er
 		homeMkt, awayMkt := e.orderMarketsByTitle(matchTicker, mkts)
 
 		collector := algorithms.NewOrderCollector()
-		strat := factory(collector, e.log, e.bankroll, e.kellyFraction)
+		strat := factory(collector, e.log)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
 
-		sort.Slice(pts, func(i, j int) bool { return pts[i].TS < pts[j].TS })
-
-		tickIdx := map[string]int{homeMkt: 0, awayMkt: 0}
-		var lastTickTs map[string]int64 = map[string]int64{homeMkt: 0, awayMkt: 0}
-		for _, p := range pts {
-			ptTime := time.UnixMilli(p.TS)
-			strat.SetReplayTime(ptTime)
-			for _, mkt := range []string{homeMkt, awayMkt} {
-				ticks := e.tickPrices[mkt]
-				for tickIdx[mkt] < len(ticks) && ticks[tickIdx[mkt]].TS <= p.TS {
-					// Simulate price staleness — skip ticks with gaps > 60s (WS disconnect)
-					if lastTickTs[mkt] > 0 && ticks[tickIdx[mkt]].TS-lastTickTs[mkt] > 60_000 {
-						strat.DeletePrice(mkt)
-					}
-					strat.OnPriceAt(mkt, ticks[tickIdx[mkt]].Price, time.UnixMilli(ticks[tickIdx[mkt]].TS))
-					lastTickTs[mkt] = ticks[tickIdx[mkt]].TS
-					tickIdx[mkt]++
-				}
+		for _, mkt := range []string{homeMkt, awayMkt} {
+			ticks := e.tickPrices[mkt]
+			for _, t := range ticks {
+				strat.SetReplayTime(time.UnixMilli(t.TS))
+				strat.OnPriceAt(mkt, t.Price, time.UnixMilli(t.TS))
 			}
-			strat.OnPoints([]store.Point{{
-				MatchTicker: matchTicker,
-				SetNumber:   p.SetNum,
-				GameNumber:  p.GameNum,
-				PointNumber: p.PointNum,
-				Server:      p.Server,
-				Scorer:      p.Scorer,
-				HomePoints:  p.HomePts,
-				AwayPoints:  p.AwayPts,
-				HomeGames:   p.HomeGames,
-				AwayGames:   p.AwayGames,
-				IsTiebreak:  p.IsTiebreak,
-				TsMs:        p.TS,
-			}})
 		}
 
 		orders = append(orders, e.resolveOrders(collector.Orders(), mkts, minPrice)...)
 	}
 
-	// Close-time replay path — only for tracked events
+	// Close-time replay path
 	closeOrders := e.runCloseTimeBacktest(factory, minPrice)
 	orders = append(orders, closeOrders...)
 
@@ -464,19 +372,15 @@ func (e *Engine) RunAll(minPrice float64) ([]*StrategyResult, error) {
 
 func (e *Engine) runCloseTimeBacktest(factory StrategyFactory, minPrice float64) []Order {
 	collector := algorithms.NewOrderCollector()
-	strat := factory(collector, e.log, e.bankroll, e.kellyFraction)
+	strat := factory(collector, e.log)
 
 	cts, ok := strat.(CloseTimeStrategy)
 	if !ok {
 		return nil
 	}
 
-	orders := make([]Order, 0)
+	var orders []Order
 	for matchTicker, mkts := range e.markets {
-		// Only replay events that were actually tracked live
-		if !e.trackedEvents[matchTicker] {
-			continue
-		}
 		closeTs, ok := e.marketCloseTs[matchTicker]
 		if !ok || closeTs == 0 {
 			continue
@@ -499,16 +403,10 @@ func (e *Engine) runCloseTimeBacktest(factory StrategyFactory, minPrice float64)
 		cts.RegisterCloseTime(matchTicker, closeTs)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
 
-		var lastTickTs map[string]int64 = map[string]int64{homeMkt: 0, awayMkt: 0}
 		for _, mkt := range []string{homeMkt, awayMkt} {
 			ticks := e.tickPrices[mkt]
 			for _, t := range ticks {
-				// Simulate price staleness — skip ticks with gaps > 60s
-				if lastTickTs[mkt] > 0 && t.TS-lastTickTs[mkt] > 60_000 {
-					strat.DeletePrice(mkt)
-				}
 				strat.OnPriceAt(mkt, t.Price, time.UnixMilli(t.TS))
-				lastTickTs[mkt] = t.TS
 			}
 		}
 		strat.UnregisterMarkets(matchTicker)
