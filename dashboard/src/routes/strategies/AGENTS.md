@@ -9,8 +9,8 @@ Backtest results across strategies with charts and per-strategy order detail.
 
 ## Data
 
-- `api.getStrategies()` → `GET :6061/api/strategies` → `{strategies: string[]}`
-- `api.runBacktest(strategies, minPrice)` → `POST :6061/api/backtest` → `{results: [{name, summary, orders}]}`
+- `api.getStrategies()` → `GET :6060/api/strategies` → `{strategies: string[]}`
+- `api.runBacktest(strategies, minPrice)` → `POST :6060/api/backtest` → `{results: [{name, summary, orders}]}`
 - `summary`: `{total_signals, win_rate, net_pnl, roi, sharpe, profit_factor, avg_edge, max_drawdown, wins, losses}`
 - `orders`: `[{match, context, price, edge_cents, size, won, pnl}]`
 

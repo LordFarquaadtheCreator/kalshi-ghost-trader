@@ -31,12 +31,10 @@ type PriceLookup interface {
 // Lifecycle:
 //   - RegisterMarkets is called when a match starts being tracked
 //   - OnPrice is called on every WS ticker message (or historical replay)
-//   - OnPoints is called when new point-by-point score data arrives
 //   - DeletePrice is called when a single market is unsubscribed
 //   - UnregisterMarkets is called when a match stops being tracked
 type Strategy interface {
 	OnPrice(marketTicker string, price float64)
-	OnPoints(pts []store.Point)
 	RegisterMarkets(eventTicker string, marketTickers []string)
 	UnregisterMarkets(eventTicker string)
 	DeletePrice(marketTicker string)
@@ -84,7 +82,6 @@ func (NoopEmitter) EmitOrder(store.Order) bool { return true }
 type NoopStrategy struct{}
 
 func (NoopStrategy) OnPrice(string, float64)          {}
-func (NoopStrategy) OnPoints([]store.Point)           {}
 func (NoopStrategy) RegisterMarkets(string, []string) {}
 func (NoopStrategy) UnregisterMarkets(string)         {}
 func (NoopStrategy) DeletePrice(string)               {}

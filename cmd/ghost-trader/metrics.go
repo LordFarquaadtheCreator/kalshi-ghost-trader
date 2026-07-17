@@ -2,9 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"runtime"
+	"strings"
+	"sync"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/tracker"
 )
 
@@ -60,5 +65,125 @@ func trackedHandler(tr *tracker.Tracker) http.HandlerFunc {
 			"event_count":  len(events),
 			"market_count": len(subs),
 		})
+	}
+}
+
+// corsHandler wraps a HandlerFunc with CORS headers for dashboard requests.
+func corsHandler(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func strategyListHandler(e *backtest.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		json.NewEncoder(w).Encode(map[string]any{
+			"strategies": e.AvailableStrategies(),
+		})
+	}
+}
+
+var btMu sync.Mutex
+
+func backtestHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		strategiesParam := r.URL.Query().Get("strategies")
+		minPrice := 0.0
+		if v := r.URL.Query().Get("min_price"); v != "" {
+			fmt.Sscanf(v, "%f", &minPrice)
+		}
+
+		var selected []string
+		if strategiesParam == "" || strategiesParam == "all" {
+			selected = e.AvailableStrategies()
+		} else {
+			selected = strings.Split(strategiesParam, ",")
+		}
+
+		btMu.Lock()
+		defer btMu.Unlock()
+
+		results := make([]*backtest.StrategyResult, 0, len(selected))
+		for _, name := range selected {
+			res, err := e.RunStrategy(name, minPrice)
+			if err != nil {
+				log.Error("run strategy", "name", name, "err", err)
+				continue
+			}
+			results = append(results, res)
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"results": results,
+		})
+	}
+}
+
+func ticksHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=3")
+
+		eventTicker := r.URL.Query().Get("event")
+		if eventTicker == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "missing event param"})
+			return
+		}
+
+		data, err := e.GetEventTickPrices(r.Context(), eventTicker)
+		if err != nil {
+			log.Error("get event ticks", "event", eventTicker, "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(data)
+	}
+}
+
+func ordersHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=5")
+
+		data, err := e.GetAllPaperOrders(r.Context())
+		if err != nil {
+			log.Error("get paper orders", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(data)
+	}
+}
+
+func orderCountsHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=5")
+
+		counts, err := e.GetOrderCountsByEvent(r.Context())
+		if err != nil {
+			log.Error("get order counts", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{"counts": counts})
 	}
 }

@@ -1,6 +1,6 @@
 # Kalshi Tennis ML — System Design Document
 
-> A ghost trading system that predicts tennis match outcomes using Kalshi market data + FlashScore point-by-point scores, and executes trades when the model detects a pricing gap. Built on research from ~20 papers on tennis win probability, betting market efficiency, and sports prediction ML.
+> A ghost trading system that predicts tennis match outcomes using Kalshi market data + API-Tennis real-time scores, and executes trades when the model detects a pricing gap. Built on research from ~20 papers on tennis win probability, betting market efficiency, and sports prediction ML.
 
 ---
 
@@ -28,14 +28,14 @@
   Kalshi ──WS/Signal──▶  │  ┌──────────┐    ┌───────────────┐   │
     WebSocket             │  │ Go Ghost │    │ Python ML     │   │
                           │  │ Trader   │◄──►│ Inference     │   │
-  FlashScore ──HTTP──▶    │  │ (ticks)  │    │ Engine        │   │
-    Point API             │  │          │    │ (predictions) │   │
+  API-Tennis ──WS──▶     │  │ (ticks)  │    │ Engine        │   │
+    Real-Time              │  │          │    │ (predictions) │   │
                           │  └─────┬────┘    └───────┬───────┘   │
                           │        │                  │           │
                           │  ┌─────▼──────────────────▼───────┐   │
                           │  │      SQLite DB                  │   │
                           │  │  events / markets / ticks       │   │
-                          │  │  points / predictions / trades  │   │
+                          │  │  orders / predictions / trades  │   │
                           │  └─────▲───────────────────────────┘   │
                           │        │                               │
                           │  ┌─────┴────────────┐                  │
@@ -49,7 +49,7 @@
 
 | Process | Language | Role |
 |---|---|---|
-| `ghost-trader` | Go | WebSocket feeds, REST scans, tick storage, FlashScore scraper (existing) |
+| `ghost-trader` | Go | WebSocket feeds, REST scans, tick storage, API-Tennis scraper (existing) |
 | `ml-engine` | Python | Feature engineering → model inference → trade decisions (new) |
 
 **One offline cron job:**
@@ -85,45 +85,13 @@ volume          REAL       — cumulative contracts
 open_interest   REAL       — outstanding contracts
 ```
 
-### 2.2 FlashScore Point Data (built — `internal/flashscore`)
+### 2.2 API-Tennis Real-Time Data (built — `internal/apitennis`)
 
-**Why FlashScore**: Free, covers every match Kalshi lists (ATP/WTA/ITF/Slams/Challengers), provides per-point scores with timestamps. The literature requires point-level data for the Markov chain baseline — without it, the model is just a market-mimicker (Klaassen & Magnus 1998; O'Donoghue 2012).
+**Why API-Tennis**: WebSocket push model — no polling delay. Covers ATP/WTA/ITF/Challenger. Provides real-time match updates on every state change (point won, game/set completed).
 
-**Implementation**: Go package `internal/flashscore` scrapes FlashScore's internal feed API at `2.flashscore.ninja/2/x/feed/`. Uses `x-fsign: SW9D1eZo` header only — no TLS fingerprinting needed. Feed format is delimited text (¬, ~, ÷), not JSON. Disabled by default; enable via `flashscore_enabled: true` in config.yaml.
+**Implementation**: Go package `internal/apitennis` connects to `wss://wss.api-tennis.com/live?APIkey=<key>&timezone=<tz>`. Auto-reconnects with exponential backoff. Disabled by default; enable via `apitennis_enabled: true` in config.yaml.
 
-**Endpoints used**:
-- `f_2_<day>_1_en_1` — daily match feed (day: -1=today, 0=tomorrow)
-- `df_mh_1_<matchID>` — point-by-point data for a match
-- `dc_1_<matchID>` — match metadata + current score
-
-**Tables**:
-```sql
-flashscore_matches — maps FlashScore match IDs to Kalshi event tickers
-points             — point-by-point score data (set, game, point, server, scorer)
-```
-
-Actual `points` table schema:
-```
-fs_match_id     TEXT      — FlashScore internal match ID
-event_ticker    TEXT      — Kalshi event ticker (nullable until mapped)
-set_number      INTEGER   — 1, 2, or 3 (for best-of-3)
-game_number     INTEGER   — which game in set
-point_number    INTEGER   — which point in game
-server          INTEGER   — 1=home, 2=away
-scorer          INTEGER   — 1=home, 2=away
-home_points     TEXT      — "0","15","30","40","A"
-away_points     TEXT      — same
-home_games      INTEGER   — games won by home in set at this point
-away_games      INTEGER   — games won by away in set at this point
-is_tiebreak     INTEGER   — 1 if tiebreak game
-is_break_point  INTEGER   — 1 if break point
-raw_hl          TEXT      — raw HL field from feed
-ts_ms           INTEGER   — recv timestamp (NULL for historical backfill)
-```
-
-**Match ID mapping**: Fuzzy player name matching. Extract last name from both Kalshi event titles and FlashScore match data, normalize (lowercase, strip accents), find Kalshi event where both players' last names match. Cached in `flashscore_matches` table.
-
-**Timestamp alignment**: Join points to ticks via `SUBSTR(market_ticker, 1, LENGTH(market_ticker)-4) = event_ticker AND ABS(points.ts_ms - ticks.ts) < 2000` — a 2-second window to account for network latency and clock skew. Note: live points use `recv_ts` as `ts_ms`; historical backfill has `ts_ms = NULL`.
+**Tables**: No dedicated tables — API-Tennis data drives strategy signals directly via WebSocket push. Market registration and player name matching cached in-memory.
 
 ### 2.3 Pre-Match Player Data (needs building)
 
@@ -212,7 +180,7 @@ last_10_points_won      INT     — out of last 10 points
 points_streak           INT     — consecutive points won (positive if this player)
 serves_held_consecutive INT     — consecutive service games held
 return_games_won        INT     — return games won this match
-avg_point_length_sec    REAL    — average rally duration (from FlashScore if available)
+avg_point_length_sec    REAL    — average rally duration (from API-Tennis if available)
 ```
 
 ### 3.2 Market Features (from ticks table)
@@ -728,7 +696,7 @@ ORDER BY day;
 
 ```
 /opt/kalshi-ml/
-├── ghost-trader/           # Go binary + config (existing, includes FlashScore scraper)
+├── ghost-trader/           # Go binary + config (existing, includes API-Tennis scraper)
 ├── ml-engine/              # Python ML (new)
 │   ├── inference.py        # Live inference loop
 │   ├── features.py         # Feature engineering
@@ -863,8 +831,8 @@ WantedBy=multi-user.target
 ### Implementation Order
 
 ```
-Week 1-2:   Let ghost-trader run. Build FlashScore scraper.
-Week 3:     Validate FlashScore alignment. Build baseline models (logistic, markov).
+Week 1-2:   Let ghost-trader run. Build API-Tennis WebSocket integration.
+Week 3:     Validate API-Tennis alignment. Build baseline models (logistic, markov).
 Week 4:     GBM tier. Feature engineering. Cross-validation pipeline.
 Week 5:     Full model zoo. Calibration testing. Backtest.
 Week 6:     Deploy to cloud. Start ghost trading with paper capital.

@@ -75,10 +75,9 @@ Full reference in `config.yaml.example`.
 | `ws_min_backoff_secs` | `1` | WS reconnect min backoff |
 | `ws_max_backoff_secs` | `30` | WS reconnect max backoff |
 | `metrics_port` | `6060` | `0` disables metrics server |
-| `flashscore_enabled` | `false` | Enable FlashScore point-by-point scraper |
-| `flashscore_scan_interval_secs` | `300` | FlashScore feed scan interval |
-| `flashscore_poll_interval_secs` | `10` | FlashScore point poll interval |
-| `flashscore_lookahead_days` | `1` | Days to look ahead in FlashScore feed |
+| `apitennis_enabled` | `false` | Enable API-Tennis WebSocket scraper |
+| `apitennis_api_key` | — | API-Tennis API key (required if enabled) |
+| `apitennis_timezone` | `+00:00` | Timezone for API-Tennis requests |
 
 ## Dashboard
 
@@ -146,8 +145,7 @@ SQLite with WAL mode. Single writer, batched inserts. Schema:
 - `lifecycle_events` — `market_lifecycle_v2` WS events
 - `event_lifecycle_events` — `event_lifecycle` WS messages (event creation)
 - `scan_runs` — scan audit log
-- `flashscore_matches` — FlashScore to Kalshi event mapping
-- `points` — FlashScore point-by-point tennis score data
+- `orders` — simulated orders from strategy signals
 
 Inspect:
 
@@ -189,14 +187,13 @@ internal/ws/             WebSocket manager (auto-reconnect, re-subscribe)
 internal/scanner/        daily series scan, stores new events/markets
 internal/tracker/        market subscription lifecycle (no per-match goroutine)
 internal/scheduler/      schedules tracking at occurrence_datetime - lead
-internal/flashscore/     FlashScore point-by-point scraper (optional)
-internal/apitennis/      API-Tennis WebSocket real-time point-by-point scraper
+internal/apitennis/      API-Tennis WebSocket real-time scraper
 internal/algorithms/      pluggable trading strategies (match-point detection, order emission)
 internal/signal/          close-timer strategy, simulated order emission
 ```
 
 Concurrency: one goroutine each for WS manager, tick writer, scanner,
-scheduler, FlashScore scraper (if enabled), API-Tennis scraper (if enabled).
+scheduler, API-Tennis scraper (if enabled).
 One goroutine per scheduled match (waits until start time, then subscribes).
 All cancelled via root context on SIGINT/SIGTERM.
 

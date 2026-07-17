@@ -8,7 +8,7 @@ Simulated paper trading orders split into pending (open positions) and settled t
 
 ## Data
 
-- `api.getOrders()` → `GET :6061/api/orders` → `{orders: PaperOrder[], summary: PaperOrderSummary}`
+- `api.getOrders()` → `GET :6060/api/orders` → `{orders: PaperOrder[], summary: PaperOrderSummary}`
 - `PaperOrder`: `{ts, match_ticker, market_ticker, player_name, context, market_price, edge_cents, suggested_size, strategy, result, won, pnl}`
 - `result` empty = pending, "yes" = won, else lost.
 

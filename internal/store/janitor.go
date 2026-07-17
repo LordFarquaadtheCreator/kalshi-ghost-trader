@@ -70,20 +70,6 @@ DELETE FROM event_lifecycle_events WHERE id IN (
 		log.Info("cleaned orphan event lifecycle", "count", n)
 	}
 
-	// Orphan points (match_ticker has no parent event)
-	res, err = d.db.ExecContext(ctx, `
-DELETE FROM points WHERE id IN (
-    SELECT p.id FROM points p
-    WHERE p.recv_ts < ?
-    AND NOT EXISTS (SELECT 1 FROM events e WHERE e.event_ticker = p.match_ticker)
-)`, cutoff)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		log.Info("cleaned orphan points", "count", n)
-	}
-
 	return nil
 }
 

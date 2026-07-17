@@ -8,7 +8,6 @@
 //   - WebSocket Manager — auto-reconnecting connection to Kalshi's real-time feed
 //   - Scanner — periodic REST scan for new tennis events and markets
 //   - Scheduler — starts per-market WS tracking at occurrence_datetime minus lead time
-//   - FlashScore Scraper — optional point-by-point tennis data polling
 //   - Metrics Server — runtime stats + pprof on 127.0.0.1 (default port 6060)
 //
 // SIGINT/SIGTERM triggers graceful shutdown: root context is cancelled, errgroup
@@ -32,8 +31,8 @@ import (
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/apitennis"
+	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
-	"github.com/farquaad/kalshi-ghost-trader/internal/flashscore"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
@@ -203,17 +202,6 @@ func main() {
 		log)
 	wsMgr.SetPriceUpdater(multi)
 
-	// FlashScore scraper (optional — created before tracker so tracker can drive polling)
-	var fsScraper *flashscore.Scraper
-	if cfg.FlashScoreEnabled {
-		fsScan := time.Duration(cfg.FlashScoreScanInterval) * time.Second
-		fsPoll := time.Duration(cfg.FlashScorePollInterval) * time.Second
-		fsScraper = flashscore.New(db, tickWriter, multi, fsScan, fsPoll,
-			cfg.FlashScoreLookaheadDays, log)
-		log.Info("flashscore scraper enabled",
-			"scan_interval", fsScan, "poll_interval", fsPoll)
-	}
-
 	// API-Tennis scraper (optional — WebSocket real-time push, no polling delay)
 	var atScraper *apitennis.Scraper
 	if cfg.APITennisEnabled {
@@ -221,7 +209,7 @@ func main() {
 			log.Error("apitennis_enabled but apitennis_api_key is empty")
 			os.Exit(1)
 		}
-		atScraper = apitennis.New(db, tickWriter, multi, cfg.APITennisAPIKey,
+		atScraper = apitennis.New(db, multi, cfg.APITennisAPIKey,
 			cfg.APITennisTimezone, log)
 		log.Info("apitennis scraper enabled", "timezone", cfg.APITennisTimezone)
 	}
@@ -231,8 +219,6 @@ func main() {
 	var scorePoller tracker.ScorePoller
 	if atScraper != nil {
 		scorePoller = atScraper
-	} else if fsScraper != nil {
-		scorePoller = fsScraper
 	}
 	tr := tracker.New(wsMgr, scorePoller, log)
 	tr.SetPriceCleaner(multi)
@@ -247,11 +233,24 @@ func main() {
 	// errgroup for top-level goroutines
 	g, ctx := errgroup.WithContext(ctx)
 
-	// pprof + runtime metrics server
+	// Backtest engine for dashboard strategy API
+	btEngine, err := backtest.NewEngine(cfg.DBPath, log)
+	if err != nil {
+		log.Error("backtest engine init failed", "err", err)
+		os.Exit(1)
+	}
+	defer btEngine.Close()
+
+	// pprof + runtime metrics + strategy API server
 	if cfg.MetricsPort > 0 {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/metrics", metricsHandler)
 		mux.HandleFunc("/api/tracked", trackedHandler(tr))
+		mux.HandleFunc("/api/strategies", corsHandler(strategyListHandler(btEngine)))
+		mux.HandleFunc("/api/backtest", corsHandler(backtestHandler(btEngine, log)))
+		mux.HandleFunc("/api/ticks", corsHandler(ticksHandler(btEngine, log)))
+		mux.HandleFunc("/api/orders", corsHandler(ordersHandler(btEngine, log)))
+		mux.HandleFunc("/api/order-counts", corsHandler(orderCountsHandler(btEngine, log)))
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{
 			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),
@@ -304,14 +303,7 @@ func main() {
 		return recon.Run(ctx, reconInterval)
 	})
 
-	// 5. FlashScore scraper goroutine (optional — polls tennis point-by-point data)
-	if fsScraper != nil {
-		g.Go(func() error {
-			return fsScraper.Run(ctx)
-		})
-	}
-
-	// 5b. API-Tennis scraper goroutine (optional — WS real-time push)
+	// 5. API-Tennis scraper goroutine (optional — WS real-time push)
 	if atScraper != nil {
 		g.Go(func() error {
 			return atScraper.Run(ctx)

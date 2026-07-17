@@ -18,10 +18,9 @@ YAML-based configuration loading. All config via `config.yaml` (or `CONFIG_PATH`
 - `rate_limit_rps` — REST client max requests per second (default: 15)
 - `scheduler_poll_secs` — scheduler DB poll interval (default: 30)
 - `metrics_port` — pprof + runtime metrics HTTP server port (default: 6060, 0 = disabled)
-- `flashscore_enabled` — enable FlashScore scraper (default: false)
-- `flashscore_scan_interval_secs` — feed scan interval (default: 300)
-- `flashscore_poll_interval_secs` — point poll interval (default: 10)
-- `flashscore_lookahead_days` — days to look ahead in feed (default: 1)
+- `apitennis_enabled` — enable API-Tennis WebSocket scraper (default: false)
+- `apitennis_api_key` — API-Tennis API key (required if enabled)
+- `apitennis_timezone` — timezone for API-Tennis requests (default: +00:00)
 
 ## Derived Fields
 

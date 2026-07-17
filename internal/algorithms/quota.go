@@ -118,20 +118,33 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 	q.lastOrder[o.MarketTicker] = time.Now()
 	q.mu.Unlock()
 
-	// 2. budget floor — track spend locally, drop if below floor
+	// 2. budget floor — track spend locally, scale-to-fit if over budget
 	if q.cfg.BudgetTotal > 0 {
 		orderCents := int64(o.SuggestedSize * 100)
+		if orderCents <= 0 {
+			return false
+		}
 		newSpent := q.spent.Add(orderCents)
 		remainingCents := int64(q.cfg.BudgetTotal*100) - newSpent
 		floorCents := int64(q.cfg.BudgetFloor * 100)
 		if remainingCents < floorCents {
-			q.spent.Add(-orderCents) // rollback
-			q.log.Warn("quota: budget floor reached, dropped",
+			q.spent.Add(-orderCents) // rollback full amount
+			availCents := int64(q.cfg.BudgetTotal*100) - q.spent.Load() - floorCents
+			if availCents <= 0 {
+				q.log.Warn("quota: budget exhausted, dropped",
+					"market", o.MarketTicker, "strategy", o.Strategy,
+					"remaining", float64(q.spent.Load())/100,
+					"floor", q.cfg.BudgetFloor)
+				return false
+			}
+			scaledSize := float64(availCents) / 100
+			o.SuggestedSize = scaledSize
+			q.spent.Add(int64(scaledSize * 100))
+			q.log.Warn("quota: scaled order to fit budget",
 				"market", o.MarketTicker, "strategy", o.Strategy,
-				"order_size", o.SuggestedSize,
-				"remaining", float64(remainingCents)/100,
-				"floor", q.cfg.BudgetFloor)
-			return false
+				"orig_size", float64(orderCents)/100,
+				"scaled_size", scaledSize,
+				"remaining", float64(int64(q.cfg.BudgetTotal*100)-q.spent.Load())/100)
 		}
 	}
 

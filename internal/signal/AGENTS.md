@@ -15,7 +15,7 @@ Polls DB for active markets approaching close_ts. At T-leadMin, picks the
 higher-priced side (the favorite). If price ≥ minPrice, emits a buy order.
 
 - Dedup per event — one order per event per close window
-- No FlashScore needed — purely time + price based
+- Purely time + price based — no external data source needed
 - Backtest: favorite ≥85c at T-10min won 100% (Sharpe 1.01)
 - Cleans up fired map when events leave the closing window
 - Uses `algorithms.PriceLookup` interface for price queries (implemented by `MatchPointStrategy`)
@@ -23,7 +23,6 @@ higher-priced side (the favorite). If price ≥ minPrice, emits a buy order.
 ## Architecture
 
 - `CloseTimer` uses `algorithms.PriceLookup` (GetPrice/GetPriceAge) to query live prices
-- Match point detection now lives in `internal/algorithms/matchpoint.go`
 - Orders emitted via `tickWriter.IngestOrder` — same single-writer architecture
 
 ## Gotchas

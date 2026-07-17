@@ -17,21 +17,6 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
-// PointRow maps a point-by-point score row from the DB.
-type PointRow struct {
-	TS         int64
-	SetNum     int
-	GameNum    int
-	PointNum   int
-	Server     int
-	Scorer     int
-	HomePts    string
-	AwayPts    string
-	HomeGames  int
-	AwayGames  int
-	IsTiebreak bool
-}
-
 // MarketRow maps a market row from the DB.
 type MarketRow struct {
 	MarketTicker string
@@ -111,7 +96,6 @@ type Engine struct {
 	markets       map[string][]MarketRow
 	marketCloseTs map[string]int64
 	tickPrices    map[string][]TickPrice
-	pointsByMatch map[string][]PointRow
 	eventTitles   map[string]string
 	factories     map[string]StrategyFactory
 }
@@ -130,7 +114,6 @@ func NewEngine(dbPath string, log *slog.Logger) (*Engine, error) {
 		markets:       make(map[string][]MarketRow),
 		marketCloseTs: make(map[string]int64),
 		tickPrices:    make(map[string][]TickPrice),
-		pointsByMatch: make(map[string][]PointRow),
 		eventTitles:   make(map[string]string),
 		factories:     DefaultFactories(),
 	}
@@ -324,34 +307,6 @@ func (e *Engine) load() error {
 	}
 	tRows.Close()
 
-	// Load points
-	pRows, err := e.db.QueryContext(ctx, `
-		SELECT match_ticker, ts_ms, set_number, game_number, point_number,
-		       server, scorer, home_points, away_points, home_games, away_games,
-		       is_tiebreak
-		FROM points WHERE ts_ms IS NOT NULL
-		ORDER BY match_ticker, ts_ms`)
-	if err != nil {
-		return fmt.Errorf("query points: %w", err)
-	}
-	for pRows.Next() {
-		var mt string
-		var ts int64
-		var setNum, gameNum, pointNum, server, scorer, homeGames, awayGames int
-		var homePts, awayPts string
-		var isTB int
-		if err := pRows.Scan(&mt, &ts, &setNum, &gameNum, &pointNum, &server, &scorer, &homePts, &awayPts, &homeGames, &awayGames, &isTB); err != nil {
-			pRows.Close()
-			return err
-		}
-		e.pointsByMatch[mt] = append(e.pointsByMatch[mt], PointRow{
-			TS: ts, SetNum: setNum, GameNum: gameNum, PointNum: pointNum,
-			Server: server, Scorer: scorer, HomePts: homePts, AwayPts: awayPts,
-			HomeGames: homeGames, AwayGames: awayGames, IsTiebreak: isTB == 1,
-		})
-	}
-	pRows.Close()
-
 	return nil
 }
 
@@ -365,10 +320,9 @@ func (e *Engine) RunStrategy(name string, minPrice float64) (*StrategyResult, er
 	var orders []Order
 	both := 0
 
-	// Point-based replay path
-	for matchTicker, pts := range e.pointsByMatch {
-		mkts, ok := e.markets[matchTicker]
-		if !ok || len(mkts) < 2 {
+	// Tick replay path
+	for matchTicker, mkts := range e.markets {
+		if len(mkts) < 2 {
 			continue
 		}
 		both++
@@ -379,33 +333,12 @@ func (e *Engine) RunStrategy(name string, minPrice float64) (*StrategyResult, er
 		strat := factory(collector, e.log)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
 
-		sort.Slice(pts, func(i, j int) bool { return pts[i].TS < pts[j].TS })
-
-		tickIdx := map[string]int{homeMkt: 0, awayMkt: 0}
-		for _, p := range pts {
-			ptTime := time.UnixMilli(p.TS)
-			strat.SetReplayTime(ptTime)
-			for _, mkt := range []string{homeMkt, awayMkt} {
-				ticks := e.tickPrices[mkt]
-				for tickIdx[mkt] < len(ticks) && ticks[tickIdx[mkt]].TS <= p.TS {
-					strat.OnPriceAt(mkt, ticks[tickIdx[mkt]].Price, time.UnixMilli(ticks[tickIdx[mkt]].TS))
-					tickIdx[mkt]++
-				}
+		for _, mkt := range []string{homeMkt, awayMkt} {
+			ticks := e.tickPrices[mkt]
+			for _, t := range ticks {
+				strat.SetReplayTime(time.UnixMilli(t.TS))
+				strat.OnPriceAt(mkt, t.Price, time.UnixMilli(t.TS))
 			}
-			strat.OnPoints([]store.Point{{
-				MatchTicker: matchTicker,
-				SetNumber:   p.SetNum,
-				GameNumber:  p.GameNum,
-				PointNumber: p.PointNum,
-				Server:      p.Server,
-				Scorer:      p.Scorer,
-				HomePoints:  p.HomePts,
-				AwayPoints:  p.AwayPts,
-				HomeGames:   p.HomeGames,
-				AwayGames:   p.AwayGames,
-				IsTiebreak:  p.IsTiebreak,
-				TsMs:        p.TS,
-			}})
 		}
 
 		orders = append(orders, e.resolveOrders(collector.Orders(), mkts, minPrice)...)

@@ -49,17 +49,8 @@ scheduler_poll_secs: 30
 # pprof + runtime metrics HTTP server port (0 = disabled)
 metrics_port: 6060
 
-# FlashScore scraper — polls tennis point-by-point data
-flashscore_enabled: true
-# How often to scan daily feed for new matches (seconds)
-flashscore_scan_interval_secs: 300
-# How often to poll active matches for new points (seconds)
-flashscore_poll_interval_secs: 10
-# How many days ahead to scan in the daily feed
-flashscore_lookahead_days: 1
-
-# API-Tennis scraper — WebSocket real-time point-by-point push
-# Eliminates polling delay. Get API key at https://api-tennis.com/
+# API-Tennis scraper — WebSocket real-time push
+# Get API key at https://api-tennis.com/
 apitennis_enabled: true
 apitennis_api_key: your-api-tennis-key-here
 apitennis_timezone: "+00:00"

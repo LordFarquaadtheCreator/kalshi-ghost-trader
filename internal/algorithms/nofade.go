@@ -169,8 +169,6 @@ func (s *NoFadeStrategy) now() time.Time {
 	return time.Now()
 }
 
-func (s *NoFadeStrategy) OnPoints([]store.Point) {}
-
 func (s *NoFadeStrategy) checkEntry(marketTicker string) {
 	s.checkEntryAt(marketTicker, s.now())
 }
@@ -278,14 +276,14 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 	size := s.cfg.BaseSize
 
 	payload, _ := json.Marshal(map[string]any{
-		"window_s":      s.cfg.WindowSeconds,
-		"close_ts":      closeTs,
-		"entry_ts":      ts.UnixMilli(),
-		"fav_price":     favPrice,
-		"underdog_yes":  underdogPrice,
-		"underdog_no":   noPrice,
-		"max_no_price":  s.cfg.MaxNoPrice,
-		"conv_prob":     convProb,
+		"window_s":     s.cfg.WindowSeconds,
+		"close_ts":     closeTs,
+		"entry_ts":     ts.UnixMilli(),
+		"fav_price":    favPrice,
+		"underdog_yes": underdogPrice,
+		"underdog_no":  noPrice,
+		"max_no_price": s.cfg.MaxNoPrice,
+		"conv_prob":    convProb,
 	})
 
 	o := store.Order{

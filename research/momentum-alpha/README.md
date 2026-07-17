@@ -121,13 +121,13 @@ Results saved to `results/`:
 
 Snapshot DB (`snapshot_for_charts.db`) has no `orderbook_events` or `lifecycle_events` tables. Market microstructure features limited to tick-level data. For orderbook imbalance features, extract from `kalshi_tennis.db` instead.
 
-FlashScore points are thinner than JeffSackmann data (no ace, double fault, rally length, winner type). HMM observation vector is smaller than paper's.
+API-Tennis points are thinner than JeffSackmann data (no ace, double fault, rally length, winner type). HMM observation vector is smaller than paper's.
 
 ## Paper Differences
 
 | Paper | This implementation |
 |---|---|
-| JeffSackmann point-by-point CSVs | FlashScore points via SQLite |
+| JeffSackmann point-by-point CSVs | API-Tennis points via SQLite |
 | Momentum → point winner prediction | Momentum → market price direction |
 | No market data | Kalshi ticks (price, volume, orderbook) |
 | Static post-match | Live + historical |

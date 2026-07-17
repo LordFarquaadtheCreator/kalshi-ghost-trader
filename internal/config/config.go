@@ -3,7 +3,7 @@
 // The Config struct holds all tunable parameters for the ghost-trader service:
 // Kalshi API credentials, environment selection (demo/prod), SQLite path,
 // tennis series tickers, scanner/scheduler intervals, WebSocket backoff,
-// batch sizes, rate limits, metrics port, and FlashScore scraper settings.
+// batch sizes, rate limits, metrics port, and API-Tennis scraper settings.
 //
 // Configuration is loaded via [Load], which reads config.yaml (or the path
 // specified by the CONFIG_PATH environment variable), applies defaults for
@@ -66,12 +66,6 @@ type Config struct {
 
 	// pprof/metrics HTTP server port (0 = disabled)
 	MetricsPort int `yaml:"metrics_port"`
-
-	// FlashScore scraper settings
-	FlashScoreEnabled       bool `yaml:"flashscore_enabled"`
-	FlashScoreScanInterval  int  `yaml:"flashscore_scan_interval_secs"` // feed scan interval
-	FlashScorePollInterval  int  `yaml:"flashscore_poll_interval_secs"` // point poll interval
-	FlashScoreLookaheadDays int  `yaml:"flashscore_lookahead_days"`     // days to look ahead in feed
 
 	// API-Tennis scraper settings (WebSocket real-time push)
 	APITennisEnabled  bool   `yaml:"apitennis_enabled"`
@@ -188,15 +182,6 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	}
 	if c.MetricsPort == 0 {
 		c.MetricsPort = 6060
-	}
-	if c.FlashScoreScanInterval == 0 {
-		c.FlashScoreScanInterval = 300 // 5 min
-	}
-	if c.FlashScorePollInterval == 0 {
-		c.FlashScorePollInterval = 10 // 10 sec
-	}
-	if c.FlashScoreLookaheadDays == 0 {
-		c.FlashScoreLookaheadDays = 1
 	}
 	if c.APITennisTimezone == "" {
 		c.APITennisTimezone = "+00:00"

@@ -10,7 +10,7 @@ Lists currently tracked markets from ghost-trader. Links to match detail page.
 ## Data
 
 - `trackedStore` → `api.getTracked()` → `GET :6060/api/tracked` → `{subs, event_count, market_count}`
-- `countsStore` → `api.getOrderCounts()` → `GET :6061/api/order-counts` → `{counts: {event_ticker: count}}`
+- `countsStore` → `api.getOrderCounts()` → `GET :6060/api/order-counts` → `{counts: {event_ticker: count}}`
 
 ## Columns
 

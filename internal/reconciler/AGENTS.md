@@ -22,7 +22,7 @@ When WS disconnects during market settlement, the `settled` lifecycle event is m
 
 Extracted from `ApplyLifecycleEvent` "settled" case. Runs post-settlement cleanup:
 - Checks both markets in event are finalized
-- `SetCoverage` — classifies as full/low_freq/points_only/none
+- `SetCoverage` — classifies as full/low_freq/none
 - Prunes event if coverage is `none` AND no orders (protects order data from P6 deletion)
 - Drops raw payloads for non-`full` coverage
 

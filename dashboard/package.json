@@ -4,9 +4,8 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"dev": "concurrently -k -n vite,api -c cyan,green \"vite dev\" \"go run ../cmd/strategy-api -db ../kalshi_tennis.db -port 6061\"",
+		"dev": "vite dev",
 		"dev:web": "vite dev",
-		"dev:api": "go run ../cmd/strategy-api -db ../kalshi_tennis.db -port 6061",
 		"build": "vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",

@@ -46,8 +46,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `internal/scanner/` — daily series scan, stores new events/markets
 - `internal/tracker/` — market subscription lifecycle (no per-match goroutine)
 - `internal/scheduler/` — schedules tracking at occurrence_datetime - lead
-- `internal/flashscore/` — FlashScore point-by-point scraper (optional)
-- `internal/apitennis/` — API-Tennis WebSocket real-time point-by-point scraper (optional)
+- `internal/apitennis/` — API-Tennis WebSocket real-time scraper (optional)
 - `internal/algorithms/` — pluggable trading strategies (match-point detection, order emission)
 - `internal/signal/` — close-timer strategy, simulated order emission
 
@@ -57,7 +56,6 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - One TickWriter goroutine: batches inserts, single SQLite writer
 - One Scanner goroutine: daily REST scan
 - One Scheduler goroutine: polls DB, schedules match tracking
-- One FlashScore goroutine (if enabled): scan loop + point poll loop
 - One API-Tennis goroutine (if enabled): WS read loop, per-match dispatch
 - One goroutine per scheduled match: waits until start time, then subscribes
 
@@ -69,19 +67,16 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `orderbook_events` — orderbook snapshots + deltas with raw JSON payload.
 - `lifecycle_events` — market_lifecycle_v2 WS events.
 - `event_lifecycle_events` — event_lifecycle WS messages (event creation announcements).
-- `flashscore_matches` — FlashScore match mapping (fs_match_id → event_ticker).
-- `points` — point-by-point tennis score data from FlashScore.
 - `scan_runs` — scan audit log.
 
 Cascade deletes use flattened triggers (not recursive FK chains):
 - `trg_markets_delete_cascade` — cleans ticks, orderbook, lifecycle on market delete.
-- `trg_events_delete_cascade` — cleans markets, event_lifecycle, points, flashscore on event delete.
+- `trg_events_delete_cascade` — cleans markets, event_lifecycle, orders on event delete.
 
 Coverage classification on events at settlement:
 - `full` — ≥100 ticks spanning ≥290s in final 5-min pre-close window.
 - `low_freq` — 1-99 ticks in that window.
-- `points_only` — no ticks but has FlashScore score data.
-- `none` — no ticks and no points (auto-pruned on settlement by P6).
+- `none` — no ticks (auto-pruned on settlement by P6).
 
 Payload retention: non-`full` events have `payload` NULLed in ticks/orderbook at settlement (P7).
 Orphan janitor (`CleanOrphans`) and late-parenting sweep (`AdoptOrphans`) run after each scan cycle.
@@ -121,7 +116,7 @@ Notebooks query the live SQLite DB read-only. Never open the DB for writes from 
 
 ## Backtest
 
-Replay historical point + tick data through a strategy and report P&L.
+Replay historical tick data through a strategy and report P&L.
 
 ```bash
 go run ./cmd/backtest -strategy matchpoint -db kalshi_tennis.db
