@@ -66,5 +66,8 @@ func DefaultFactories() map[string]StrategyFactory {
 		"comeback040": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewComeback040Strategy(em, log, algorithms.DefaultComeback040Config())
 		},
+		"calibrated-markov": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewCalibratedMarkovStrategy(em, log, algorithms.DefaultCalibratedMarkovConfig())
+		},
 	}
 }

@@ -1,0 +1,65 @@
+{
+  "model_type": "logistic_regression",
+  "version": 1,
+  "trained_at": "2026-07-17T02:56:02.214442",
+  "n_samples": 56638,
+  "n_matches": 470,
+  "cv_accuracy": 0.6684724408750456,
+  "cv_brier": 0.21169422558757528,
+  "cv_logloss": 0.6096057650354559,
+  "feature_names": [
+    "series_id",
+    "server",
+    "home_games",
+    "away_games",
+    "point_diff",
+    "game_diff",
+    "is_bp",
+    "is_tb",
+    "server_is_home",
+    "hp",
+    "ap"
+  ],
+  "feature_means": [
+    1,
+    11
+  ],
+  "coef": [
+    -0.07138968707933414,
+    0.030537115395842782,
+    0.0005276158066202964,
+    0.0025527813531246064,
+    -0.002308038619531201,
+    -0.0020251655465025964,
+    -2.4486543943055876,
+    -1.6425321238769348,
+    -0.07714338479979523,
+    0.2969317082650742,
+    0.2992397468846051
+  ],
+  "intercept": -0.02289812119990849,
+  "series_map": {
+    "KXATPMATCH": 0,
+    "KXATPCHALLENGERMATCH": 1,
+    "KXITFMATCH": 2,
+    "KXITFWMATCH": 3,
+    "KXWTAMATCH": 4,
+    "KXWTACHALLENGERMATCH": 5
+  },
+  "series_rates": {
+    "KXATPCHALLENGERMATCH": 0.6100197541703248,
+    "KXATPMATCH": 0.6109805006223206,
+    "KXITFMATCH": 0.5978965566921193,
+    "KXITFWMATCH": 0.539191104327919,
+    "KXWTACHALLENGERMATCH": 0.5259507294905525,
+    "KXWTAMATCH": 0.518562695691069
+  },
+  "point_map": {
+    "0": 0,
+    "15": 1,
+    "30": 2,
+    "40": 3,
+    "A": 4
+  },
+  "overall_rate": 0.5739432889579434
+}

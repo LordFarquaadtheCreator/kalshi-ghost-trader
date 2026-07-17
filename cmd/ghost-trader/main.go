@@ -203,6 +203,9 @@ func main() {
 		"comeback040": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewComeback040Strategy(e, log, algorithms.DefaultComeback040Config())
 		},
+		"calibrated-markov": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewCalibratedMarkovStrategyWithDB(e, db, log, algorithms.DefaultCalibratedMarkovConfig())
+		},
 	})
 	multi.SetDB(db)
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())
@@ -275,6 +278,7 @@ func main() {
 		mux.HandleFunc("/api/orders", corsHandler(ordersHandler(btEngine, log)))
 		mux.HandleFunc("/api/order-counts", corsHandler(orderCountsHandler(btEngine, log)))
 		mux.HandleFunc("/api/pending-order-counts", corsHandler(pendingOrderCountsHandler(btEngine, log)))
+		mux.HandleFunc("/api/passed-matches", corsHandler(passedMatchesHandler(btEngine, log)))
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{
 			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),

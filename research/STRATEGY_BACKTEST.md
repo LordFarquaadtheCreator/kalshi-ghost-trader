@@ -95,3 +95,27 @@ finding was small-sample luck. Market is efficient at match point.
 **Investigate**:
 7. `convexpool` — 5947 trades, +$1445, but Sharpe 0.01. Volume play?
    Needs fee analysis. After 1c/trade fee on 5947 trades = -$5947. Net negative.
+
+## ML strategies (added 2026-07-17)
+
+| Strategy | Model | n | Hit | Net P&L | ROI | Sharpe | PF | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| calibrated-markov | M1 logistic | 117 | 23.9% | -$20.10 | -6.7% | -0.04 | 0.90 | Negative but close. Better than breakpoint. |
+
+**M1 serve-win logistic**: 66.8% accuracy, Brier 0.21. Per-series rates
+match empirical (ATP 61%, WTA 52%). Model itself is good — problem is
+market already prices this information.
+
+**M2 Markov residual (LightGBM)**: R² -0.0017 predicting 60s forward
+price move. **Market is efficient at 60s horizon.** No tradeable signal.
+
+**M2b point-jump predictor (LightGBM)**: R² -0.22 predicting 5s price
+jump at point events. **Market is efficient at 5s horizon too.** Even
+with 17s latency edge, static features don't predict direction.
+
+**Key finding**: Kalshi tennis market is efficient at 5s and 60s horizons.
+Price moves after points are not predictable from score state alone.
+Edge (if any) requires:
+- Per-player priors (not available yet, need 2+ weeks)
+- Order flow / depth dynamics (data quality issues)
+- Faster execution than market makers (we have 17s, but direction unclear)

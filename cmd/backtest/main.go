@@ -109,6 +109,9 @@ var strategies = map[string]strategyFactory{
 	"comeback040": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		return algorithms.NewComeback040Strategy(em, log, algorithms.DefaultComeback040Config())
 	},
+	"calibrated-markov": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewCalibratedMarkovStrategy(em, log, algorithms.DefaultCalibratedMarkovConfig())
+	},
 }
 
 type marketRow struct {
@@ -182,18 +185,21 @@ func main() {
 	defer db.Close()
 
 	// Load event titles for home/away market ordering
-	eventRows, err := db.QueryContext(ctx, `SELECT event_ticker, title FROM events`)
+	// eventSeries maps event_ticker -> series_ticker for ML strategies
+	eventSeries := make(map[string]string)
+	eventRows, err := db.QueryContext(ctx, `SELECT event_ticker, title, series_ticker FROM events`)
 	if err != nil {
 		log.Error("query events", "err", err)
 		os.Exit(1)
 	}
 	for eventRows.Next() {
-		var et, title string
-		if err := eventRows.Scan(&et, &title); err != nil {
+		var et, title, series string
+		if err := eventRows.Scan(&et, &title, &series); err != nil {
 			log.Error("scan event", "err", err)
 			os.Exit(1)
 		}
 		eventTitles[et] = title
+		eventSeries[et] = series
 	}
 	eventRows.Close()
 
@@ -291,7 +297,7 @@ func main() {
 		fmt.Printf("\n%s\n", strings.Repeat("=", 80))
 		fmt.Printf("STRATEGY: %s\n", name)
 		fmt.Printf("%s\n", strings.Repeat("=", 80))
-		runStrategy(name, strategies[name], log, markets, marketCloseTs, tickPrices, points, *minPrice)
+		runStrategy(name, strategies[name], log, markets, marketCloseTs, tickPrices, points, eventSeries, *minPrice)
 	}
 
 	// Aggregate summary across all strategies
@@ -312,6 +318,7 @@ func runStrategy(
 	marketCloseTs map[string]int64,
 	tickPrices map[string][]tickPrice,
 	points map[string][]store.Point,
+	eventSeries map[string]string,
 	minPrice float64,
 ) {
 	var orders []order
@@ -327,6 +334,13 @@ func runStrategy(
 		collector := algorithms.NewOrderCollector()
 		strat := factory(collector, log)
 		strat.RegisterMarkets(matchTicker, []string{homeMkt, awayMkt})
+
+		// Wire series ticker for ML strategies that need it
+		if cm, ok := strat.(*algorithms.CalibratedMarkovStrategy); ok {
+			if series, ok := eventSeries[matchTicker]; ok {
+				cm.SetSeriesTicker(matchTicker, series)
+			}
+		}
 
 		replayInterleaved(strat, matchTicker, homeMkt, awayMkt, tickPrices, points)
 

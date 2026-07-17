@@ -30,6 +30,13 @@ func (d *DB) EventExists(ctx context.Context, eventTicker string) (bool, error) 
 	return err == nil, err
 }
 
+// GetSeriesTicker returns the series_ticker for an event.
+func (d *DB) GetSeriesTicker(ctx context.Context, eventTicker string) (string, error) {
+	var series string
+	err := d.db.QueryRowContext(ctx, "SELECT series_ticker FROM events WHERE event_ticker = ?", eventTicker).Scan(&series)
+	return series, err
+}
+
 // SetCoverage computes and stores the coverage tag for an event's markets.
 // Called after settlement in ApplyLifecycleEvent. Classification:
 //
