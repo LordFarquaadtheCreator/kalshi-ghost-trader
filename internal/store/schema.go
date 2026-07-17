@@ -158,7 +158,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_match_ts ON orders(match_ticker, ts);
 CREATE INDEX IF NOT EXISTS idx_orders_market ON orders(market_ticker);
-CREATE INDEX IF NOT EXISTS idx_orders_real ON orders(is_real) WHERE is_real = 1;
+-- idx_orders_real created in post-migration step (store.go) after is_real column added
 
 -- Fired events: tracks which event_tickers a strategy has already fired on.
 -- Survives restarts so strategies don't re-fire on the same match.

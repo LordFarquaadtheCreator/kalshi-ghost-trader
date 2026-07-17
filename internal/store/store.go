@@ -120,6 +120,13 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("migrate orders.pool_balance_after_cents: %w", err)
 	}
 
+	// Create idx_orders_real after is_real column is guaranteed present.
+	// Pre-existing DBs have orders table without is_real; schemaDDL's CREATE TABLE IF NOT EXISTS
+	// won't recreate it, so the index must run after addColumnIfMissing.
+	if _, err := db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_orders_real ON orders(is_real) WHERE is_real = 1"); err != nil {
+		return fmt.Errorf("migrate idx_orders_real: %w", err)
+	}
+
 	return nil
 }
 
