@@ -64,6 +64,9 @@
     })).sort((/** @type {any} */ a, /** @type {any} */ b) => (b.subscribed_at || 0) - (a.subscribed_at || 0));
   })());
 
+  let liveRows = $derived(rows.filter((/** @type {any} */ r) => scores[r.event_ticker]));
+  let nonLiveRows = $derived(rows.filter((/** @type {any} */ r) => !scores[r.event_ticker]));
+
   function handleRowClick(/** @type {any} */ row) {
     goto(`/matches/${encodeURIComponent(row.event_ticker)}`);
   }
@@ -89,27 +92,58 @@
   {:else if !$trackedStore.connected}
     <EmptyState text="Cannot reach ghost-trader on :6060. Is it running?" variant="error" />
   {:else}
-    <CollapsibleSection title="Tracked Markets" count={subs.length}>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              {#each columns as col}
-                <th class={col.align === 'right' ? 'num' : ''}>{col.label}</th>
-              {/each}
-            </tr>
-          </thead>
-          <tbody>
-            {#each rows as row}
-              <tr class="clickable" onclick={() => handleRowClick(row)}>
+    <CollapsibleSection title="Live Matches" count={liveRows.length}>
+      {#if liveRows.length > 0}
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
                 {#each columns as col}
-                  <td class={col.class || (col.align === 'right' ? 'num' : '')}>{row[col.key]}</td>
+                  <th class={col.align === 'right' ? 'num' : ''}>{col.label}</th>
                 {/each}
               </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {#each liveRows as row}
+                <tr class="clickable" onclick={() => handleRowClick(row)}>
+                  {#each columns as col}
+                    <td class={col.class || (col.align === 'right' ? 'num' : '')}>{row[col.key]}</td>
+                  {/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {:else}
+        <EmptyState text="No live matches." />
+      {/if}
+    </CollapsibleSection>
+
+    <CollapsibleSection title="Upcoming Matches" count={nonLiveRows.length} defaultOpen={false}>
+      {#if nonLiveRows.length > 0}
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                {#each columns as col}
+                  <th class={col.align === 'right' ? 'num' : ''}>{col.label}</th>
+                {/each}
+              </tr>
+            </thead>
+            <tbody>
+              {#each nonLiveRows as row}
+                <tr class="clickable" onclick={() => handleRowClick(row)}>
+                  {#each columns as col}
+                    <td class={col.class || (col.align === 'right' ? 'num' : '')}>{row[col.key]}</td>
+                  {/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {:else}
+        <EmptyState text="No upcoming matches." />
+      {/if}
     </CollapsibleSection>
   {/if}
 </div>
