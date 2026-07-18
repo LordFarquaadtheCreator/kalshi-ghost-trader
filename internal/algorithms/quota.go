@@ -95,7 +95,8 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 	q.paper.EmitOrder(o)
 
 	if !q.cfg.Enabled {
-		return true
+		// pass through to inner — NoopEmitter in paper mode, realGuard in real mode
+		return q.inner.EmitOrder(o)
 	}
 
 	// 1a. per-market cooldown

@@ -49,9 +49,9 @@ func TestQuotaGuard_Disabled_AllPass(t *testing.T) {
 	if paper.Count() != 10 {
 		t.Fatalf("paper got %d, want 10", paper.Count())
 	}
-	// disabled: inner not called (NoopEmitter expected in real usage)
-	if inner.Count() != 0 {
-		t.Fatalf("inner got %d, want 0 when disabled", inner.Count())
+	// disabled: inner receives all (NoopEmitter in paper mode, realGuard in real mode)
+	if inner.Count() != 10 {
+		t.Fatalf("inner got %d, want 10 when disabled (pass-through)", inner.Count())
 	}
 }
 
