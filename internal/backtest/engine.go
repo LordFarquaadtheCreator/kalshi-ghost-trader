@@ -180,6 +180,39 @@ func (e *Engine) EventOccurrenceTS(ctx context.Context, eventTickers []string) (
 	return out, nil
 }
 
+// LatestTickTS returns the most recent tick timestamp per event_ticker.
+// Used by the dashboard to classify matches as live based on Kalshi tick
+// activity, independent of API-Tennis score data.
+func (e *Engine) LatestTickTS(ctx context.Context, eventTickers []string) (map[string]int64, error) {
+	if len(eventTickers) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(eventTickers))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(eventTickers))
+	for i, t := range eventTickers {
+		args[i] = t
+	}
+	rows, err := e.db.QueryContext(ctx,
+		`SELECT m.event_ticker, MAX(t.ts)
+		 FROM ticks t JOIN markets m ON t.market_ticker = m.market_ticker
+		 WHERE m.event_ticker IN (`+placeholders+`) GROUP BY m.event_ticker`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("latest tick ts: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]int64, len(eventTickers))
+	for rows.Next() {
+		var et string
+		var ts sql.NullInt64
+		if err := rows.Scan(&et, &ts); err != nil {
+			return nil, err
+		}
+		out[et] = ts.Int64
+	}
+	return out, rows.Err()
+}
+
 // LiveScore is the latest point-by-point score for a tracked match.
 type LiveScore struct {
 	EventTicker  string `json:"event_ticker"`

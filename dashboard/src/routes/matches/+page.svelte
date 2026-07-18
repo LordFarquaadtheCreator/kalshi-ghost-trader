@@ -20,6 +20,8 @@
   /** @type {Record<string, any>} */
   let scores = $derived($trackedStore.data?.scores || {});
   /** @type {Record<string, number>} */
+  let tickTS = $derived($trackedStore.data?.latest_tick_ts || {});
+  /** @type {Record<string, number>} */
   let orderCounts = $derived($countsStore.data?.counts || {});
   /** @type {Record<string, number>} */
   let realOrderCounts = $derived((() => {
@@ -87,10 +89,21 @@
     }));
   })());
 
-  let liveRows = $derived(rows.filter((/** @type {any} */ r) => scores[r.event_ticker])
+  // Live if API-Tennis score exists OR Kalshi tick within last 90s.
+  // Score-only signal misses matches API-Tennis doesn't cover (ITF Futures,
+  // Davis Cup rubbers). Tick recency catches those.
+  const LIVE_TICK_WINDOW_MS = 90 * 1000;
+  function isLive(/** @type {any} */ r) {
+    if (scores[r.event_ticker]) return true;
+    const ts = tickTS[r.event_ticker];
+    if (!ts) return false;
+    return Date.now() - ts < LIVE_TICK_WINDOW_MS;
+  }
+
+  let liveRows = $derived(rows.filter((/** @type {any} */ r) => isLive(r))
     .sort((/** @type {any} */ a, /** @type {any} */ b) => (a.occurrence_ts || 0) - (b.occurrence_ts || 0)));
   /** @type {any[]} */
-  let nonLiveRows = $derived(rows.filter((/** @type {any} */ r) => !scores[r.event_ticker])
+  let nonLiveRows = $derived(rows.filter((/** @type {any} */ r) => !isLive(r))
     .sort((/** @type {any} */ a, /** @type {any} */ b) => (a.occurrence_ts || 0) - (b.occurrence_ts || 0)));
 
   /** @type {any[]} */

@@ -186,6 +186,7 @@ type ActiveSub struct {
 	Title        string `json:"title"`
 	SubscribedAt int64  `json:"subscribed_at"`
 	OccurrenceTS int64  `json:"occurrence_ts"`
+	LatestTickTS int64  `json:"latest_tick_ts"`
 }
 
 // ActiveSubs returns all tracked market→event pairs.
