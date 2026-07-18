@@ -183,7 +183,7 @@
                   </span>
                 </td>
                 <td class="mono">
-                  {(triggerRanges[s.Strategy] ?? []).filter(r => r.Enabled).length}
+                  {(triggerRanges[s.Strategy] ?? []).filter(r => r.enabled).length}
                   / {(triggerRanges[s.Strategy] ?? []).length} active
                 </td>
                 <td>
@@ -233,17 +233,17 @@
                           <tbody>
                             {#each triggerRanges[s.Strategy] as band, i (i)}
                               <tr>
-                                <td class="mono">{band.MinPrice.toFixed(2)}</td>
-                                <td class="mono">{band.MaxPrice.toFixed(2)}</td>
-                                <td class="mono">{band.Source}</td>
+                                <td class="mono">{band.min_price.toFixed(2)}</td>
+                                <td class="mono">{band.max_price.toFixed(2)}</td>
+                                <td class="mono">{band.source}</td>
                                 <td>
-                                  <span class="badge {band.Enabled ? 'badge-ok' : 'badge-pending'}">
-                                    {band.Enabled ? 'on' : 'off'}
+                                  <span class="badge {band.enabled ? 'badge-ok' : 'badge-pending'}">
+                                    {band.enabled ? 'on' : 'off'}
                                   </span>
                                 </td>
                                 <td>
                                   <button class="toggle-btn band-action-btn" onclick={() => toggleBand(s.Strategy, i)}>
-                                    {band.Enabled ? 'Disable' : 'Enable'}
+                                    {band.enabled ? 'Disable' : 'Enable'}
                                   </button>
                                   <button class="toggle-btn band-action-btn" onclick={() => removeBand(s.Strategy, i)}>
                                     Remove
