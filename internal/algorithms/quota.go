@@ -14,7 +14,6 @@ type QuotaConfig struct {
 	Enabled      bool
 	CooldownSecs int     // per-market cooldown window
 	MaxPerSec    int     // global rate limit (orders/sec, 0 = unlimited)
-	DailyLimit   int     // hard daily ceiling (0 = unlimited)
 	BudgetTotal  float64 // starting budget in dollars (0 = no budget tracking)
 	BudgetFloor  float64 // stop ordering when remaining drops below this
 }
@@ -34,22 +33,21 @@ type QuotaConfig struct {
 //     would drop below floor, order is dropped. No REST balance query needed.
 //  3. Global rate limit — token bucket caps orders/sec across all markets.
 //     Non-blocking: drops if no token available (never blocks WS goroutine).
-//  4. Daily quota — hard ceiling on total orders per session.
 type QuotaGuard struct {
 	paper OrderEmitter
 	inner OrderEmitter
 	cfg   QuotaConfig
 	log   *slog.Logger
 
-	mu        sync.Mutex
-	lastOrder map[string]time.Time
+	mu              sync.Mutex
+	lastOrder       map[string]time.Time // per-market-per-strategy
+	lastOrderMarket map[string]time.Time // per-market
 
 	tokens chan struct{}
 	stop   chan struct{}
 	closed sync.Once
 
-	remaining atomic.Int64 // daily quota counter
-	spent     atomic.Int64 // cumulative spend in cents (for budget tracking)
+	spent atomic.Int64 // cumulative spend in cents (for budget tracking)
 }
 
 // NewQuotaGuard creates a quota-throttling emitter wrapper.
@@ -57,12 +55,13 @@ type QuotaGuard struct {
 // when Enabled is true.
 func NewQuotaGuard(paper, inner OrderEmitter, cfg QuotaConfig, log *slog.Logger) *QuotaGuard {
 	q := &QuotaGuard{
-		paper:     paper,
-		inner:     inner,
-		cfg:       cfg,
-		log:       log,
-		lastOrder: make(map[string]time.Time),
-		stop:      make(chan struct{}),
+		paper:           paper,
+		inner:           inner,
+		cfg:             cfg,
+		log:             log,
+		lastOrder:       make(map[string]time.Time),
+		lastOrderMarket: make(map[string]time.Time),
+		stop:            make(chan struct{}),
 	}
 
 	if cfg.Enabled && cfg.MaxPerSec > 0 {
@@ -88,10 +87,6 @@ func NewQuotaGuard(paper, inner OrderEmitter, cfg QuotaConfig, log *slog.Logger)
 		}()
 	}
 
-	if cfg.Enabled && cfg.DailyLimit > 0 {
-		q.remaining.Store(int64(cfg.DailyLimit))
-	}
-
 	return q
 }
 
@@ -103,10 +98,9 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 		return true
 	}
 
-	// 1. per-market-per-strategy cooldown
-	cooldownKey := o.MarketTicker + "|" + o.Strategy
+	// 1a. per-market cooldown
 	q.mu.Lock()
-	if last, ok := q.lastOrder[cooldownKey]; ok {
+	if last, ok := q.lastOrderMarket[o.MarketTicker]; ok {
 		cooldown := time.Duration(q.cfg.CooldownSecs) * time.Second
 		if time.Since(last) < cooldown {
 			q.mu.Unlock()
@@ -116,7 +110,21 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 			return false
 		}
 	}
+
+	// 1b. per-market-per-strategy cooldown
+	cooldownKey := o.MarketTicker + "|" + o.Strategy
+	if last, ok := q.lastOrder[cooldownKey]; ok {
+		cooldown := time.Duration(q.cfg.CooldownSecs) * time.Second
+		if time.Since(last) < cooldown {
+			q.mu.Unlock()
+			q.log.Debug("quota: dropped, strategy in cooldown",
+				"market", o.MarketTicker, "strategy", o.Strategy,
+				"age_ms", time.Since(last).Milliseconds())
+			return false
+		}
+	}
 	q.lastOrder[cooldownKey] = time.Now()
+	q.lastOrderMarket[o.MarketTicker] = time.Now()
 	q.mu.Unlock()
 
 	// 2. budget floor — track spend locally, scale-to-fit if over budget
@@ -149,17 +157,7 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 		}
 	}
 
-	// 3. daily quota
-	if q.cfg.DailyLimit > 0 {
-		if q.remaining.Add(-1) < 0 {
-			q.remaining.Store(0)
-			q.log.Warn("quota: daily limit exhausted",
-				"market", o.MarketTicker, "strategy", o.Strategy)
-			return false
-		}
-	}
-
-	// 4. global rate limit — non-blocking, drop if no token
+	// 3. global rate limit — non-blocking, drop if no token
 	if q.tokens != nil {
 		select {
 		case <-q.tokens:
@@ -183,22 +181,6 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 		"remaining_budget", remainingBudget)
 
 	return q.inner.EmitOrder(o)
-}
-
-// ResetDailyQuota resets the daily order counter.
-func (q *QuotaGuard) ResetDailyQuota() {
-	if q.cfg.DailyLimit > 0 {
-		q.remaining.Store(int64(q.cfg.DailyLimit))
-		q.log.Info("quota: daily counter reset", "limit", q.cfg.DailyLimit)
-	}
-}
-
-// RemainingQuota returns remaining daily orders (-1 = unlimited).
-func (q *QuotaGuard) RemainingQuota() int64 {
-	if q.cfg.DailyLimit <= 0 {
-		return -1
-	}
-	return q.remaining.Load()
 }
 
 // RemainingBudget returns remaining budget in dollars (-1 = no budget tracking).

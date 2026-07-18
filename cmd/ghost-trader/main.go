@@ -116,7 +116,6 @@ func main() {
 		Enabled:      cfg.OrderQuotaEnabled,
 		CooldownSecs: cfg.OrderQuotaCooldownSecs,
 		MaxPerSec:    cfg.OrderQuotaMaxPerSec,
-		DailyLimit:   cfg.OrderQuotaDailyLimit,
 		BudgetTotal:  cfg.OrderQuotaBudgetTotal,
 		BudgetFloor:  cfg.OrderQuotaBudgetFloor,
 	}, log)
@@ -152,7 +151,6 @@ func main() {
 			Enabled:      cfg.OrderQuotaEnabled,
 			CooldownSecs: cfg.OrderQuotaCooldownSecs,
 			MaxPerSec:    cfg.OrderQuotaMaxPerSec,
-			DailyLimit:   cfg.OrderQuotaDailyLimit,
 			BudgetTotal:  cfg.OrderQuotaBudgetTotal,
 			BudgetFloor:  cfg.OrderQuotaBudgetFloor,
 		}, log)
@@ -442,23 +440,6 @@ func main() {
 	schedChkInterval := time.Duration(cfg.ScheduleCheckerIntervalSecs) * time.Second
 	g.Go(func() error {
 		return schedChk.Run(ctx, schedChkInterval)
-	})
-
-	// 4d. Daily quota reset at midnight local time
-	g.Go(func() error {
-		for {
-			now := time.Now()
-			next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(next.Sub(now)):
-				paperGuard.ResetDailyQuota()
-				if realGuard != nil {
-					realGuard.ResetDailyQuota()
-				}
-			}
-		}
 	})
 
 	// 5. API-Tennis scraper goroutine (optional — WS real-time push)

@@ -62,7 +62,6 @@ func TestQuotaGuard_Cooldown_DedupSameMarket(t *testing.T) {
 		Enabled:      true,
 		CooldownSecs: 30,
 		MaxPerSec:    100, // high enough not to interfere
-		DailyLimit:   100,
 	}, slog.Default())
 	defer guard.Close()
 
@@ -86,7 +85,6 @@ func TestQuotaGuard_Cooldown_DifferentMarketsPass(t *testing.T) {
 		Enabled:      true,
 		CooldownSecs: 30,
 		MaxPerSec:    100,
-		DailyLimit:   100,
 	}, slog.Default())
 	defer guard.Close()
 
@@ -98,56 +96,6 @@ func TestQuotaGuard_Cooldown_DifferentMarketsPass(t *testing.T) {
 	}
 }
 
-func TestQuotaGuard_DailyLimit(t *testing.T) {
-	paper := &countEmitter{}
-	inner := &countEmitter{}
-	guard := NewQuotaGuard(paper, inner, QuotaConfig{
-		Enabled:      true,
-		CooldownSecs: 0, // no cooldown
-		MaxPerSec:    100,
-		DailyLimit:   3,
-	}, slog.Default())
-	defer guard.Close()
-
-	for i := 0; i < 5; i++ {
-		guard.EmitOrder(newTestOrder("MKT-"+string(rune('A'+i)), "s"))
-	}
-
-	if inner.Count() != 3 {
-		t.Fatalf("inner got %d, want 3 (daily limit)", inner.Count())
-	}
-	if guard.RemainingQuota() != 0 {
-		t.Fatalf("remaining %d, want 0", guard.RemainingQuota())
-	}
-}
-
-func TestQuotaGuard_ResetDailyQuota(t *testing.T) {
-	paper := &countEmitter{}
-	inner := &countEmitter{}
-	guard := NewQuotaGuard(paper, inner, QuotaConfig{
-		Enabled:      true,
-		CooldownSecs: 0,
-		MaxPerSec:    100,
-		DailyLimit:   2,
-	}, slog.Default())
-	defer guard.Close()
-
-	guard.EmitOrder(newTestOrder("MKT-A", "s"))
-	guard.EmitOrder(newTestOrder("MKT-B", "s"))
-	guard.EmitOrder(newTestOrder("MKT-C", "s")) // dropped
-
-	if inner.Count() != 2 {
-		t.Fatalf("inner got %d, want 2", inner.Count())
-	}
-
-	guard.ResetDailyQuota()
-
-	guard.EmitOrder(newTestOrder("MKT-D", "s"))
-	if inner.Count() != 3 {
-		t.Fatalf("inner got %d after reset, want 3", inner.Count())
-	}
-}
-
 func TestQuotaGuard_PaperAlwaysReceives(t *testing.T) {
 	paper := &countEmitter{}
 	inner := &countEmitter{}
@@ -155,20 +103,19 @@ func TestQuotaGuard_PaperAlwaysReceives(t *testing.T) {
 		Enabled:      true,
 		CooldownSecs: 30,
 		MaxPerSec:    100,
-		DailyLimit:   1,
 	}, slog.Default())
 	defer guard.Close()
 
-	// 3 orders: first passes inner, rest dropped by cooldown/daily
+	// 3 orders: first passes inner, rest dropped by cooldown
 	guard.EmitOrder(newTestOrder("MKT-A", "s1"))
 	guard.EmitOrder(newTestOrder("MKT-A", "s2")) // cooldown drop
-	guard.EmitOrder(newTestOrder("MKT-B", "s3")) // daily limit drop
+	guard.EmitOrder(newTestOrder("MKT-B", "s3")) // passes (different market)
 
 	if paper.Count() != 3 {
 		t.Fatalf("paper got %d, want 3 (always receives all)", paper.Count())
 	}
-	if inner.Count() != 1 {
-		t.Fatalf("inner got %d, want 1", inner.Count())
+	if inner.Count() != 2 {
+		t.Fatalf("inner got %d, want 2", inner.Count())
 	}
 }
 
@@ -179,7 +126,6 @@ func TestQuotaGuard_CooldownExpiry(t *testing.T) {
 		Enabled:      true,
 		CooldownSecs: 0, // 0 = no cooldown
 		MaxPerSec:    100,
-		DailyLimit:   100,
 	}, slog.Default())
 	defer guard.Close()
 
@@ -199,7 +145,6 @@ func TestQuotaGuard_RateLimit(t *testing.T) {
 		Enabled:      true,
 		CooldownSecs: 0,
 		MaxPerSec:    2,
-		DailyLimit:   100,
 	}, slog.Default())
 	defer guard.Close()
 
@@ -230,7 +175,6 @@ func TestQuotaGuard_BudgetFloor(t *testing.T) {
 		Enabled:      true,
 		CooldownSecs: 0,
 		MaxPerSec:    100,
-		DailyLimit:   100,
 		BudgetTotal:  10.00, // $10 budget
 		BudgetFloor:  3.00,  // stop when remaining < $3
 	}, slog.Default())
@@ -269,7 +213,6 @@ func TestQuotaGuard_BudgetDisabled(t *testing.T) {
 		Enabled:      true,
 		CooldownSecs: 0,
 		MaxPerSec:    100,
-		DailyLimit:   100,
 		BudgetTotal:  0, // no budget tracking
 	}, slog.Default())
 	defer guard.Close()

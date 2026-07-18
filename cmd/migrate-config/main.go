@@ -50,7 +50,6 @@ type yamlConfig struct {
 	OrderQuotaEnabled      bool    `yaml:"order_quota_enabled"`
 	OrderQuotaCooldownSecs int     `yaml:"order_quota_cooldown_secs"`
 	OrderQuotaMaxPerSec    int     `yaml:"order_quota_max_per_sec"`
-	OrderQuotaDailyLimit   int     `yaml:"order_quota_daily_limit"`
 	OrderQuotaBudgetTotal  float64 `yaml:"order_quota_budget_total"`
 	OrderQuotaBudgetFloor  float64 `yaml:"order_quota_budget_floor"`
 }
@@ -186,7 +185,6 @@ func buildConfigPairs(yc *yamlConfig) []store.AppConfigKV {
 		{Key: "order_quota_enabled", Value: boolStr(yc.OrderQuotaEnabled)},
 		{Key: "order_quota_cooldown_secs", Value: strconv.Itoa(yc.OrderQuotaCooldownSecs)},
 		{Key: "order_quota_max_per_sec", Value: strconv.Itoa(yc.OrderQuotaMaxPerSec)},
-		{Key: "order_quota_daily_limit", Value: strconv.Itoa(yc.OrderQuotaDailyLimit)},
 		{Key: "order_quota_budget_total", Value: fmt.Sprintf("%g", yc.OrderQuotaBudgetTotal)},
 		{Key: "order_quota_budget_floor", Value: fmt.Sprintf("%g", yc.OrderQuotaBudgetFloor)},
 		// New fields with defaults

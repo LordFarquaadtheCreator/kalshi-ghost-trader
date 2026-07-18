@@ -83,9 +83,8 @@ close_timer_size: 50
 # so the paper trail captures the full signal surface for backtesting.
 # These fields are reserved for future real-trading wiring (currently unused).
 order_quota_enabled: false
-order_quota_cooldown_secs: 30   # per-market: first order passes, rest dropped within window
-order_quota_max_per_sec: 2      # global rate limit across all markets
-order_quota_daily_limit: 100    # hard daily ceiling (0 = unlimited)
+order_quota_cooldown_secs: 30   # per-market + per-market-per-strategy: first order passes, rest dropped within window
+order_quota_max_per_sec: 2      # global rate limit across all markets (0 = unlimited)
 
 # Paper trading budget (simulated spend tracking)
 paper_budget_total: 1000.00    # starting paper budget in dollars (0 = no tracking)

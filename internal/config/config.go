@@ -94,7 +94,6 @@ type Config struct {
 	OrderQuotaEnabled      bool
 	OrderQuotaCooldownSecs int
 	OrderQuotaMaxPerSec    int
-	OrderQuotaDailyLimit   int
 	OrderQuotaBudgetTotal  float64
 	OrderQuotaBudgetFloor  float64
 
@@ -246,7 +245,6 @@ func (c *Config) applyFromMap(m map[string]string) {
 	c.OrderQuotaEnabled = atob(m["order_quota_enabled"])
 	c.OrderQuotaCooldownSecs = atoi(m["order_quota_cooldown_secs"])
 	c.OrderQuotaMaxPerSec = atoi(m["order_quota_max_per_sec"])
-	c.OrderQuotaDailyLimit = atoi(m["order_quota_daily_limit"])
 	c.OrderQuotaBudgetTotal = atof(m["order_quota_budget_total"])
 	c.OrderQuotaBudgetFloor = atof(m["order_quota_budget_floor"])
 
@@ -332,12 +330,6 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	}
 	if c.OrderQuotaCooldownSecs == 0 {
 		c.OrderQuotaCooldownSecs = 30
-	}
-	if c.OrderQuotaMaxPerSec == 0 {
-		c.OrderQuotaMaxPerSec = 50
-	}
-	if c.OrderQuotaDailyLimit == 0 {
-		c.OrderQuotaDailyLimit = 1000
 	}
 	if c.OrderQuotaBudgetFloor == 0 && c.OrderQuotaBudgetTotal > 0 {
 		c.OrderQuotaBudgetFloor = 5.0
