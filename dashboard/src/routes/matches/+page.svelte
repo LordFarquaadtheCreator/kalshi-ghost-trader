@@ -44,6 +44,19 @@
     return `${sets}  ${games}  ${pts}`;
   }
 
+  function fmtStarts(/** @type {number} */ ts) {
+    if (!ts) return '—';
+    const d = new Date(ts);
+    const now = new Date();
+    const diffMs = ts - now.getTime();
+    if (diffMs <= 0) return 'started';
+    const diffMin = Math.round(diffMs / 60000);
+    if (diffMin < 60) return `in ${diffMin}m`;
+    const diffHr = Math.round(diffMin / 60);
+    if (diffHr < 24) return `in ${diffHr}h`;
+    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
   let rows = $derived((() => {
     const byEvent = new Map();
     for (const s of subs) {
@@ -139,6 +152,7 @@
                 {#each columns as col}
                   <th class={col.align === 'right' ? 'num' : ''}>{col.label}</th>
                 {/each}
+                <th>Starts</th>
               </tr>
             </thead>
             <tbody>
@@ -147,6 +161,7 @@
                   {#each columns as col}
                     <td class={col.class || (col.align === 'right' ? 'num' : '')}>{row[col.key]}</td>
                   {/each}
+                  <td>{fmtStarts(row.occurrence_ts)}</td>
                 </tr>
               {/each}
             </tbody>

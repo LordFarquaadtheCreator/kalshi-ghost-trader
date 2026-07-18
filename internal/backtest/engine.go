@@ -150,6 +150,36 @@ func (e *Engine) EventTitle(eventTicker string) string {
 	return e.eventTitles[eventTicker]
 }
 
+// EventOccurrenceTS returns a map of event_ticker → occurrence_ts for the given events.
+// Queries the DB live so data is fresh.
+func (e *Engine) EventOccurrenceTS(ctx context.Context, eventTickers []string) (map[string]int64, error) {
+	if len(eventTickers) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(eventTickers))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(eventTickers))
+	for i, t := range eventTickers {
+		args[i] = t
+	}
+	rows, err := e.db.QueryContext(ctx,
+		`SELECT event_ticker, MAX(occurrence_ts) FROM markets WHERE event_ticker IN (`+placeholders+`) GROUP BY event_ticker`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]int64, len(eventTickers))
+	for rows.Next() {
+		var et string
+		var ts sql.NullInt64
+		if err := rows.Scan(&et, &ts); err != nil {
+			return nil, err
+		}
+		out[et] = ts.Int64
+	}
+	return out, nil
+}
+
 // LiveScore is the latest point-by-point score for a tracked match.
 type LiveScore struct {
 	EventTicker  string `json:"event_ticker"`
@@ -1000,14 +1030,14 @@ func (e *Engine) GetOrderCountsByEvent(ctx context.Context) (map[string]int, err
 
 // PassedMatch is a finalized event with winner + aggregate P&L, for the dashboard.
 type PassedMatch struct {
-	EventTicker   string  `json:"event_ticker"`
-	Title         string  `json:"title"`
-	Series        string  `json:"series"`
-	Winner        string  `json:"winner"`
-	CloseTs       int64   `json:"close_ts"`
-	SettledTs     int64   `json:"settled_ts"`
-	OrderCount    int     `json:"order_count"`
-	NetPnL        float64 `json:"net_pnl"`
+	EventTicker string  `json:"event_ticker"`
+	Title       string  `json:"title"`
+	Series      string  `json:"series"`
+	Winner      string  `json:"winner"`
+	CloseTs     int64   `json:"close_ts"`
+	SettledTs   int64   `json:"settled_ts"`
+	OrderCount  int     `json:"order_count"`
+	NetPnL      float64 `json:"net_pnl"`
 }
 
 // GetPassedMatches returns events where both markets are finalized, newest first.

@@ -4,6 +4,7 @@
   import PageHeader from '$lib/components/PageHeader.svelte';
   import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import { goto } from '$app/navigation';
 
   const ordersStore = createPoll(() => api.getRealOrders(), 5000, { data: null, error: null, connected: false });
   const poolStore = createPoll(() => api.getLiquidityPool(), 5000, { data: null, error: null, connected: false });
@@ -51,6 +52,10 @@
     if (s === 'failed') return 'badge-err';
     if (s === 'submitted' || s === 'partial') return 'badge-loading';
     return 'badge-pending';
+  }
+
+  function handleRowClick(/** @type {any} */ o) {
+    goto(`/matches/${encodeURIComponent(o.MatchTicker)}`);
   }
 </script>
 
@@ -142,7 +147,8 @@
           </thead>
           <tbody>
             {#each filteredOrders as o (o.ID)}
-              <tr class:row-win={o.OrderStatus === 'resolved' && o.ResolvedPNLCents > 0}
+              <tr class="clickable" onclick={() => handleRowClick(o)}
+                  class:row-win={o.OrderStatus === 'resolved' && o.ResolvedPNLCents > 0}
                   class:row-loss={o.OrderStatus === 'resolved' && o.ResolvedPNLCents < 0}>
                 <td class="mono">{fmtTime(o.TS)}</td>
                 <td>{o.MatchTitle || o.MatchTicker}</td>

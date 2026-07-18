@@ -65,6 +65,10 @@ func trackedHandler(tr *tracker.Tracker, e *backtest.Engine) http.HandlerFunc {
 		}
 		events := tr.ActiveEvents()
 		scores, _ := e.LatestScores(r.Context(), events)
+		occTS, _ := e.EventOccurrenceTS(r.Context(), events)
+		for i := range subs {
+			subs[i].OccurrenceTS = occTS[subs[i].EventTicker]
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"subs":         subs,
 			"event_count":  len(events),
