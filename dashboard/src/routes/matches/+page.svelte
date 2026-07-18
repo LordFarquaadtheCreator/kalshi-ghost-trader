@@ -75,12 +75,14 @@
       score: fmtScore(scores[s.event_ticker]),
       sim_orders: orderCounts[s.event_ticker] || 0,
       live_orders: pendingCounts[s.event_ticker] || 0,
-    })).sort((/** @type {any} */ a, /** @type {any} */ b) => (b.subscribed_at || 0) - (a.subscribed_at || 0));
+    }));
   })());
 
-  let liveRows = $derived(rows.filter((/** @type {any} */ r) => scores[r.event_ticker]));
+  let liveRows = $derived(rows.filter((/** @type {any} */ r) => scores[r.event_ticker])
+    .sort((/** @type {any} */ a, /** @type {any} */ b) => (a.occurrence_ts || 0) - (b.occurrence_ts || 0)));
   /** @type {any[]} */
-  let nonLiveRows = $derived(rows.filter((/** @type {any} */ r) => !scores[r.event_ticker]));
+  let nonLiveRows = $derived(rows.filter((/** @type {any} */ r) => !scores[r.event_ticker])
+    .sort((/** @type {any} */ a, /** @type {any} */ b) => (a.occurrence_ts || 0) - (b.occurrence_ts || 0)));
 
   /** @type {any[]} */
   let passedRows = $derived(($passedStore.data?.matches || []).map((/** @type {any} */ m) => ({
@@ -89,7 +91,7 @@
     series: m.series || seriesFromTicker(m.event_ticker),
     settled: m.settled_ts ? fmtTime(m.settled_ts) : '—',
     pnl: m.net_pnl,
-  })));
+  })).sort((/** @type {any} */ a, /** @type {any} */ b) => (b.settled_ts || 0) - (a.settled_ts || 0)));
 
   function handleRowClick(/** @type {any} */ row) {
     goto(`/matches/${encodeURIComponent(row.event_ticker)}`);
