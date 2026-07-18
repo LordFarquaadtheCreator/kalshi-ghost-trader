@@ -35,6 +35,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
+	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
 	"github.com/farquaad/kalshi-ghost-trader/internal/orderbackfill"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
@@ -336,11 +337,29 @@ func main() {
 		log.Info("apitennis scraper enabled", "timezone", cfg.APITennisTimezone)
 	}
 
+	// Kalshi live-data poller (optional — backup score source via REST polling)
+	var kldPoller *kalshilivedata.Poller
+	if cfg.KalshiLiveDataEnabled {
+		kldPoller = kalshilivedata.New(restClient, db, multi, tickWriter,
+			time.Duration(cfg.KalshiLiveDataPollSecs)*time.Second, log)
+		log.Info("kalshi livedata poller enabled", "poll_secs", cfg.KalshiLiveDataPollSecs)
+	}
+
 	// Tracker (market subscription lifecycle)
-	// Score poller coupling: tracker drives polling on subscribe/unsubscribe
+	// Score poller coupling: tracker drives polling on subscribe/unsubscribe.
+	// Both API-Tennis (primary) and Kalshi live-data (backup) are wired.
 	var scorePoller tracker.ScorePoller
+	var pollers []tracker.ScorePoller
 	if atScraper != nil {
-		scorePoller = atScraper
+		pollers = append(pollers, atScraper)
+	}
+	if kldPoller != nil {
+		pollers = append(pollers, kldPoller)
+	}
+	if len(pollers) == 1 {
+		scorePoller = pollers[0]
+	} else if len(pollers) > 1 {
+		scorePoller = tracker.NewMultiScorePoller(pollers...)
 	}
 	tr := tracker.New(wsMgr, scorePoller, log)
 	tr.SetPriceCleaner(multi)
@@ -454,6 +473,15 @@ func main() {
 	if atScraper != nil {
 		g.Go(func() error {
 			return atScraper.Run(ctx)
+		})
+	}
+
+	// 5b. Kalshi live-data poller goroutine (optional — backup score source)
+	// Per-match goroutines are launched by StartPolling via tracker; this
+	// just blocks until ctx cancelled for clean shutdown.
+	if kldPoller != nil {
+		g.Go(func() error {
+			return kldPoller.Run(ctx)
 		})
 	}
 

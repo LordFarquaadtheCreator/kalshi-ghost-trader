@@ -146,3 +146,22 @@ type Order struct {
 	PoolBalanceBeforeCents int64   // liquidity pool balance before resolution
 	PoolBalanceAfterCents  int64   // liquidity pool balance after resolution
 }
+
+// KalshiScore is a live score snapshot from Kalshi's /live_data endpoint.
+// Point-level granularity via PointsHome/PointsAway (0/15/30/40/50 where 50=A).
+// Backup source when API-Tennis has no data for a match.
+type KalshiScore struct {
+	EventTicker     string
+	MilestoneID     string
+	Status          string // "started", "interrupted", "finished", etc.
+	SetsHome        int    // sets won by home (competitor1)
+	SetsAway        int    // sets won by away (competitor2)
+	GamesHome       int    // games won by home in current set
+	GamesAway       int    // games won by away in current set
+	PointsHome      int    // current point score in current game (0/15/30/40/50)
+	PointsAway      int    // 50 = Advantage
+	Server          int    // 1=home serves, 2=away serves, 0=unknown
+	CompletedRounds int    // number of completed sets
+	UpdatedTS       int64  // unix ms
+	Payload         string // raw JSON for debugging
+}

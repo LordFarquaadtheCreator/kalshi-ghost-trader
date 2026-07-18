@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -233,6 +234,8 @@ type LiveScore struct {
 }
 
 // LatestScores returns the most recent point for each given event ticker.
+// API-Tennis (points table) is the primary source. For events with no
+// API-Tennis data, Kalshi live-data scores (kalshi_scores table) fill the gap.
 func (e *Engine) LatestScores(ctx context.Context, eventTickers []string) (map[string]*LiveScore, error) {
 	if len(eventTickers) == 0 {
 		return nil, nil
@@ -281,7 +284,104 @@ func (e *Engine) LatestScores(ctx context.Context, eventTickers []string) (map[s
 		s.IsMatchPoint = isMP != 0
 		out[s.EventTicker] = &s
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Fill gaps with Kalshi live-data scores for events not in API-Tennis.
+	kalshiScores, err := e.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT event_ticker, status, sets_home, sets_away, games_home, games_away,
+		       points_home, points_away, server, completed_rounds
+		FROM kalshi_scores WHERE event_ticker IN (%s)
+	`, placeholders), args...)
+	if err != nil {
+		// Non-fatal — return API-Tennis scores only.
+		return out, nil
+	}
+	defer kalshiScores.Close()
+	for kalshiScores.Next() {
+		var et, status string
+		var setsHome, setsAway, gamesHome, gamesAway, pointsHome, pointsAway, server, completedRounds int
+		if err := kalshiScores.Scan(&et, &status, &setsHome, &setsAway,
+			&gamesHome, &gamesAway, &pointsHome, &pointsAway,
+			&server, &completedRounds); err != nil {
+			continue
+		}
+		if _, hasAPItennis := out[et]; hasAPItennis {
+			continue
+		}
+		currentSet := completedRounds + 1
+		isTB := gamesHome == 6 && gamesAway == 6
+		isSetPoint := canWinSetKalshi(gamesHome, gamesAway, true) ||
+			canWinSetKalshi(gamesHome, gamesAway, false)
+		isMatchPoint := false
+		if setsHome == 1 && canWinSetKalshi(gamesHome, gamesAway, true) {
+			isMatchPoint = true
+		}
+		if setsAway == 1 && canWinSetKalshi(gamesHome, gamesAway, false) {
+			isMatchPoint = true
+		}
+		isBreakPoint := false
+		if server == 1 && canWinSetKalshi(gamesHome, gamesAway, false) {
+			isBreakPoint = true
+		}
+		if server == 2 && canWinSetKalshi(gamesHome, gamesAway, true) {
+			isBreakPoint = true
+		}
+		out[et] = &LiveScore{
+			EventTicker:  et,
+			SetNumber:    currentSet,
+			GameNumber:   gamesHome + gamesAway + 1,
+			PointNumber:  0,
+			Server:       server,
+			HomePoints:   kalshiPointToString(pointsHome),
+			AwayPoints:   kalshiPointToString(pointsAway),
+			HomeGames:    gamesHome,
+			AwayGames:    gamesAway,
+			HomeSetGames: setsHome,
+			AwaySetGames: setsAway,
+			IsTiebreak:   isTB,
+			IsBreakPoint: isBreakPoint,
+			IsSetPoint:   isSetPoint,
+			IsMatchPoint: isMatchPoint,
+		}
+	}
+	return out, kalshiScores.Err()
+}
+
+// kalshiPointToString converts Kalshi's integer point score to tennis notation.
+// 0→"0", 15→"15", 30→"30", 40→"40", 50→"A".
+func kalshiPointToString(n int) string {
+	switch n {
+	case 50:
+		return "A"
+	default:
+		return strconv.Itoa(n)
+	}
+}
+
+// canWinSetKalshi returns true if the given player can win the current set
+// by winning the current game. Tennis set win: 6 games with 2-game margin,
+// 7-5, or 7-6 (tiebreak).
+func canWinSetKalshi(gamesHome, gamesAway int, home bool) bool {
+	if home {
+		newHome := gamesHome + 1
+		if newHome >= 6 && newHome-gamesAway >= 2 {
+			return true
+		}
+		if newHome == 7 && (gamesAway == 5 || gamesAway == 6) {
+			return true
+		}
+		return false
+	}
+	newAway := gamesAway + 1
+	if newAway >= 6 && newAway-gamesHome >= 2 {
+		return true
+	}
+	if newAway == 7 && (gamesHome == 5 || gamesHome == 6) {
+		return true
+	}
+	return false
 }
 
 // MarketTick is a single price point for a market, returned by GetEventTickPrices.

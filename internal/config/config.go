@@ -86,6 +86,10 @@ type Config struct {
 	APITennisAPIKey   string
 	APITennisTimezone string
 
+	// Kalshi live-data poller (backup score source via REST polling)
+	KalshiLiveDataEnabled  bool
+	KalshiLiveDataPollSecs int
+
 	// Close timer strategy: buy the favorite N minutes before market close.
 	CloseTimerEnabled  bool
 	CloseTimerLeadMin  int
@@ -236,6 +240,9 @@ func (c *Config) applyFromMap(m map[string]string) {
 	c.APITennisAPIKey = m["apitennis_api_key"]
 	c.APITennisTimezone = m["apitennis_timezone"]
 
+	c.KalshiLiveDataEnabled = atob(m["kalshi_livedata_enabled"])
+	c.KalshiLiveDataPollSecs = atoi(m["kalshi_livedata_poll_secs"])
+
 	c.CloseTimerEnabled = atob(m["close_timer_enabled"])
 	c.CloseTimerLeadMin = atoi(m["close_timer_lead_min"])
 	c.CloseTimerMinPrice = atof(m["close_timer_min_price"])
@@ -362,6 +369,9 @@ func (c *Config) applyNewDefaults() {
 	}
 	if c.RealOrderTimeoutS == 0 {
 		c.RealOrderTimeoutS = 10
+	}
+	if c.KalshiLiveDataPollSecs == 0 {
+		c.KalshiLiveDataPollSecs = 10
 	}
 }
 

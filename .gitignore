@@ -30,6 +30,7 @@ config.yaml
 /backtest
 /strategy-api
 /go
+/test-order
 deploy/out/
 
 # OS

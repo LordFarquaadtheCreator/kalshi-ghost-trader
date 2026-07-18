@@ -200,6 +200,25 @@ CREATE INDEX IF NOT EXISTS idx_points_match_ts ON points(match_ticker, ts_ms);
 CREATE INDEX IF NOT EXISTS idx_points_match_set ON points(match_ticker, set_number, game_number, point_number);
 CREATE INDEX IF NOT EXISTS idx_points_fs_match ON points(fs_match_id);
 
+-- Kalshi live score snapshots (backup score source when API-Tennis has no data).
+-- One row per event, upserted on every poll. Point-level granularity via
+-- current_round_score (0/15/30/40/50 where 50=Advantage).
+CREATE TABLE IF NOT EXISTS kalshi_scores (
+    event_ticker    TEXT PRIMARY KEY,
+    milestone_id    TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT '',
+    sets_home       INTEGER NOT NULL DEFAULT 0,
+    sets_away       INTEGER NOT NULL DEFAULT 0,
+    games_home      INTEGER NOT NULL DEFAULT 0,
+    games_away      INTEGER NOT NULL DEFAULT 0,
+    points_home     INTEGER NOT NULL DEFAULT 0,
+    points_away     INTEGER NOT NULL DEFAULT 0,
+    server          INTEGER NOT NULL DEFAULT 0,
+    completed_rounds INTEGER NOT NULL DEFAULT 0,
+    updated_ts      INTEGER NOT NULL,
+    payload         TEXT
+);
+
 -- App config: key-value store replacing config.yaml
 CREATE TABLE IF NOT EXISTS app_config (
     key        TEXT PRIMARY KEY,
