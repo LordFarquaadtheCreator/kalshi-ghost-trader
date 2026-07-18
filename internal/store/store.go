@@ -119,6 +119,12 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := addColumnIfMissing(ctx, db, "orders", "pool_balance_after_cents", "INTEGER"); err != nil {
 		return fmt.Errorf("migrate orders.pool_balance_after_cents: %w", err)
 	}
+	if err := addColumnIfMissing(ctx, db, "orders", "match_title", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate orders.match_title: %w", err)
+	}
+	if err := addColumnIfMissing(ctx, db, "orders", "player_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate orders.player_name: %w", err)
+	}
 
 	// Create idx_orders_real after is_real column is guaranteed present.
 	// Pre-existing DBs have orders table without is_real; schemaDDL's CREATE TABLE IF NOT EXISTS

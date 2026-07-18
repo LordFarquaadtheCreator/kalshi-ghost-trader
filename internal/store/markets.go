@@ -14,10 +14,22 @@ FROM markets`
 // scanMarket scans a market row from a *sql.Rows into a Market.
 // Nullable columns use sql.Null* types.
 func scanMarket(rows *sql.Rows) (Market, error) {
+	return scanMarketScanner(rows)
+}
+
+// scanMarketRow scans a market row from a *sql.Row into a Market.
+func scanMarketRow(row *sql.Row) (Market, error) {
+	return scanMarketScanner(row)
+}
+
+// scanMarketScanner scans a market row from any sql.Scanner.
+func scanMarketScanner(s interface {
+	Scan(dest ...any) error
+}) (Market, error) {
 	var m Market
 	var occurrenceTS, openTS, closeTS, settlementTS sql.NullInt64
 	var tennisCompetitor, result, settlementValue sql.NullString
-	if err := rows.Scan(
+	if err := s.Scan(
 		&m.MarketTicker, &m.EventTicker, &m.SeriesTicker, &m.PlayerName, &tennisCompetitor,
 		&m.Status, &occurrenceTS, &openTS, &closeTS, &result, &settlementTS, &settlementValue,
 	); err != nil {
@@ -127,6 +139,13 @@ ORDER BY m.close_ts ASC`, graceMS, now)
 		markets = append(markets, m)
 	}
 	return markets, rows.Err()
+}
+
+// GetMarket returns a single market by ticker. Returns sql.ErrNoRows if not found.
+func (d *DB) GetMarket(ctx context.Context, marketTicker string) (Market, error) {
+	row := d.db.QueryRowContext(ctx,
+		marketSelectColumns+` WHERE market_ticker = ?`, marketTicker)
+	return scanMarketRow(row)
 }
 
 // GetMarketsByEvent returns all markets for a given event.

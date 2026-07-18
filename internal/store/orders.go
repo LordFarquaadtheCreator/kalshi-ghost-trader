@@ -46,7 +46,7 @@ VALUES (?,?,?,?,?, ?,?,?,?, ?,?, ?, ?,?)`)
 // GetOrders returns all simulated orders, ordered by timestamp.
 func (d *DB) GetOrders(ctx context.Context) ([]Order, error) {
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT id, ts, match_ticker, market_ticker, action, context,
+		SELECT id, ts, match_ticker, market_ticker, match_title, player_name, action, context,
 		       conv_prob, market_price, edge_cents, suggested_size, set_number, strategy, payload,
 		       bankroll, kelly_fraction, is_real, kalshi_order_id, fill_count, order_status,
 		       resolved_pnl_cents, pool_balance_before_cents, pool_balance_after_cents
@@ -64,7 +64,7 @@ func (d *DB) GetOrders(ctx context.Context) ([]Order, error) {
 		var fillCount sql.NullFloat64
 		var orderStatus sql.NullString
 		var resolvedPnl, poolBefore, poolAfter sql.NullInt64
-		if err := rows.Scan(&o.ID, &o.TS, &o.MatchTicker, &o.MarketTicker, &o.Action, &o.Context,
+		if err := rows.Scan(&o.ID, &o.TS, &o.MatchTicker, &o.MarketTicker, &o.MatchTitle, &o.PlayerName, &o.Action, &o.Context,
 			&o.ConvProb, &o.MarketPrice, &o.EdgeCents, &o.SuggestedSize, &o.SetNumber, &o.Strategy, &payload,
 			&o.Bankroll, &o.KellyFraction, &o.IsReal, &kalshiOrderID, &fillCount, &orderStatus,
 			&resolvedPnl, &poolBefore, &poolAfter); err != nil {
@@ -90,11 +90,11 @@ func (d *DB) InsertRealOrder(ctx context.Context, o Order) (int64, error) {
 		payload = o.Payload
 	}
 	res, err := d.db.ExecContext(ctx, `
-INSERT INTO orders (ts, match_ticker, market_ticker, action, context,
+INSERT INTO orders (ts, match_ticker, market_ticker, match_title, player_name, action, context,
     conv_prob, market_price, edge_cents, suggested_size, set_number, strategy, payload,
     bankroll, kelly_fraction, is_real, order_status)
-VALUES (?,?,?,?,?, ?,?,?,?, ?,?, ?, ?,?, 1, ?)`,
-		o.TS, o.MatchTicker, o.MarketTicker, o.Action, o.Context,
+VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?, ?, ?,?,?, 1, ?)`,
+		o.TS, o.MatchTicker, o.MarketTicker, o.MatchTitle, o.PlayerName, o.Action, o.Context,
 		o.ConvProb, o.MarketPrice, o.EdgeCents, o.SuggestedSize, o.SetNumber, o.Strategy, payload,
 		o.Bankroll, o.KellyFraction, o.OrderStatus,
 	)
@@ -125,7 +125,7 @@ WHERE id = ?`, orderID)
 // GetRealOrders returns all real orders (is_real=1), ordered by timestamp.
 func (d *DB) GetRealOrders(ctx context.Context) ([]Order, error) {
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT id, ts, match_ticker, market_ticker, action, context,
+		SELECT id, ts, match_ticker, market_ticker, match_title, player_name, action, context,
 		       conv_prob, market_price, edge_cents, suggested_size, set_number, strategy, payload,
 		       bankroll, kelly_fraction, is_real, kalshi_order_id, fill_count, order_status,
 		       resolved_pnl_cents, pool_balance_before_cents, pool_balance_after_cents
@@ -143,7 +143,7 @@ func (d *DB) GetRealOrders(ctx context.Context) ([]Order, error) {
 		var fillCount sql.NullFloat64
 		var orderStatus sql.NullString
 		var resolvedPnl, poolBefore, poolAfter sql.NullInt64
-		if err := rows.Scan(&o.ID, &o.TS, &o.MatchTicker, &o.MarketTicker, &o.Action, &o.Context,
+		if err := rows.Scan(&o.ID, &o.TS, &o.MatchTicker, &o.MarketTicker, &o.MatchTitle, &o.PlayerName, &o.Action, &o.Context,
 			&o.ConvProb, &o.MarketPrice, &o.EdgeCents, &o.SuggestedSize, &o.SetNumber, &o.Strategy, &payload,
 			&o.Bankroll, &o.KellyFraction, &o.IsReal, &kalshiOrderID, &fillCount, &orderStatus,
 			&resolvedPnl, &poolBefore, &poolAfter); err != nil {

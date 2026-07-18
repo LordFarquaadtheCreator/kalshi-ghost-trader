@@ -37,6 +37,16 @@ func (d *DB) GetSeriesTicker(ctx context.Context, eventTicker string) (string, e
 	return series, err
 }
 
+// GetEventTitle returns the title for an event by ticker.
+func (d *DB) GetEventTitle(ctx context.Context, eventTicker string) (string, error) {
+	var title string
+	err := d.db.QueryRowContext(ctx, "SELECT title FROM events WHERE event_ticker = ?", eventTicker).Scan(&title)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return title, err
+}
+
 // GetSurface returns the court surface for an event by joining flashscore_matches.
 // Returns empty string if no flashscore match is mapped or surface is null.
 func (d *DB) GetSurface(ctx context.Context, eventTicker string) (string, error) {

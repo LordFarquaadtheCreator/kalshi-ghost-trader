@@ -128,7 +128,8 @@
           <thead>
             <tr>
               <th>Time</th>
-              <th>Market</th>
+              <th>Match</th>
+              <th>Player</th>
               <th>Strategy</th>
               <th>Side</th>
               <th class="num">Size</th>
@@ -144,7 +145,8 @@
               <tr class:row-win={o.OrderStatus === 'resolved' && o.ResolvedPNLCents > 0}
                   class:row-loss={o.OrderStatus === 'resolved' && o.ResolvedPNLCents < 0}>
                 <td class="mono">{fmtTime(o.TS)}</td>
-                <td class="mono">{o.MarketTicker}</td>
+                <td>{o.MatchTitle || o.MatchTicker}</td>
+                <td>{o.PlayerName || o.MarketTicker}</td>
                 <td>{o.Strategy}</td>
                 <td>{o.Action}</td>
                 <td class="num">{o.SuggestedSize?.toFixed(2)}</td>

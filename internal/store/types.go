@@ -125,6 +125,8 @@ type Order struct {
 	TS                     int64
 	MatchTicker            string  // Kalshi event_ticker
 	MarketTicker           string  // Kalshi market_ticker (YES side)
+	MatchTitle             string  // human-readable match title (from events table)
+	PlayerName             string  // player name for this market side
 	Action                 string  // "buy"
 	Context                string  // match point context description
 	ConvProb               float64 // converted probability (0-1)

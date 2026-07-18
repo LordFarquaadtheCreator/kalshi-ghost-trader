@@ -137,6 +137,8 @@ CREATE TABLE IF NOT EXISTS orders (
     ts              INTEGER NOT NULL,       -- when signal fired (ms)
     match_ticker    TEXT NOT NULL,          -- Kalshi event_ticker
     market_ticker   TEXT NOT NULL,          -- Kalshi market_ticker (YES side)
+    match_title     TEXT NOT NULL DEFAULT '', -- human-readable match title
+    player_name     TEXT NOT NULL DEFAULT '', -- player name for this market side
     action          TEXT NOT NULL,          -- "buy"
     context         TEXT NOT NULL,          -- match point context description
     conv_prob       REAL NOT NULL,          -- converted probability (0-1)
