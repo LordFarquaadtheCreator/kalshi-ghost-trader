@@ -334,7 +334,7 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 		c.OrderQuotaCooldownSecs = 30
 	}
 	if c.OrderQuotaMaxPerSec == 0 {
-		c.OrderQuotaMaxPerSec = 2
+		c.OrderQuotaMaxPerSec = 50
 	}
 	if c.OrderQuotaDailyLimit == 0 {
 		c.OrderQuotaDailyLimit = 1000
