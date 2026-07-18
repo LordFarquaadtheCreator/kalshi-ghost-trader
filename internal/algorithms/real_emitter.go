@@ -74,6 +74,25 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 
 	ctx := context.Background()
 
+	// Guard 0: match must have started — refuse orders on pre-match markets
+	mkt, err := e.db.GetMarket(ctx, o.MarketTicker)
+	if err != nil {
+		e.log.Error("real: failed to look up market",
+			"market", o.MarketTicker, "error", err)
+		return false
+	}
+	if mkt.OccurrenceTS > 0 && time.Now().UnixMilli() < mkt.OccurrenceTS {
+		e.log.Warn("real: match not started yet, skipping",
+			"market", o.MarketTicker, "occurrence_ts", mkt.OccurrenceTS)
+		return false
+	}
+
+	// Populate human-readable fields for the orders table
+	o.PlayerName = mkt.PlayerName
+	if title, err := e.db.GetEventTitle(ctx, mkt.EventTicker); err == nil {
+		o.MatchTitle = title
+	}
+
 	// Guard 1: strategy must be enabled in strategy_config
 	enabled, err := e.db.IsStrategyEnabled(ctx, o.Strategy)
 	if err != nil {
@@ -113,6 +132,10 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	if count <= 0 {
 		e.log.Warn("real: skipped zero-size order", "market", o.MarketTicker)
 		return false
+	}
+	// Kalshi rejects sub-1 contract counts; round up to 1
+	if count < 1 {
+		count = 1
 	}
 
 	// Guard 4: clamp spend to available liquidity pool balance
