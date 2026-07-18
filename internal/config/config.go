@@ -337,7 +337,7 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 		c.OrderQuotaMaxPerSec = 2
 	}
 	if c.OrderQuotaDailyLimit == 0 {
-		c.OrderQuotaDailyLimit = 100
+		c.OrderQuotaDailyLimit = 1000
 	}
 	if c.OrderQuotaBudgetFloor == 0 && c.OrderQuotaBudgetTotal > 0 {
 		c.OrderQuotaBudgetFloor = 5.0

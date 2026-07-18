@@ -444,6 +444,23 @@ func main() {
 		return schedChk.Run(ctx, schedChkInterval)
 	})
 
+	// 4d. Daily quota reset at midnight local time
+	g.Go(func() error {
+		for {
+			now := time.Now()
+			next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(next.Sub(now)):
+				paperGuard.ResetDailyQuota()
+				if realGuard != nil {
+					realGuard.ResetDailyQuota()
+				}
+			}
+		}
+	})
+
 	// 5. API-Tennis scraper goroutine (optional — WS real-time push)
 	if atScraper != nil {
 		g.Go(func() error {
