@@ -86,3 +86,35 @@ func (d *DB) HasAPItennisPoints(ctx context.Context, eventTicker string) (bool, 
 	}
 	return count > 0, nil
 }
+
+// HasPoints returns true if the points table has any entries for the given
+// event_ticker, regardless of source (API-Tennis or Kalshi live_data).
+// Used by the real order emitter to bypass the scheduled occurrence_ts gate
+// when points have already been recorded — match started ahead of schedule.
+func (d *DB) HasPoints(ctx context.Context, eventTicker string) (bool, error) {
+	var count int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM points WHERE match_ticker = ?`,
+		eventTicker).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check points: %w", err)
+	}
+	return count > 0, nil
+}
+
+// GetKalshiScore returns the live score snapshot for a single event.
+// Returns sql.ErrNoRows if no snapshot exists.
+func (d *DB) GetKalshiScore(ctx context.Context, eventTicker string) (KalshiScore, error) {
+	var s KalshiScore
+	err := d.db.QueryRowContext(ctx, `SELECT event_ticker, milestone_id, status, sets_home, sets_away,
+		games_home, games_away, points_home, points_away, server, completed_rounds,
+		updated_ts, payload
+		FROM kalshi_scores WHERE event_ticker = ?`, eventTicker).Scan(
+		&s.EventTicker, &s.MilestoneID, &s.Status, &s.SetsHome, &s.SetsAway,
+		&s.GamesHome, &s.GamesAway, &s.PointsHome, &s.PointsAway, &s.Server,
+		&s.CompletedRounds, &s.UpdatedTS, &s.Payload)
+	if err != nil {
+		return s, fmt.Errorf("get kalshi_score: %w", err)
+	}
+	return s, nil
+}

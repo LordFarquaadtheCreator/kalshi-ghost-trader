@@ -74,7 +74,11 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 
 	ctx := context.Background()
 
-	// Guard 0: match must have started — refuse orders on pre-match markets
+	// Guard 0: match must have started — refuse orders on pre-match markets.
+	// occurrence_ts is Kalshi's scheduled start; matches often start early when
+	// a court clears. Bypass the gate when either:
+	//   - Kalshi's own live_data reports status="started"
+	//   - any point rows exist for the event (API-Tennis or Kalshi poller)
 	mkt, err := e.db.GetMarket(ctx, o.MarketTicker)
 	if err != nil {
 		e.log.Error("real: failed to look up market",
@@ -82,9 +86,19 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 		return false
 	}
 	if mkt.OccurrenceTS > 0 && time.Now().UnixMilli() < mkt.OccurrenceTS {
-		e.log.Warn("real: match not started yet, skipping",
-			"market", o.MarketTicker, "occurrence_ts", mkt.OccurrenceTS)
-		return false
+		started, _ := e.db.GetKalshiScore(ctx, mkt.EventTicker)
+		hasPts, _ := e.db.HasPoints(ctx, mkt.EventTicker)
+		liveStarted := started.Status == "started" || hasPts
+		if !liveStarted {
+			e.log.Warn("real: match not started yet, skipping",
+				"market", o.MarketTicker, "occurrence_ts", mkt.OccurrenceTS)
+			return false
+		}
+		e.log.Info("real: occurrence_ts in future but match live, proceeding",
+			"market", o.MarketTicker,
+			"occurrence_ts", mkt.OccurrenceTS,
+			"kalshi_status", started.Status,
+			"has_points", hasPts)
 	}
 
 	// Populate human-readable fields for the orders table
