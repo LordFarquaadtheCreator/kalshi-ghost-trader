@@ -34,6 +34,8 @@ MaxOpenConns=1, MaxIdleConns=1. Single writer. SQLite serializes writes anyway.
 - `orderbook_events` — orderbook snapshots + deltas. No FK. Same reason. Delta: price/delta/side extracted. Snapshot: full levels in payload.
 - `lifecycle_events` — market_lifecycle_v2 WS events. No FK. Same reason.
 - `event_lifecycle_events` — event_lifecycle WS messages (event creation). No FK.
+- `points` — point-by-point score data from API-Tennis. No FK (may arrive before event stored).
+- `kalshi_scores` — live score snapshots from Kalshi /live_data (backup source). PK: event_ticker.
 - `orders` — simulated + real orders from strategy signals. No FK. Traceable via match_ticker + market_ticker. Includes `match_title` and `player_name` columns (populated by real emitter, empty for legacy/paper rows).
 - `scan_runs` — scan audit log.
 

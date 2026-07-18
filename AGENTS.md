@@ -60,7 +60,8 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `internal/reconciler/` — resolves market results, settles orders
 - `internal/schedulechecker/` — validates scheduled match tracking
 - `internal/backtest/` — backtest engine, result cache (5min TTL), price band analysis
-- `internal/apitennis/` — API-Tennis WebSocket real-time scraper (optional)
+- `internal/apitennis/` — API-Tennis WebSocket real-time scraper (optional, primary score source)
+- `internal/kalshilivedata/` — Kalshi live-data REST poller (optional, backup score source)
 - `internal/algorithms/` — pluggable trading strategies (match-point detection, order emission)
 - `internal/signal/` — close-timer strategy, simulated order emission
 - `dashboard/` — SvelteKit + Vite dashboard (real orders, liquidity pool, config management, charts)
@@ -72,6 +73,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - One Scanner goroutine: daily REST scan
 - One Scheduler goroutine: polls DB, schedules match tracking
 - One API-Tennis goroutine (if enabled): WS read loop, per-match dispatch
+- One goroutine per active match (if Kalshi live-data enabled): REST poll loop
 - One goroutine per scheduled match: waits until start time, then subscribes
 
 ## SQLite Schema
@@ -82,6 +84,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `orderbook_events` — orderbook snapshots + deltas with raw JSON payload.
 - `lifecycle_events` — market_lifecycle_v2 WS events.
 - `event_lifecycle_events` — event_lifecycle WS messages (event creation announcements).
+- `kalshi_scores` — live score snapshots from Kalshi /live_data (backup score source).
 - `scan_runs` — scan audit log.
 
 Cascade deletes use flattened triggers (not recursive FK chains):

@@ -4,9 +4,15 @@ Market subscription lifecycle. No per-match goroutines.
 
 ## Model
 
-- `StartMatch` → WS subscribe + add to tracked set
-- `StopMatch` → WS unsubscribe + remove from tracked set
+- `StartMatch` → WS subscribe + add to tracked set + start score polling
+- `StopMatch` → WS unsubscribe + remove from tracked set + stop score polling
 - `StopAll` → stop every tracked market
+
+## ScorePoller
+
+Optional interface for score data sources. `StartPolling`/`StopPolling` called
+on first market subscribe / last market unsubscribe per event. Wired via
+`MultiScorePoller` to fan out to both API-Tennis + Kalshi live-data.
 
 ## Design
 

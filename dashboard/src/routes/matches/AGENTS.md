@@ -11,7 +11,7 @@ Lists currently tracked markets from ghost-trader. Links to match detail page.
 
 - `trackedStore` → `api.getTracked()` → `GET :6060/api/tracked` → `{subs, event_count, market_count, scores}`
 - `countsStore` → `api.getOrderCounts()` → `GET :6060/api/order-counts` → `{counts: {event_ticker: count}}`
-- `scores` map comes from `Engine.LatestScores()` which queries the `points` table (API-Tennis data).
+- `scores` map comes from `Engine.LatestScores()` which queries the `points` table (API-Tennis, primary) and falls back to `kalshi_scores` table (Kalshi live-data, backup) for events with no API-Tennis data.
 
 ## Live vs Upcoming Split
 

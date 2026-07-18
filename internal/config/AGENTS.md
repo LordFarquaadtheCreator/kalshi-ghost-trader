@@ -25,6 +25,7 @@ DB-based configuration loading. All config read from `app_config` table in SQLit
 - `http_timeout_secs`, `rate_limit_rps`
 - `scheduler_poll_secs`, `metrics_port`
 - `apitennis_enabled`, `apitennis_api_key`, `apitennis_timezone`
+- `kalshi_livedata_enabled`, `kalshi_livedata_poll_secs`
 - `close_timer_enabled`, `close_timer_lead_min`, `close_timer_min_price`, `close_timer_poll_secs`, `close_timer_size`
 - `reconciler_interval_secs`, `schedule_checker_interval_secs`
 - `order_quota_enabled`, `order_quota_cooldown_secs`, `order_quota_max_per_sec`, `order_quota_daily_limit`
