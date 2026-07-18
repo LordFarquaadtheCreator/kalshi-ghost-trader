@@ -189,13 +189,13 @@ INSERT OR IGNORE INTO strategy_config (strategy, enabled, updated_ts) VALUES (?,
 
 // TriggerRange is a price band for a strategy.
 type TriggerRange struct {
-	ID        int64
-	Strategy  string
-	MinPrice  float64
-	MaxPrice  float64
-	Source    string // 'peak' or 'manual'
-	Enabled   bool
-	CreatedTS int64
+	ID        int64   `json:"id,omitempty"`
+	Strategy  string  `json:"strategy,omitempty"`
+	MinPrice  float64 `json:"min_price"`
+	MaxPrice  float64 `json:"max_price"`
+	Source    string  `json:"source,omitempty"` // 'peak' or 'manual'
+	Enabled   bool    `json:"enabled"`
+	CreatedTS int64   `json:"created_ts,omitempty"`
 }
 
 // GetTriggerRanges returns all trigger ranges for a strategy.
