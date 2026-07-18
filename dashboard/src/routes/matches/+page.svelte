@@ -10,7 +10,7 @@
 
   const trackedStore = createPoll(() => api.getTracked(), 2000, { data: null, error: null, connected: false });
   const countsStore = createPoll(() => api.getOrderCounts(), 5000, { data: null, error: null, connected: false });
-  const pendingStore = createPoll(() => api.getPendingOrderCounts(), 5000, { data: null, error: null, connected: false });
+  const realOrdersStore = createPoll(() => api.getRealOrders(), 5000, { data: null, error: null, connected: false });
   const ordersStore = createPoll(() => api.getOrders(), 5000, { data: null, error: null, connected: false });
   const passedStore = createPoll(() => api.getPassedMatches(), 10000, { data: null, error: null, connected: false });
 
@@ -21,10 +21,19 @@
   let scores = $derived($trackedStore.data?.scores || {});
   /** @type {Record<string, number>} */
   let orderCounts = $derived($countsStore.data?.counts || {});
-  let pendingCounts = $derived($pendingStore.data?.counts || {});
+  /** @type {Record<string, number>} */
+  let realOrderCounts = $derived((() => {
+    /** @type {Record<string, number>} */
+    const counts = {};
+    for (const o of $realOrdersStore.data?.orders || []) {
+      const t = o.MatchTicker || '';
+      counts[t] = (counts[t] || 0) + 1;
+    }
+    return counts;
+  })());
   let netPnl = $derived($ordersStore.data?.summary?.net_pnl ?? 0);
   let paperOrders = $derived(Object.values(orderCounts).reduce((/** @type {number} */ a, /** @type {number} */ b) => a + b, 0));
-  let liveOrders = $derived(Object.values(pendingCounts).reduce((/** @type {number} */ a, /** @type {number} */ b) => a + b, 0));
+  let realOrders = $derived(Object.values(realOrderCounts).reduce((/** @type {number} */ a, /** @type {number} */ b) => a + b, 0));
 
   const columns = [
     { key: 'event_ticker', label: 'Event Ticker', class: 'mono' },
@@ -33,7 +42,7 @@
     { key: 'market_ticker', label: 'Market Ticker', class: 'mono' },
     { key: 'score', label: 'Score', class: 'score' },
     { key: 'sim_orders', label: 'Sim Orders', align: 'right' },
-    { key: 'live_orders', label: 'Live Orders', align: 'right' },
+    { key: 'real_orders', label: 'Real Orders', align: 'right' },
   ];
 
   function fmtScore(/** @type {any} */ s) {
@@ -74,7 +83,7 @@
       series: seriesFromTicker(s.event_ticker),
       score: fmtScore(scores[s.event_ticker]),
       sim_orders: orderCounts[s.event_ticker] || 0,
-      live_orders: pendingCounts[s.event_ticker] || 0,
+      real_orders: realOrderCounts[s.event_ticker] || 0,
     }));
   })());
 
@@ -110,7 +119,7 @@
     <StatCard label="Markets" value={marketCount} />
     <StatCard label="Net P&L" value={`$${netPnl.toFixed(2)}`} />
     <StatCard label="Paper Orders" value={paperOrders} />
-    <StatCard label="Live Orders" value={liveOrders} />
+    <StatCard label="Real Orders" value={realOrders} />
   </div>
 
   {#if $trackedStore.connected && subs.length === 0}
