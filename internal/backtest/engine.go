@@ -310,6 +310,10 @@ func (e *Engine) LatestScores(ctx context.Context, eventTickers []string) (map[s
 		if _, hasAPItennis := out[et]; hasAPItennis {
 			continue
 		}
+		// Skip not_started matches — zero scores would falsely mark them live.
+		if status == "not_started" || status == "" {
+			continue
+		}
 		currentSet := completedRounds + 1
 		isTB := gamesHome == 6 && gamesAway == 6
 		isSetPoint := canWinSetKalshi(gamesHome, gamesAway, true) ||
