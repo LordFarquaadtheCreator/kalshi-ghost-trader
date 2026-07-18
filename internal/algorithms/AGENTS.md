@@ -18,6 +18,15 @@ backtest engine — one source of truth for signal logic.
 - `quota.go` — `QuotaGuard` order throttle wrapper (cooldown, budget, rate limit, daily cap)
 - `real_emitter.go` — `KalshiOrderEmitter` submits real IOC bid orders to Kalshi REST API
 - `quota_test.go` — unit tests for QuotaGuard
+- `set1winner.go` — set 1 winner strategy
+- `comeback040.go` — comeback 0-40 strategy
+- `setdown.go` — set down strategy
+- `server1530.go` — server 15-30 strategy
+- `tiebreak.go` — tiebreak strategy
+- `tiebreak_server.go` — tiebreak server strategy
+- `spike_fade.go` — spike fade strategy
+- `calibrated_markov.go` — calibrated Markov strategy
+- `surface_markov.go` — surface Markov strategy
 
 ## Interfaces
 
@@ -193,6 +202,13 @@ When `Enabled=false`, all orders pass to paper only — inner is `NoopEmitter`.
 
 Submits real IOC bid orders to `POST /portfolio/events/orders` (V2 endpoint).
 
+Guards (checked in order):
+0. **Pre-match gate** — looks up market via `GetMarket`, refuses if `occurrence_ts` is in future. Also populates `MatchTitle` and `PlayerName` on the order from market + event lookup.
+1. **Strategy enabled** — checks `strategy_config` table.
+2. **Trigger ranges** — price must fall within configured bands (if any).
+3. **Kelly sizing** — computes size from bankroll + Kelly fraction. Sub-1 counts rounded up to 1 (Kalshi rejects fractional minimums).
+4. **Liquidity pool** — deducts cost from pool, refunds on failure.
+
 Safety:
 - IOC by default (no resting orders)
 - Kelly sizing with real bankroll (no $5 paper cap)
@@ -200,6 +216,7 @@ Safety:
 - `taker_at_cross` self-trade prevention
 - All submissions logged with order_id, fill_count, remaining_count
 - Errors logged, not propagated — strategy goroutines never block on REST
+- `match_title` and `player_name` stored on every real order for dashboard display
 
 ## Gotchas
 

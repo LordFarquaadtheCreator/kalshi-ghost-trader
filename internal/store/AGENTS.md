@@ -7,8 +7,8 @@ SQLite layer. Single-writer architecture via TickWriter.
 - `store.go` — DB struct, New, Close, migrate, nowMillis helper
 - `schema.go` — schemaDDL constant (full DDL for all tables + cascade triggers)
 - `types.go` — Event, Market, Tick, LifecycleEvent, EventLifecycleEvent, OrderbookEvent, Order
-- `events.go` — UpsertEvent, UpsertEventCheckNew, DeleteEvent, EventExists, SetCoverage, DropOrphanPayloads, GetCoverage, GetAllEventsForMatching
-- `markets.go` — UpsertMarket, UpsertMarketCheckNew, GetActiveMarkets, GetMarketsByEvent, scanMarket helper
+- `events.go` — UpsertEvent, UpsertEventCheckNew, DeleteEvent, EventExists, GetSeriesTicker, GetEventTitle, SetCoverage, DropOrphanPayloads, GetCoverage, GetAllEventsForMatching
+- `markets.go` — UpsertMarket, UpsertMarketCheckNew, GetMarket, GetActiveMarkets, GetMarketsByEvent, scanMarket/scanMarketRow helpers
 - `ticks.go` — InsertTickBatch
 - `orderbook.go` — InsertOrderbookBatch
 - `lifecycle.go` — InsertLifecycleEvent, InsertEventLifecycleEvent, ApplyLifecycleEvent
@@ -34,7 +34,7 @@ MaxOpenConns=1, MaxIdleConns=1. Single writer. SQLite serializes writes anyway.
 - `orderbook_events` — orderbook snapshots + deltas. No FK. Same reason. Delta: price/delta/side extracted. Snapshot: full levels in payload.
 - `lifecycle_events` — market_lifecycle_v2 WS events. No FK. Same reason.
 - `event_lifecycle_events` — event_lifecycle WS messages (event creation). No FK.
-- `orders` — simulated orders from strategy signals. No FK. Traceable via match_ticker + market_ticker.
+- `orders` — simulated + real orders from strategy signals. No FK. Traceable via match_ticker + market_ticker. Includes `match_title` and `player_name` columns (populated by real emitter, empty for legacy/paper rows).
 - `scan_runs` — scan audit log.
 
 ## Why no FK on ticks/orderbook_events/lifecycle_events/event_lifecycle_events

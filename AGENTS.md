@@ -48,6 +48,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `cmd/backtest/` — replay historical data through trading strategies
 - `cmd/backfill/` — backfill historical data
 - `cmd/migrate-config/` — one-time YAML→SQLite config migration tool
+- `cmd/test-order/` — manual test order CLI tool (single IOC bid to Kalshi)
 - `internal/config/` — YAML config loading (legacy, superseded by app_config table)
 - `internal/kalshiauth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
 - `internal/kalshiclient/` — REST client (events, markets, pagination, rate limit)
