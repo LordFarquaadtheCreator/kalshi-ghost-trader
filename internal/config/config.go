@@ -72,6 +72,9 @@ type Config struct {
 	// Reconciler poll interval (seconds) — fills settlement gaps via REST
 	ReconcilerIntervalSecs int
 
+	// Order backfill poll interval (seconds) — refreshes stale real order status from REST
+	OrderBackfillIntervalSecs int
+
 	// Schedule checker poll interval (seconds) — refreshes stale occurrence_ts from REST
 	ScheduleCheckerIntervalSecs int
 
@@ -240,6 +243,7 @@ func (c *Config) applyFromMap(m map[string]string) {
 	c.CloseTimerSize = atof(m["close_timer_size"])
 
 	c.ReconcilerIntervalSecs = atoi(m["reconciler_interval_secs"])
+	c.OrderBackfillIntervalSecs = atoi(m["order_backfill_interval_secs"])
 	c.ScheduleCheckerIntervalSecs = atoi(m["schedule_checker_interval_secs"])
 
 	c.OrderQuotaEnabled = atob(m["order_quota_enabled"])
@@ -324,6 +328,9 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	}
 	if c.ReconcilerIntervalSecs == 0 {
 		c.ReconcilerIntervalSecs = 300
+	}
+	if c.OrderBackfillIntervalSecs == 0 {
+		c.OrderBackfillIntervalSecs = 120
 	}
 	if c.ScheduleCheckerIntervalSecs == 0 {
 		c.ScheduleCheckerIntervalSecs = 120

@@ -264,3 +264,44 @@ UPDATE liquidity_pool SET total_pnl_cents = (
 
 	return tx.Commit()
 }
+
+// UnresolvedRealOrder is a real order with a Kalshi order ID that hasn't reached a terminal status.
+type UnresolvedRealOrder struct {
+	ID            int64
+	KalshiOrderID string
+	MarketTicker  string
+	OrderStatus   string
+}
+
+// GetUnresolvedRealOrders returns real orders that have a Kalshi order ID
+// but haven't reached a terminal status (resolved or failed).
+func (d *DB) GetUnresolvedRealOrders(ctx context.Context) ([]UnresolvedRealOrder, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, kalshi_order_id, market_ticker, order_status
+		FROM orders
+		WHERE is_real = 1
+		  AND kalshi_order_id IS NOT NULL AND kalshi_order_id != ''
+		  AND order_status NOT IN ('resolved', 'failed', 'canceled')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UnresolvedRealOrder
+	for rows.Next() {
+		var o UnresolvedRealOrder
+		if err := rows.Scan(&o.ID, &o.KalshiOrderID, &o.MarketTicker, &o.OrderStatus); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// UpdateRealOrderStatus updates the status and fill count of a real order
+// based on a fresh fetch from Kalshi.
+func (d *DB) UpdateRealOrderStatus(ctx context.Context, orderID int64, fillCount float64, status string) error {
+	_, err := d.db.ExecContext(ctx, `
+UPDATE orders SET fill_count = ?, order_status = ?
+WHERE id = ?`, fillCount, status, orderID)
+	return err
+}

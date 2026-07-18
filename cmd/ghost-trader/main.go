@@ -35,6 +35,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
+	"github.com/farquaad/kalshi-ghost-trader/internal/orderbackfill"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
 	"github.com/farquaad/kalshi-ghost-trader/internal/schedulechecker"
@@ -435,7 +436,14 @@ func main() {
 		return recon.Run(ctx, reconInterval)
 	})
 
-	// 4c. Schedule checker loop (refresh stale occurrence_ts from REST)
+	// 4c. Order backfill loop (refresh stale real order status from REST)
+	obf := orderbackfill.New(restClient, db, log)
+	obfInterval := time.Duration(cfg.OrderBackfillIntervalSecs) * time.Second
+	g.Go(func() error {
+		return obf.Run(ctx, obfInterval)
+	})
+
+	// 4d. Schedule checker loop (refresh stale occurrence_ts from REST)
 	schedChk := schedulechecker.New(restClient, db, multi, log)
 	schedChkInterval := time.Duration(cfg.ScheduleCheckerIntervalSecs) * time.Second
 	g.Go(func() error {
