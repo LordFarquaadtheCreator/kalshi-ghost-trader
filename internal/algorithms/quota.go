@@ -103,9 +103,10 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 		return true
 	}
 
-	// 1. per-market cooldown
+	// 1. per-market-per-strategy cooldown
+	cooldownKey := o.MarketTicker + "|" + o.Strategy
 	q.mu.Lock()
-	if last, ok := q.lastOrder[o.MarketTicker]; ok {
+	if last, ok := q.lastOrder[cooldownKey]; ok {
 		cooldown := time.Duration(q.cfg.CooldownSecs) * time.Second
 		if time.Since(last) < cooldown {
 			q.mu.Unlock()
@@ -115,7 +116,7 @@ func (q *QuotaGuard) EmitOrder(o store.Order) bool {
 			return false
 		}
 	}
-	q.lastOrder[o.MarketTicker] = time.Now()
+	q.lastOrder[cooldownKey] = time.Now()
 	q.mu.Unlock()
 
 	// 2. budget floor — track spend locally, scale-to-fit if over budget
