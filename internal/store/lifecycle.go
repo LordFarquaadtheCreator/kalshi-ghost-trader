@@ -67,9 +67,10 @@ WHERE market_ticker=?`,
 			return err
 		}
 
-		// Resolve real orders for this market
+		// Resolve all orders for this market
 		if le.Result != "" {
 			_ = d.ResolveRealOrders(ctx, le.MarketTicker, le.Result)
+			_ = d.ResolveSimulatedOrders(ctx, le.MarketTicker, le.Result)
 		}
 
 		// Get the event_ticker for this market

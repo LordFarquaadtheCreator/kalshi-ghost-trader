@@ -265,6 +265,23 @@ UPDATE liquidity_pool SET total_pnl_cents = (
 	return tx.Commit()
 }
 
+// ResolveSimulatedOrders resolves all simulated orders for a settled market.
+// Assumes full fill at suggested_size. No pool adjustments — simulated money.
+func (d *DB) ResolveSimulatedOrders(ctx context.Context, marketTicker, result string) error {
+	_, err := d.db.ExecContext(ctx, `
+UPDATE orders
+SET order_status = 'resolved',
+    resolved_pnl_cents = CASE
+        WHEN ? = 'yes' THEN CAST(suggested_size * 100 AS INTEGER) - CAST(suggested_size * market_price * 100 AS INTEGER)
+        ELSE -CAST(suggested_size * market_price * 100 AS INTEGER)
+    END
+WHERE is_real = 0
+  AND market_ticker = ?
+  AND (order_status IS NULL OR order_status NOT IN ('resolved','failed','canceled'))`,
+		result, marketTicker)
+	return err
+}
+
 // UnresolvedRealOrder is a real order with a Kalshi order ID that hasn't reached a terminal status.
 type UnresolvedRealOrder struct {
 	ID            int64
