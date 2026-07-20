@@ -17,7 +17,6 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -31,7 +30,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 type result struct {
@@ -275,18 +275,19 @@ func main() {
 	dbPath := filepath.Join(os.TempDir(), "kalshi_validate_test.db")
 	defer os.Remove(dbPath)
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)", dbPath)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		results = append(results, result{"SQLite", "FAIL", fmt.Sprintf("open: %v", err)})
 	} else {
+		sqlDB, _ := db.DB()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := db.PingContext(ctx); err != nil {
+		if err := sqlDB.PingContext(ctx); err != nil {
 			results = append(results, result{"SQLite", "FAIL", fmt.Sprintf("ping: %v", err)})
 		} else {
 			results = append(results, result{"SQLite", "PASS", "open + ping OK"})
 		}
-		db.Close()
+		sqlDB.Close()
 	}
 
 	// 13. Optional config vars
