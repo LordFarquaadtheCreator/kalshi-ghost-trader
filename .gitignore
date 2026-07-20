@@ -3,7 +3,6 @@
 *.db-wal
 *.db-shm
 *.db-journal
-kalshi_tennis.db
 
 # Private keys
 *.pem
@@ -14,13 +13,6 @@ id_rsa.pub
 kalshi
 kalshi_key*
 kalshi*.pem
-
-# Env
-.env
-.venv
-
-# Config
-config.yaml
 
 # Binary
 /bin/
@@ -58,4 +50,7 @@ research/tumultuous_study.json
 research/Sports_prediction_and_betting_models_in_the_machin.pdf
 research/charts/backtest/
 research/kalshi_crawl/
+
+# Temp scripts (one-off analysis, throwaway)
+temp-scripts/
 
