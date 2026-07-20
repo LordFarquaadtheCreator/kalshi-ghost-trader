@@ -24,6 +24,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -123,44 +124,48 @@ func main() {
 	}, log)
 	defer paperGuard.Close()
 
-	// Real order pipeline — only wired when real_trading_enabled
-	var realGuard *algorithms.QuotaGuard
+	// Real order pipeline — always constructed. Live on/off controlled by
+	// real_trading_enabled in cfgCache, checked per EmitOrder via liveToggleEmitter.
+	// Dashboard flip takes effect on next order without restart.
 	if cfg.RealTradingEnabled {
 		log.Warn("REAL TRADING ENABLED — live orders will be submitted to Kalshi",
 			"environment", cfg.Environment, "bankroll", cfg.RealBankroll)
+	}
 
-		// Auto-init liquidity pool if not yet seeded and bankroll is meaningful
-		if cfg.RealBankroll > 1 {
-			if _, err := db.GetLiquidityPool(ctx); err != nil {
-				initialCents := int64(cfg.RealBankroll * 100)
-				if err := db.InitLiquidityPool(ctx, initialCents); err != nil {
-					log.Error("auto-init liquidity pool", "err", err)
-				} else {
-					log.Info("auto-initialized liquidity pool", "initial_cents", initialCents)
-				}
+	// Auto-init liquidity pool if not yet seeded and bankroll is meaningful.
+	// Runs regardless of real_trading_enabled so pool is ready when flag flips on.
+	if cfg.RealBankroll > 1 {
+		if _, err := db.GetLiquidityPool(ctx); err != nil {
+			initialCents := int64(cfg.RealBankroll * 100)
+			if err := db.InitLiquidityPool(ctx, initialCents); err != nil {
+				log.Error("auto-init liquidity pool", "err", err)
+			} else {
+				log.Info("auto-initialized liquidity pool", "initial_cents", initialCents)
 			}
 		}
-
-		realEmitter := algorithms.NewKalshiOrderEmitter(restClient, db, algorithms.RealOrderConfig{
-			Enabled:       true,
-			Bankroll:      cfg.RealBankroll,
-			Environment:   cfg.Environment,
-			TimeInForce:   cfg.RealOrderTimeInForce,
-			OrderTimeoutS: cfg.RealOrderTimeoutS,
-		}, log)
-
-		realGuard = algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter, algorithms.QuotaConfig{
-			Enabled:      cfg.OrderQuotaEnabled,
-			CooldownSecs: cfg.OrderQuotaCooldownSecs,
-			MaxPerSec:    cfg.OrderQuotaMaxPerSec,
-			BudgetTotal:  cfg.OrderQuotaBudgetTotal,
-			BudgetFloor:  cfg.OrderQuotaBudgetFloor,
-		}, log)
-		defer realGuard.Close()
-
-		// Wire realGuard as inner of paperGuard
-		paperGuard.SetInner(realGuard)
 	}
+
+	realEmitter := algorithms.NewKalshiOrderEmitter(restClient, db, algorithms.RealOrderConfig{
+		Enabled:       true,
+		Bankroll:      cfg.RealBankroll,
+		Environment:   cfg.Environment,
+		TimeInForce:   cfg.RealOrderTimeInForce,
+		OrderTimeoutS: cfg.RealOrderTimeoutS,
+	}, log)
+
+	realGuard := algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter, algorithms.QuotaConfig{
+		Enabled:      cfg.OrderQuotaEnabled,
+		CooldownSecs: cfg.OrderQuotaCooldownSecs,
+		MaxPerSec:    cfg.OrderQuotaMaxPerSec,
+		BudgetTotal:  cfg.OrderQuotaBudgetTotal,
+		BudgetFloor:  cfg.OrderQuotaBudgetFloor,
+	}, log)
+	defer realGuard.Close()
+
+	// Wire liveToggleEmitter as paperGuard.inner. Checks cfgCache per call so
+	// dashboard flips to real_trading_enabled take effect without restart.
+	// Returns false before realGuard tracks budget when flag is off.
+	paperGuard.SetInner(&liveToggleEmitter{cfgCache: cfgCache, inner: realGuard, log: log})
 
 	// matchPoint is the primary strategy and also serves as PriceLookup for CloseTimer
 	matchPoint := algorithms.NewMatchPointStrategy(paperGuard, log)
@@ -503,4 +508,32 @@ func main() {
 	// Orderly teardown
 	tr.StopAll()
 	log.Info("clean shutdown complete")
+}
+
+// liveToggleEmitter gates the real order pipeline on real_trading_enabled.
+// Checks cfgCache per EmitOrder call so dashboard flips take effect without restart.
+// Returns false before delegating to inner when flag is off — prevents realGuard
+// from tracking budget spend on orders that will never submit.
+// Logs each on/off transition for audit.
+type liveToggleEmitter struct {
+	cfgCache *config.ConfigCache
+	inner    algorithms.OrderEmitter
+	log      *slog.Logger
+	prev     atomic.Bool
+}
+
+func (e *liveToggleEmitter) EmitOrder(o store.Order) bool {
+	on := e.cfgCache.Get().RealTradingEnabled
+	if !on {
+		if e.prev.Load() {
+			e.log.Warn("real trading disabled — live orders suppressed", "market", o.MarketTicker)
+			e.prev.Store(false)
+		}
+		return false
+	}
+	if !e.prev.Load() {
+		e.log.Warn("real trading enabled — live orders active", "bankroll", e.cfgCache.Get().RealBankroll)
+		e.prev.Store(true)
+	}
+	return e.inner.EmitOrder(o)
 }
