@@ -93,7 +93,7 @@ func (d *DB) InsertRealOrder(ctx context.Context, o Order) (int64, error) {
 INSERT INTO orders (ts, match_ticker, market_ticker, match_title, player_name, action, context,
     conv_prob, market_price, edge_cents, suggested_size, set_number, strategy, payload,
     bankroll, kelly_fraction, is_real, order_status)
-VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?, ?, ?,?,?, 1, ?)`,
+VALUES (?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?, 1, ?)`,
 		o.TS, o.MatchTicker, o.MarketTicker, o.MatchTitle, o.PlayerName, o.Action, o.Context,
 		o.ConvProb, o.MarketPrice, o.EdgeCents, o.SuggestedSize, o.SetNumber, o.Strategy, payload,
 		o.Bankroll, o.KellyFraction, o.OrderStatus,
