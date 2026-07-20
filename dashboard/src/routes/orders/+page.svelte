@@ -12,7 +12,8 @@
   import ChartLoading from '$lib/components/ChartLoading.svelte';
   import StatAnalysis from '$lib/components/StatAnalysis.svelte';
 
-  const store = createPoll(() => api.getOrders(), 5000, { data: null, error: null, connected: false });
+  const PAGE_SIZE = 200;
+  const store = createPoll(() => api.getOrders({ limit: PAGE_SIZE }), 5000, { data: null, error: null, connected: false });
 
   let data = $derived($store.data);
   let loading = $derived(!$store.data && $store.connected === false && !$store.error);
@@ -21,6 +22,58 @@
   let maxPrice = $state(0);
   let filterMatch = $state('');
   let filterResult = $state('');
+
+  // Pagination: recent page is polled. Older pages are loaded on demand via
+  // "Load more" and held outside the poll cycle. Dedup by id guards against
+  // a row shifting from older into recent as new orders land.
+  /** @type {any[]} */
+  let olderOrders = $state([]);
+  /** @type {{ts: number, id: number} | null} */
+  let olderCursor = $state(null);
+  let olderHasMore = $state(false);
+  let loadingMore = $state(false);
+
+  // When the polled recent page advances, drop older rows that have crossed
+  // into the recent window so we don't double-render them.
+  $effect(() => {
+    if (!data?.next_cursor) return;
+    const b = data.next_cursor;
+    olderOrders = olderOrders.filter((o) => o.ts < b.ts || (o.ts === b.ts && o.id <= b.id));
+    if (olderOrders.length === 0) {
+      olderCursor = b;
+      olderHasMore = data.has_more;
+    }
+  });
+
+  /** @type {any[]} */
+  let allOrders = $derived.by(() => {
+    const recent = data?.orders || [];
+    const seen = new Set();
+    const out = [];
+    for (const o of recent) { seen.add(o.id); out.push(o); }
+    for (const o of olderOrders) {
+      if (!seen.has(o.id)) { seen.add(o.id); out.push(o); }
+    }
+    return out;
+  });
+
+  let totalOrders = $derived(data?.summary?.total_orders ?? 0);
+  let loadedCount = $derived(allOrders.length);
+
+  async function loadMore() {
+    if (!olderCursor || loadingMore) return;
+    loadingMore = true;
+    try {
+      const page = await api.getOrders({ cursor_ts: olderCursor.ts, cursor_id: olderCursor.id, limit: PAGE_SIZE });
+      if (page?.orders) olderOrders = [...olderOrders, ...page.orders];
+      olderCursor = page?.next_cursor || null;
+      olderHasMore = page?.has_more || false;
+    } catch (err) {
+      console.error('load more orders failed', err);
+    } finally {
+      loadingMore = false;
+    }
+  }
 
   // Price band state
   let bandMetric = $state('winrate');
@@ -56,7 +109,7 @@
 
   let strategies = $derived.by(() => {
     if (!data || !data.orders) return [];
-    return [...new Set(data.orders.map((/** @type {any} */ o) => o.strategy).filter(Boolean))].sort();
+    return [...new Set(allOrders.map((/** @type {any} */ o) => o.strategy).filter(Boolean))].sort();
   });
 
   // Initialize selection once when strategies first appear.
@@ -71,7 +124,7 @@
   /** @type {any[]} */
   let filteredOrders = $derived.by(() => {
     if (!data || !data.orders) return [];
-    return data.orders.filter((/** @type {any} */ o) => {
+    return allOrders.filter((/** @type {any} */ o) => {
       if (selectedStrategies.size > 0 && !selectedStrategies.has(o.strategy)) return false;
       if (minPrice > 0 && o.market_price < minPrice) return false;
       if (maxPrice > 0 && o.market_price > maxPrice) return false;
@@ -654,7 +707,11 @@
   {:else}
     <div class="layout">
       <div class="main-content">
-        <div class="filter-count">{filteredOrders.length} shown ({settledOrders.length} settled, {pendingOrders.length} pending)</div>
+        <div class="filter-count">
+          {filteredOrders.length} shown ({settledOrders.length} settled, {pendingOrders.length} pending)
+          — {loadedCount} of {totalOrders} loaded
+          {#if totalOrders > loadedCount}<span class="filter-count-note"> (charts reflect loaded subset)</span>{/if}
+        </div>
 
         {#if filteredOrders.length > 0}
           <CollapsibleSection title="Analysis" count={filteredOrders.length}>
@@ -812,6 +869,23 @@
         {#if pendingOrders.length === 0 && settledOrders.length === 0}
           <EmptyState text="No orders match current filters." />
         {/if}
+
+        {#if olderHasMore}
+          <div class="load-more-row">
+            <button class="load-more-btn" onclick={loadMore} disabled={loadingMore}>
+              {loadingMore ? 'Loading…' : 'Load more'}
+            </button>
+            <span class="load-more-count">
+              {loadedCount} of {totalOrders} loaded
+            </span>
+          </div>
+        {:else if totalOrders > 0}
+          <div class="load-more-row">
+            <span class="load-more-count">
+              {loadedCount} of {totalOrders} loaded{olderCursor ? '' : ' — end of feed'}
+            </span>
+          </div>
+        {/if}
       </div>
 
       <aside class="filter-sidebar">
@@ -892,6 +966,12 @@
   .filter-label input, .filter-label select { background: var(--surface-hover); border: 1px solid var(--border-strong); color: var(--text); padding: 5px 10px; border-radius: var(--radius-xs); font-size: 13px; }
   .filter-label input { width: 100%; box-sizing: border-box; }
   .filter-count { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; }
+  .load-more-row { display: flex; align-items: center; gap: 12px; justify-content: center; padding: 16px 0; border-top: 1px solid var(--border); margin-top: 16px; }
+  .load-more-btn { background: var(--surface-hover); border: 1px solid var(--border-strong); color: var(--text); padding: 8px 20px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; }
+  .load-more-btn:hover:not(:disabled) { background: var(--border-strong); }
+  .load-more-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .load-more-count { font-size: 12px; color: var(--text-muted); }
+  .filter-count-note { color: var(--text-muted); font-style: italic; }
   .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
   .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
   .chart-card h3 { font-size: 13px; font-weight: 600; color: var(--text-bright); margin: 0 0 10px; }

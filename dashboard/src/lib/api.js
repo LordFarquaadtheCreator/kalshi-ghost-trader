@@ -73,6 +73,13 @@ function pollInterval(/** @type {number} */ base) {
   return backoff;
 }
 
+async function rawFetch(/** @type {string} */ url) {
+  if (!browser) return null;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 export const api = {
   get metricsUrl() { return `${GHOST_TRADER_URL}/metrics`; },
 
@@ -96,8 +103,18 @@ export const api = {
     return cachedFetch(`${STRATEGY_API_URL}/api/passed-matches?limit=100`, TTL.passedMatches);
   },
 
-  async getOrders() {
-    return cachedFetch(`${STRATEGY_API_URL}/api/orders`, TTL.orders);
+  async getOrders(/** @type {{cursor_ts?: number, cursor_id?: number, limit?: number}} */ opts = {}) {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    if (opts?.cursor_ts !== undefined) {
+      params.set('cursor_ts', String(opts.cursor_ts));
+      params.set('cursor_id', String(opts.cursor_id ?? 0));
+    }
+    const qs = params.toString();
+    const url = `${STRATEGY_API_URL}/api/orders${qs ? `?${qs}` : ''}`;
+    // Bypass cache for paginated cursors — each page is distinct.
+    if (opts?.cursor_ts !== undefined) return rawFetch(url);
+    return cachedFetch(url, TTL.orders);
   },
 
   async getTicks(/** @type {string} */ eventTicker) {
