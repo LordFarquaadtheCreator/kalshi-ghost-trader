@@ -207,6 +207,7 @@ func (s *ConvexPoolStrategy) processConvex(eventTicker string, p store.Point) {
 		size := kellySized(blended, price)
 
 		s.emitter.EmitOrder(store.Order{
+			TS:            s.now().UnixMilli(),
 			MatchTicker:   eventTicker,
 			MarketTicker:  mkt,
 			Action:        "buy",
