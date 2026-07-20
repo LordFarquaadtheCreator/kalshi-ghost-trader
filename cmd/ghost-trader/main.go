@@ -86,7 +86,7 @@ func main() {
 		log.Error("config load from DB failed", "err", err)
 		os.Exit(1)
 	}
-	_ = config.NewConfigCache(db, cfg) // used in Phase 3 for real order pipeline
+	cfgCache := config.NewConfigCache(db, cfg) // dashboard writes refresh this; live config reads use it
 	algorithms.SetSizingParams(cfg.PaperBankroll, cfg.KellyFraction)
 	algorithms.SetRealBankroll(cfg.RealBankroll)
 	log.Info("config loaded from DB", "env", cfg.Environment, "db", cfg.DBPath, "series_count", len(cfg.SeriesTickers), "paper_bankroll", cfg.PaperBankroll, "real_bankroll", cfg.RealBankroll, "kelly", cfg.KellyFraction)
@@ -402,7 +402,7 @@ func main() {
 		mux.HandleFunc("/api/liquidity-pool", corsHandler(liquidityPoolHandler(db, log)))
 		mux.HandleFunc("/api/strategy-config", corsHandler(strategyConfigHandler(db, log)))
 		mux.HandleFunc("/api/trigger-ranges", corsHandler(triggerRangesHandler(db, log)))
-		mux.HandleFunc("/api/app-config", corsHandler(appConfigHandler(db, log)))
+		mux.HandleFunc("/api/app-config", corsHandler(appConfigHandler(db, cfgCache, log)))
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{
 			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),

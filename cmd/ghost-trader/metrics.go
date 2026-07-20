@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 	"github.com/farquaad/kalshi-ghost-trader/internal/tracker"
 )
@@ -430,7 +431,7 @@ func triggerRangesHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-func appConfigHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
+func appConfigHandler(db *store.DB, cfgCache *config.ConfigCache, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -455,12 +456,16 @@ func appConfigHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 				json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
 				return
 			}
-			if err := db.SetAppConfig(r.Context(), body.Key, body.Value); err != nil {
+			// Route through ConfigCache so writes refresh the live config snapshot.
+			// Bypassing it (db.SetAppConfig directly) leaves the running process
+			// holding stale startup values — real_trading_enabled flip never took.
+			if err := cfgCache.Update(body.Key, body.Value); err != nil {
 				log.Error("set app config", "err", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
+			log.Info("app config updated", "key", body.Key, "value", body.Value)
 			json.NewEncoder(w).Encode(map[string]any{"ok": true})
 
 		default:
