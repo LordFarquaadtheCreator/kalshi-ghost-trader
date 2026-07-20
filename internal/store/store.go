@@ -132,6 +132,10 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_orders_real ON orders(is_real) WHERE is_real = 1"); err != nil {
 		return fmt.Errorf("migrate idx_orders_real: %w", err)
 	}
+	// Keyset pagination index for /api/orders. Idempotent — safe on pre-existing DBs.
+	if _, err := db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_orders_ts_id ON orders(ts DESC, id DESC)"); err != nil {
+		return fmt.Errorf("migrate idx_orders_ts_id: %w", err)
+	}
 
 	return nil
 }

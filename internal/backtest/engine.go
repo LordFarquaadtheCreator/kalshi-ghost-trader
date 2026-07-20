@@ -1051,6 +1051,7 @@ func sqrt(x float64) float64 {
 
 // PaperOrder is a simulated order with resolved P&L, for the dashboard.
 type PaperOrder struct {
+	ID            int64   `json:"id"`
 	TS            int64   `json:"ts"`
 	MatchTicker   string  `json:"match_ticker"`
 	MarketTicker  string  `json:"market_ticker"`
@@ -1080,68 +1081,129 @@ type PaperOrderSummary struct {
 
 // PaperOrderResponse is the full API response for /api/orders.
 type PaperOrderResponse struct {
-	Orders  []PaperOrder      `json:"orders"`
-	Summary PaperOrderSummary `json:"summary"`
+	Orders     []PaperOrder      `json:"orders"`
+	Summary    PaperOrderSummary `json:"summary"`
+	HasMore    bool              `json:"has_more"`
+	NextCursor *PaperOrderCursor `json:"next_cursor,omitempty"`
 }
 
-// GetAllPaperOrders queries all orders from the DB, joins with markets for
-// result/P&L, and returns them sorted by ts descending.
-func (e *Engine) GetAllPaperOrders(ctx context.Context) (*PaperOrderResponse, error) {
-	rows, err := e.db.QueryContext(ctx, `
-SELECT o.ts, o.match_ticker, o.market_ticker, o.context,
-       o.market_price, o.edge_cents, o.suggested_size, o.strategy,
-       m.player_name, m.result
-FROM orders o
-LEFT JOIN markets m ON o.market_ticker = m.market_ticker
-ORDER BY o.ts DESC`)
-	if err != nil {
-		return nil, fmt.Errorf("query orders: %w", err)
+// PaperOrderCursor is the keyset position of the last row in the current page.
+// Clients pass it back as ?cursor_ts=<ts>&cursor_id=<id> for the next page.
+type PaperOrderCursor struct {
+	TS int64 `json:"ts"`
+	ID int64 `json:"id"`
+}
+
+// GetPaperOrderSummary computes aggregate stats over all orders in a single
+// SQL pass. Replaces the old Go loop that re-iterated every row.
+func (e *Engine) GetPaperOrderSummary(ctx context.Context) (PaperOrderSummary, error) {
+	row := e.db.QueryRowContext(ctx, `
+SELECT
+  COUNT(*),
+  SUM(CASE WHEN m.result IS NOT NULL AND m.result != '' THEN 1 ELSE 0 END),
+  SUM(CASE WHEN m.result = 'yes' THEN 1 ELSE 0 END),
+  SUM(CASE WHEN m.result IS NOT NULL AND m.result != '' AND m.result != 'yes' THEN 1 ELSE 0 END),
+  SUM(CASE WHEN m.result IS NULL OR m.result = '' THEN 1 ELSE 0 END),
+  COALESCE(SUM(o.suggested_size * o.market_price), 0),
+  COALESCE(SUM(CASE WHEN m.result = 'yes' THEN o.suggested_size * (1.0 - o.market_price)
+                    WHEN m.result IS NOT NULL AND m.result != '' THEN -o.suggested_size * o.market_price
+                    ELSE 0 END), 0)
+FROM orders o LEFT JOIN markets m ON o.market_ticker = m.market_ticker`)
+	var s PaperOrderSummary
+	var resolved, wins, losses int
+	if err := row.Scan(&s.TotalOrders, &resolved, &wins, &losses, &s.Pending,
+		&s.TotalInvested, &s.NetPnL); err != nil {
+		return s, fmt.Errorf("query paper order summary: %w", err)
 	}
-	defer rows.Close()
-
-	var orders []PaperOrder
-	s := PaperOrderSummary{}
-
-	for rows.Next() {
-		var o PaperOrder
-		var playerName, result sql.NullString
-		if err := rows.Scan(&o.TS, &o.MatchTicker, &o.MarketTicker, &o.Context,
-			&o.MarketPrice, &o.EdgeCents, &o.SuggestedSize, &o.Strategy,
-			&playerName, &result); err != nil {
-			return nil, err
-		}
-		o.PlayerName = playerName.String
-		o.Result = result.String
-		o.Won = result.String == "yes"
-
-		s.TotalOrders++
-		s.TotalInvested += o.SuggestedSize * o.MarketPrice
-
-		if result.Valid && result.String != "" {
-			s.Resolved++
-			if o.Won {
-				s.Wins++
-				o.PnL = o.SuggestedSize * (1.0 - o.MarketPrice)
-			} else {
-				s.Losses++
-				o.PnL = -o.SuggestedSize * o.MarketPrice
-			}
-			s.NetPnL += o.PnL
-		} else {
-			s.Pending++
-		}
-
-		orders = append(orders, o)
-	}
-
+	s.Resolved = resolved
+	s.Wins = wins
+	s.Losses = losses
 	if s.Resolved > 0 {
 		s.WinRate = float64(s.Wins) / float64(s.Resolved) * 100
 	}
 	if s.TotalInvested > 0 {
 		s.ROI = s.NetPnL / s.TotalInvested * 100
 	}
+	return s, nil
+}
 
-	return &PaperOrderResponse{Orders: orders, Summary: s}, nil
+// GetPaperOrdersPage returns one keyset-paginated page of paper orders, newest
+// first. cursor is the (ts, id) of the last row from the previous page; pass
+// nil for the first page. limit is clamped to [1, 1000].
+// has_more is true when the page is full; next_cursor is the position to use
+// for the following page (nil when has_more is false).
+func (e *Engine) GetPaperOrdersPage(ctx context.Context, cursor *PaperOrderCursor, limit int) ([]PaperOrder, bool, *PaperOrderCursor, error) {
+	if limit < 1 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if cursor == nil {
+		rows, err = e.db.QueryContext(ctx, `
+SELECT o.ts, o.id, o.match_ticker, o.market_ticker, o.context,
+       o.market_price, o.edge_cents, o.suggested_size, o.strategy,
+       m.player_name, m.result
+FROM orders o
+LEFT JOIN markets m ON o.market_ticker = m.market_ticker
+ORDER BY o.ts DESC, o.id DESC
+LIMIT ?`, limit+1)
+	} else {
+		rows, err = e.db.QueryContext(ctx, `
+SELECT o.ts, o.id, o.match_ticker, o.market_ticker, o.context,
+       o.market_price, o.edge_cents, o.suggested_size, o.strategy,
+       m.player_name, m.result
+FROM orders o
+LEFT JOIN markets m ON o.market_ticker = m.market_ticker
+WHERE (o.ts, o.id) < (?, ?)
+ORDER BY o.ts DESC, o.id DESC
+LIMIT ?`, cursor.TS, cursor.ID, limit+1)
+	}
+	if err != nil {
+		return nil, false, nil, fmt.Errorf("query paper orders page: %w", err)
+	}
+	defer rows.Close()
+
+	orders := make([]PaperOrder, 0, limit)
+	for rows.Next() {
+		var o PaperOrder
+		var playerName, result sql.NullString
+		if err := rows.Scan(&o.TS, &o.ID, &o.MatchTicker, &o.MarketTicker, &o.Context,
+			&o.MarketPrice, &o.EdgeCents, &o.SuggestedSize, &o.Strategy,
+			&playerName, &result); err != nil {
+			return nil, false, nil, err
+		}
+		o.PlayerName = playerName.String
+		o.Result = result.String
+		o.Won = result.String == "yes"
+		if result.Valid && result.String != "" {
+			if o.Won {
+				o.PnL = o.SuggestedSize * (1.0 - o.MarketPrice)
+			} else {
+				o.PnL = -o.SuggestedSize * o.MarketPrice
+			}
+		}
+		orders = append(orders, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, nil, err
+	}
+
+	hasMore := len(orders) > limit
+	if hasMore {
+		orders = orders[:limit]
+	}
+	var next *PaperOrderCursor
+	if hasMore {
+		last := orders[len(orders)-1]
+		next = &PaperOrderCursor{TS: last.TS, ID: last.ID}
+	}
+	return orders, hasMore, next, nil
 }
 
 // GetOrderCountsByEvent returns a map of event_ticker → simulated order count.

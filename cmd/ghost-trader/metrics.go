@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -178,15 +179,46 @@ func ordersHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "public, max-age=5")
 
-		data, err := e.GetAllPaperOrders(r.Context())
+		// Keyset pagination: ?cursor_ts=<ts>&cursor_id=<id>&limit=<n>.
+		// Omit cursor for the first (newest) page.
+		limit := 200
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		var cursor *backtest.PaperOrderCursor
+		if tsStr := r.URL.Query().Get("cursor_ts"); tsStr != "" {
+			ts, err := strconv.ParseInt(tsStr, 10, 64)
+			if err == nil {
+				idStr := r.URL.Query().Get("cursor_id")
+				id, _ := strconv.ParseInt(idStr, 10, 64)
+				cursor = &backtest.PaperOrderCursor{TS: ts, ID: id}
+			}
+		}
+
+		orders, hasMore, next, err := e.GetPaperOrdersPage(r.Context(), cursor, limit)
 		if err != nil {
-			log.Error("get paper orders", "err", err)
+			log.Error("get paper orders page", "err", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
 
-		json.NewEncoder(w).Encode(data)
+		summary, err := e.GetPaperOrderSummary(r.Context())
+		if err != nil {
+			log.Error("get paper order summary", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
+		json.NewEncoder(w).Encode(backtest.PaperOrderResponse{
+			Orders:     orders,
+			Summary:    summary,
+			HasMore:    hasMore,
+			NextCursor: next,
+		})
 	}
 }
 

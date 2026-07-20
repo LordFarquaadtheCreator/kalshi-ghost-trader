@@ -160,6 +160,8 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_match_ts ON orders(match_ticker, ts);
 CREATE INDEX IF NOT EXISTS idx_orders_market ON orders(market_ticker);
+-- Covering keyset pagination on (ts DESC, id DESC) for /api/orders page.
+CREATE INDEX IF NOT EXISTS idx_orders_ts_id ON orders(ts DESC, id DESC);
 -- idx_orders_real created in post-migration step (store.go) after is_real column added
 
 -- Fired events: tracks which event_tickers a strategy has already fired on.
