@@ -18,6 +18,7 @@ type Event struct {
 type Market struct {
 	MarketTicker     string `gorm:"primaryKey;column:market_ticker"`
 	EventTicker      string `gorm:"column:event_ticker"`
+	Event            Event  `gorm:"foreignKey:EventTicker;references:EventTicker;constraint:OnDelete:CASCADE"`
 	SeriesTicker     string `gorm:"column:series_ticker"`
 	PlayerName       string `gorm:"column:player_name"`
 	TennisCompetitor string `gorm:"column:tennis_competitor"`

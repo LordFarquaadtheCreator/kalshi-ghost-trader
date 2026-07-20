@@ -1,0 +1,63 @@
+# Momentum Alpha Research Config
+
+data:
+  extracted_dir: "data/extracted"
+  min_points: 50
+  min_ticks: 500
+
+hmm:
+  n_states: 3              # momentum regimes: negative, neutral, positive
+  n_iter: 100
+  random_state: 42
+
+ema:
+  beta: 0.85               # smoothing factor (paper uses >=0.5, we tune higher for stability)
+
+target:
+  # Predict market price direction after each point
+  horizon_sec: [10, 30, 60]   # predict price move over N seconds after point
+  threshold_cents: 1          # 1 cent = 0.01 price move. Below = no trade label
+
+features:
+  court:
+    - hmm_state
+    - momentum_ema
+    - serve_win_rate_home
+    - serve_win_rate_away
+    - break_rate_home
+    - break_rate_away
+    - score_diff_games
+    - score_diff_sets
+    - points_into_game
+    - is_break_point
+    - is_server_home
+  market:
+    - price
+    - spread
+    - price_velocity_10s
+    - price_velocity_30s
+    - volume_velocity_30s
+    - trade_flow_imbalance
+    - bid_ask_imbalance
+
+models:
+  xgboost:
+    max_depth: 6
+    n_estimators: 200
+    learning_rate: 0.1
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: 42
+  lightgbm:
+    max_depth: 6
+    n_estimators: 200
+    learning_rate: 0.1
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: 42
+
+backtest:
+  initial_capital: 1000.0
+  position_size_pct: 0.05      # 5% of capital per trade
+  fee_cents: 1                 # 1 cent fee per share
+  min_signal_confidence: 0.55
