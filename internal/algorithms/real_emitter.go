@@ -224,6 +224,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	err = e.client.Post(orderCtx, "/portfolio/events/orders", req, &resp)
 	if err != nil {
 		e.log.Error("real: order submission FAILED",
+			"order_id", o.ID,
 			"market", o.MarketTicker, "strategy", o.Strategy,
 			"side", "bid", "count", countStr, "price", priceStr,
 			"error", err)
@@ -234,7 +235,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 		}
 		// mark order as failed in DB
 		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID); dbErr != nil {
-			e.log.Error("real: failed to mark order as failed", "error", dbErr)
+			e.log.Error("real: failed to mark order as failed", "order_id", o.ID, "error", dbErr)
 		}
 		return false
 	}
