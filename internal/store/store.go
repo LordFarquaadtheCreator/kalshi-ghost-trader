@@ -31,17 +31,18 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // DB is the SQLite store for tennis match data. Single-writer architecture.
 type DB struct {
-	db  *sql.DB
+	db  *gorm.DB
 	log *slog.Logger
 }
 
@@ -54,17 +55,24 @@ func New(ctx context.Context, path string, log *slog.Logger) (*DB, error) {
 			"_pragma=temp_store(MEMORY)&_pragma=foreign_keys(ON)",
 		path,
 	)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+
 	// Single writer — SQLite serializes writes regardless
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxIdleTime(0)
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("get underlying sql.DB: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	sqlDB.SetConnMaxIdleTime(0)
 
 	if err := migrate(ctx, db); err != nil {
-		db.Close()
+		sqlDB.Close()
 		return nil, err
 	}
 
@@ -73,16 +81,37 @@ func New(ctx context.Context, path string, log *slog.Logger) (*DB, error) {
 
 // Close closes the database.
 func (d *DB) Close() error {
-	return d.db.Close()
+	sqlDB, err := d.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
 
-func migrate(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, schemaDDL); err != nil {
-		return fmt.Errorf("migrate: %w", err)
+// DB returns the underlying *gorm.DB for use by backtest engine and other consumers.
+func (d *DB) GormDB() *gorm.DB {
+	return d.db
+}
+
+func migrate(ctx context.Context, db *gorm.DB) error {
+	// AutoMigrate creates tables from struct definitions. Idempotent.
+	if err := db.AutoMigrate(
+		&Event{}, &Market{}, &Tick{}, &OrderbookEvent{},
+		&LifecycleEvent{}, &EventLifecycleEvent{}, &Order{},
+		&ScanRun{}, &FiredEvent{}, &Point{}, &KalshiScore{},
+		&AppConfigKV{}, &LiquidityPool{}, &StrategyConfigEntry{},
+		&TriggerRange{}, &FlashscoreMatch{},
+	); err != nil {
+		return fmt.Errorf("auto-migrate: %w", err)
+	}
+
+	// Triggers and custom indexes can't be done via AutoMigrate.
+	// Run the DDL for triggers and indexes only (tables already created above).
+	if err := db.Exec(triggerDDL).Error; err != nil {
+		return fmt.Errorf("migrate triggers: %w", err)
 	}
 
 	// Add columns to lifecycle_events for pre-existing DBs.
-	// Check PRAGMA table_info instead of matching driver error strings.
 	if err := addColumnIfMissing(ctx, db, "lifecycle_events", "open_ts", "INTEGER"); err != nil {
 		return fmt.Errorf("migrate open_ts: %w", err)
 	}
@@ -125,15 +154,16 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := addColumnIfMissing(ctx, db, "orders", "player_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate orders.player_name: %w", err)
 	}
+	if err := addColumnIfMissing(ctx, db, "orders", "unfilled_refunded_cents", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate orders.unfilled_refunded_cents: %w", err)
+	}
 
 	// Create idx_orders_real after is_real column is guaranteed present.
-	// Pre-existing DBs have orders table without is_real; schemaDDL's CREATE TABLE IF NOT EXISTS
-	// won't recreate it, so the index must run after addColumnIfMissing.
-	if _, err := db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_orders_real ON orders(is_real) WHERE is_real = 1"); err != nil {
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_orders_real ON orders(is_real) WHERE is_real = 1").Error; err != nil {
 		return fmt.Errorf("migrate idx_orders_real: %w", err)
 	}
-	// Keyset pagination index for /api/orders. Idempotent — safe on pre-existing DBs.
-	if _, err := db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_orders_ts_id ON orders(ts DESC, id DESC)"); err != nil {
+	// Keyset pagination index for /api/orders. Idempotent.
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_orders_ts_id ON orders(ts DESC, id DESC)").Error; err != nil {
 		return fmt.Errorf("migrate idx_orders_ts_id: %w", err)
 	}
 
@@ -142,29 +172,15 @@ func migrate(ctx context.Context, db *sql.DB) error {
 
 // addColumnIfMissing adds a column to a table if it does not already exist.
 // Uses PRAGMA table_info so it does not depend on driver error message format.
-func addColumnIfMissing(ctx context.Context, db *sql.DB, table, column, decl string) error {
-	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
-	if err != nil {
+func addColumnIfMissing(ctx context.Context, db *gorm.DB, table, column, decl string) error {
+	var count int64
+	if err := db.Raw(fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = ?", table), column).Scan(&count).Error; err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return err
-		}
-		if name == column {
-			return nil // already present
-		}
+	if count > 0 {
+		return nil
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	_, err = db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl))
-	return err
+	return db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl)).Error
 }
 
 // nowMillis returns current time in milliseconds. Centralized for consistency.

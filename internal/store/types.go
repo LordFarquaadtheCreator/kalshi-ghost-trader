@@ -2,166 +2,206 @@ package store
 
 // Event maps a tennis match event row.
 type Event struct {
-	EventTicker       string
-	SeriesTicker      string
-	Title             string
-	SubTitle          string
-	Competition       string
-	CompetitionScope  string
-	MutuallyExclusive bool
+	EventTicker       string `gorm:"primaryKey;column:event_ticker"`
+	SeriesTicker      string `gorm:"column:series_ticker"`
+	Title             string `gorm:"column:title"`
+	SubTitle          string `gorm:"column:sub_title"`
+	Competition       string `gorm:"column:competition"`
+	CompetitionScope  string `gorm:"column:competition_scope"`
+	MutuallyExclusive bool   `gorm:"column:mutually_exclusive"`
+	FirstSeenTS       int64  `gorm:"column:first_seen_ts"`
+	LastUpdatedTS     int64  `gorm:"column:last_updated_ts"`
+	Coverage          string `gorm:"column:coverage"`
 }
 
 // Market maps a tennis match market row. Two per event (one per player).
 type Market struct {
-	MarketTicker     string
-	EventTicker      string
-	SeriesTicker     string
-	PlayerName       string
-	TennisCompetitor string
-	Status           string
-	OccurrenceTS     int64
-	OpenTS           int64
-	CloseTS          int64
-	Result           string
-	SettlementTS     int64
-	SettlementValue  string
+	MarketTicker     string `gorm:"primaryKey;column:market_ticker"`
+	EventTicker      string `gorm:"column:event_ticker"`
+	SeriesTicker     string `gorm:"column:series_ticker"`
+	PlayerName       string `gorm:"column:player_name"`
+	TennisCompetitor string `gorm:"column:tennis_competitor"`
+	Status           string `gorm:"column:status"`
+	OccurrenceTS     int64  `gorm:"column:occurrence_ts"`
+	OpenTS           int64  `gorm:"column:open_ts"`
+	CloseTS          int64  `gorm:"column:close_ts"`
+	Result           string `gorm:"column:result"`
+	SettlementTS     int64  `gorm:"column:settlement_ts"`
+	SettlementValue  string `gorm:"column:settlement_value"`
+	FirstSeenTS      int64  `gorm:"column:first_seen_ts"`
+	LastUpdatedTS    int64  `gorm:"column:last_updated_ts"`
 }
 
 // Tick maps a single WS message (ticker, trade, orderbook) stored verbatim.
 type Tick struct {
-	TS                 int64
-	RecvTS             int64
-	MarketTicker       string
-	MsgType            string
-	SID                int64
-	Seq                int64
-	Price              float64
-	YesBid             float64
-	YesAsk             float64
-	YesBidSize         float64
-	YesAskSize         float64
-	Volume             float64
-	OpenInterest       float64
-	DollarVolume       int64
-	DollarOpenInterest int64
-	LastTradeSize      float64
-	TradeID            string
-	NoPrice            float64
-	TakerSide          string
-	TakerOutcomeSide   string
-	TakerBookSide      string
-	Payload            string
+	ID                 int64   `gorm:"primaryKey;autoIncrement;column:id"`
+	TS                 int64   `gorm:"column:ts"`
+	RecvTS             int64   `gorm:"column:recv_ts"`
+	MarketTicker       string  `gorm:"column:market_ticker"`
+	MsgType            string  `gorm:"column:msg_type"`
+	SID                int64   `gorm:"column:sid"`
+	Seq                int64   `gorm:"column:seq"`
+	Price              float64 `gorm:"column:price"`
+	YesBid             float64 `gorm:"column:yes_bid"`
+	YesAsk             float64 `gorm:"column:yes_ask"`
+	YesBidSize         float64 `gorm:"column:yes_bid_size"`
+	YesAskSize         float64 `gorm:"column:yes_ask_size"`
+	Volume             float64 `gorm:"column:volume"`
+	OpenInterest       float64 `gorm:"column:open_interest"`
+	DollarVolume       int64   `gorm:"column:dollar_volume"`
+	DollarOpenInterest int64   `gorm:"column:dollar_open_interest"`
+	LastTradeSize      float64 `gorm:"column:last_trade_size"`
+	TradeID            string  `gorm:"column:trade_id"`
+	NoPrice            float64 `gorm:"column:no_price"`
+	TakerSide          string  `gorm:"column:taker_side"`
+	TakerOutcomeSide   string  `gorm:"column:taker_outcome_side"`
+	TakerBookSide      string  `gorm:"column:taker_book_side"`
+	Payload            string  `gorm:"column:payload"`
 }
 
 // LifecycleEvent maps a market_lifecycle_v2 WS event.
 type LifecycleEvent struct {
-	TS              int64
-	RecvTS          int64
-	MarketTicker    string
-	EventType       string
-	Result          string
-	OpenTS          int64
-	CloseTS         int64
-	DeterminationTS int64
-	SettledTS       int64
-	SettlementValue string
-	Payload         string
+	ID              int64  `gorm:"primaryKey;autoIncrement;column:id"`
+	TS              int64  `gorm:"column:ts"`
+	RecvTS          int64  `gorm:"column:recv_ts"`
+	MarketTicker    string `gorm:"column:market_ticker"`
+	EventType       string `gorm:"column:event_type"`
+	Result          string `gorm:"column:result"`
+	OpenTS          int64  `gorm:"column:open_ts"`
+	CloseTS         int64  `gorm:"column:close_ts"`
+	DeterminationTS int64  `gorm:"column:determination_ts"`
+	SettledTS       int64  `gorm:"column:settled_ts"`
+	SettlementValue string `gorm:"column:settlement_value"`
+	Payload         string `gorm:"column:payload"`
 }
 
 // EventLifecycleEvent maps an event_lifecycle WS message (event creation).
 type EventLifecycleEvent struct {
-	TS           int64
-	RecvTS       int64
-	EventTicker  string
-	SeriesTicker string
-	Title        string
-	Subtitle     string
-	Payload      string
+	ID           int64  `gorm:"primaryKey;autoIncrement;column:id"`
+	TS           int64  `gorm:"column:ts"`
+	RecvTS       int64  `gorm:"column:recv_ts"`
+	EventTicker  string `gorm:"column:event_ticker"`
+	SeriesTicker string `gorm:"column:series_ticker"`
+	Title        string `gorm:"column:title"`
+	Subtitle     string `gorm:"column:subtitle"`
+	Payload      string `gorm:"column:payload"`
 }
 
 // OrderbookEvent maps an orderbook_snapshot or orderbook_delta WS message.
 // Snapshot: price/delta/side are zero — full levels in payload.
 // Delta: price/delta/side extracted as hot fields.
 type OrderbookEvent struct {
-	TS           int64
-	RecvTS       int64
-	MarketTicker string
-	MsgType      string // "orderbook_snapshot" or "orderbook_delta"
-	SID          int64
-	Seq          int64
-	Price        float64
-	Delta        float64
-	Side         string
-	Payload      string
+	ID           int64   `gorm:"primaryKey;autoIncrement;column:id"`
+	TS           int64   `gorm:"column:ts"`
+	RecvTS       int64   `gorm:"column:recv_ts"`
+	MarketTicker string  `gorm:"column:market_ticker"`
+	MsgType      string  `gorm:"column:msg_type"` // "orderbook_snapshot" or "orderbook_delta"
+	SID          int64   `gorm:"column:sid"`
+	Seq          int64   `gorm:"column:seq"`
+	Price        float64 `gorm:"column:price"`
+	Delta        float64 `gorm:"column:delta"`
+	Side         string  `gorm:"column:side"`
+	Payload      string  `gorm:"column:payload"`
 }
 
 // Point maps a single point-by-point score entry from the points table.
 type Point struct {
-	MatchTicker  string // Kalshi event_ticker
-	FSMatchID    string // FlashScore/API-Tennis match ID
-	TS           int64  // unix ms (may be 0 if historical)
-	RecvTS       int64  // when we stored it
-	SetNumber    int    // 1-based
-	GameNumber   int    // 1-based within set
-	PointNumber  int    // 1-based within game
-	Server       int    // 1 = home, 2 = away
-	Scorer       int    // 1 = home won point, 2 = away won point
-	HomePoints   string // "0", "15", "30", "40", "A"
-	AwayPoints   string
-	HomeGames    int // games won by home in this set at this point
-	AwayGames    int // games won by away in this set at this point
-	HomeSetGames int // final games in completed sets before this one
-	AwaySetGames int
-	IsTiebreak   bool
-	IsBreakPoint bool
-	IsSetPoint   bool
-	IsMatchPoint bool
+	ID           int64  `gorm:"primaryKey;autoIncrement;column:id"`
+	MatchTicker  string `gorm:"column:match_ticker"`  // Kalshi event_ticker
+	FSMatchID    string `gorm:"column:fs_match_id"`   // FlashScore/API-Tennis match ID
+	TS           int64  `gorm:"column:ts_ms"`         // unix ms (may be 0 if historical)
+	RecvTS       int64  `gorm:"column:recv_ts"`       // when we stored it
+	SetNumber    int    `gorm:"column:set_number"`    // 1-based
+	GameNumber   int    `gorm:"column:game_number"`   // 1-based within set
+	PointNumber  int    `gorm:"column:point_number"`  // 1-based within game
+	Server       int    `gorm:"column:server"`        // 1 = home, 2 = away
+	Scorer       int    `gorm:"column:scorer"`        // 1 = home won point, 2 = away won point
+	HomePoints   string `gorm:"column:home_points"`   // "0", "15", "30", "40", "A"
+	AwayPoints   string `gorm:"column:away_points"`
+	HomeGames    int    `gorm:"column:home_games"`    // games won by home in this set at this point
+	AwayGames    int    `gorm:"column:away_games"`    // games won by away in this set at this point
+	HomeSetGames int    `gorm:"column:home_set_games"` // final games in completed sets before this one
+	AwaySetGames int    `gorm:"column:away_set_games"`
+	IsTiebreak   bool   `gorm:"column:is_tiebreak"`
+	IsBreakPoint bool   `gorm:"column:is_break_point"`
+	IsSetPoint   bool   `gorm:"column:is_set_point"`
+	IsMatchPoint bool   `gorm:"column:is_match_point"`
+	Payload      string `gorm:"column:payload"`
 }
 
 // Order maps a simulated buy order from the match point signal algorithm.
 // Traceable to the match via match_ticker (event_ticker) and market_ticker.
 type Order struct {
-	ID                     int64
-	TS                     int64
-	MatchTicker            string  // Kalshi event_ticker
-	MarketTicker           string  // Kalshi market_ticker (YES side)
-	MatchTitle             string  // human-readable match title (from events table)
-	PlayerName             string  // player name for this market side
-	Action                 string  // "buy"
-	Context                string  // match point context description
-	ConvProb               float64 // converted probability (0-1)
-	MarketPrice            float64 // market YES price (0-1)
-	EdgeCents              int     // edge in cents
-	SuggestedSize          float64 // suggested buy size (shares)
-	SetNumber              int     // set when signal fired
-	Strategy               string  // strategy name that generated this order
-	Payload                string  // extra debug info (JSON)
-	Bankroll               float64 // bankroll used for Kelly sizing
-	KellyFraction          float64 // Kelly fraction used for sizing
-	IsReal                 bool    // true if real order submitted to Kalshi
-	KalshiOrderID          string  // Kalshi order ID from REST response
-	FillCount              float64 // contracts filled (IOC may partial fill)
-	OrderStatus            string  // 'submitted','filled','partial','failed','resolved'
-	ResolvedPNLCents       int64   // P&L in cents at resolution
-	PoolBalanceBeforeCents int64   // liquidity pool balance before resolution
-	PoolBalanceAfterCents  int64   // liquidity pool balance after resolution
+	ID                     int64   `gorm:"primaryKey;autoIncrement;column:id"`
+	TS                     int64   `gorm:"column:ts"`
+	MatchTicker            string  `gorm:"column:match_ticker"`
+	MarketTicker           string  `gorm:"column:market_ticker"`
+	MatchTitle             string  `gorm:"column:match_title"`
+	PlayerName             string  `gorm:"column:player_name"`
+	Action                 string  `gorm:"column:action"`
+	Context                string  `gorm:"column:context"`
+	ConvProb               float64 `gorm:"column:conv_prob"`
+	MarketPrice            float64 `gorm:"column:market_price"`
+	EdgeCents              int     `gorm:"column:edge_cents"`
+	SuggestedSize          float64 `gorm:"column:suggested_size"`
+	SetNumber              int     `gorm:"column:set_number"`
+	Strategy               string  `gorm:"column:strategy"`
+	Payload                string  `gorm:"column:payload"`
+	Bankroll               float64 `gorm:"column:bankroll"`
+	KellyFraction          float64 `gorm:"column:kelly_fraction"`
+	IsReal                 bool    `gorm:"column:is_real"`
+	KalshiOrderID          string  `gorm:"column:kalshi_order_id"`
+	FillCount              float64 `gorm:"column:fill_count"`
+	OrderStatus            string  `gorm:"column:order_status"`
+	ResolvedPNLCents       int64   `gorm:"column:resolved_pnl_cents"`
+	PoolBalanceBeforeCents int64   `gorm:"column:pool_balance_before_cents"`
+	PoolBalanceAfterCents  int64   `gorm:"column:pool_balance_after_cents"`
+	UnfilledRefundedCents  int64   `gorm:"column:unfilled_refunded_cents"`
 }
 
 // KalshiScore is a live score snapshot from Kalshi's /live_data endpoint.
 // Point-level granularity via PointsHome/PointsAway (0/15/30/40/50 where 50=A).
 // Backup source when API-Tennis has no data for a match.
 type KalshiScore struct {
-	EventTicker     string
-	MilestoneID     string
-	Status          string // "started", "interrupted", "finished", etc.
-	SetsHome        int    // sets won by home (competitor1)
-	SetsAway        int    // sets won by away (competitor2)
-	GamesHome       int    // games won by home in current set
-	GamesAway       int    // games won by away in current set
-	PointsHome      int    // current point score in current game (0/15/30/40/50)
-	PointsAway      int    // 50 = Advantage
-	Server          int    // 1=home serves, 2=away serves, 0=unknown
-	CompletedRounds int    // number of completed sets
-	UpdatedTS       int64  // unix ms
-	Payload         string // raw JSON for debugging
+	EventTicker     string `gorm:"primaryKey;column:event_ticker"`
+	MilestoneID     string `gorm:"column:milestone_id"`
+	Status          string `gorm:"column:status"` // "started", "interrupted", "finished", etc.
+	SetsHome        int    `gorm:"column:sets_home"`
+	SetsAway        int    `gorm:"column:sets_away"`
+	GamesHome       int    `gorm:"column:games_home"`
+	GamesAway       int    `gorm:"column:games_away"`
+	PointsHome      int    `gorm:"column:points_home"`
+	PointsAway      int    `gorm:"column:points_away"`
+	Server          int    `gorm:"column:server"`
+	CompletedRounds int    `gorm:"column:completed_rounds"`
+	UpdatedTS       int64  `gorm:"column:updated_ts"`
+	Payload         string `gorm:"column:payload"`
 }
+
+// ScanRun maps a row from the scan_runs audit log table.
+type ScanRun struct {
+	ID           int64  `gorm:"primaryKey;autoIncrement;column:id"`
+	RunTS        int64  `gorm:"column:run_ts"`
+	SeriesTicker string `gorm:"column:series_ticker"`
+	EventsFound  int    `gorm:"column:events_found"`
+	MarketsFound int    `gorm:"column:markets_found"`
+	NewEvents    int    `gorm:"column:new_events"`
+	NewMarkets   int    `gorm:"column:new_markets"`
+}
+
+// FiredEvent maps a row from the fired_events table.
+type FiredEvent struct {
+	EventTicker string `gorm:"primaryKey;column:event_ticker"`
+	Strategy    string `gorm:"primaryKey;column:strategy"`
+	FiredTS     int64  `gorm:"column:fired_ts"`
+}
+
+// FlashscoreMatch maps a row from the flashscore_matches table.
+// Created externally — not part of schemaDDL. AutoMigrate ensures it exists.
+type FlashscoreMatch struct {
+	EventTicker string `gorm:"primaryKey;column:event_ticker"`
+	Surface     string `gorm:"column:surface"`
+}
+
+func (FlashscoreMatch) TableName() string { return "flashscore_matches" }
+
