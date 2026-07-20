@@ -95,6 +95,16 @@ func (t *Tracker) StartMatch(ctx context.Context, market, eventTicker string) er
 		t.mu.Unlock()
 		return nil
 	}
+	// First market for this event? Decide before inserting so score polling
+	// starts exactly once per event. Re-calling StartPolling overwrites the
+	// worker map entry and leaks the previous goroutine.
+	firstForEvent := true
+	for _, ev := range t.subs {
+		if ev == eventTicker {
+			firstForEvent = false
+			break
+		}
+	}
 	t.subs[market] = eventTicker
 	t.subTimes[market] = time.Now()
 	t.mu.Unlock()
@@ -107,8 +117,7 @@ func (t *Tracker) StartMatch(ctx context.Context, market, eventTicker string) er
 		return err
 	}
 
-	// Start score polling for this event (if not already active)
-	if t.sp != nil {
+	if t.sp != nil && firstForEvent {
 		t.sp.StartPolling(eventTicker)
 	}
 
