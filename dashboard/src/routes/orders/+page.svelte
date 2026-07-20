@@ -108,8 +108,10 @@
   }
 
   let strategies = $derived.by(() => {
-    if (!data || !data.orders) return [];
-    return [...new Set(allOrders.map((/** @type {any} */ o) => o.strategy).filter(Boolean))].sort();
+    // From API (DISTINCT over all orders), not from loaded subset — pagination
+    // would otherwise hide strategies that only fired on older orders.
+    if (!data || !data.strategies) return [];
+    return [...data.strategies].sort();
   });
 
   // Initialize selection once when strategies first appear.

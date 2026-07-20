@@ -1083,6 +1083,7 @@ type PaperOrderSummary struct {
 type PaperOrderResponse struct {
 	Orders     []PaperOrder      `json:"orders"`
 	Summary    PaperOrderSummary `json:"summary"`
+	Strategies []string          `json:"strategies"` // all distinct strategies that have fired
 	HasMore    bool              `json:"has_more"`
 	NextCursor *PaperOrderCursor `json:"next_cursor,omitempty"`
 }
@@ -1125,6 +1126,28 @@ FROM orders o LEFT JOIN markets m ON o.market_ticker = m.market_ticker`)
 		s.ROI = s.NetPnL / s.TotalInvested * 100
 	}
 	return s, nil
+}
+
+// GetPaperOrderStrategies returns all distinct strategy names that have fired
+// at least one order. Used to populate the dashboard filter sidebar regardless
+// of which orders are currently loaded on the page.
+func (e *Engine) GetPaperOrderStrategies(ctx context.Context) ([]string, error) {
+	rows, err := e.db.QueryContext(ctx, `
+SELECT DISTINCT strategy FROM orders
+WHERE strategy != '' ORDER BY strategy`)
+	if err != nil {
+		return nil, fmt.Errorf("query paper order strategies: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
 }
 
 // GetPaperOrdersPage returns one keyset-paginated page of paper orders, newest

@@ -213,9 +213,18 @@ func ordersHandler(e *backtest.Engine, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
+		strategies, err := e.GetPaperOrderStrategies(r.Context())
+		if err != nil {
+			log.Error("get paper order strategies", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+
 		json.NewEncoder(w).Encode(backtest.PaperOrderResponse{
 			Orders:     orders,
 			Summary:    summary,
+			Strategies: strategies,
 			HasMore:    hasMore,
 			NextCursor: next,
 		})
