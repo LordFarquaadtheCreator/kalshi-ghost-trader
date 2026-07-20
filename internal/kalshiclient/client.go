@@ -164,6 +164,8 @@ func (c *Client) Post(ctx context.Context, path string, body any, out any) error
 
 // post performs a signed POST request with a JSON body and decodes the response.
 // Retries on 429 with exponential backoff (same as get).
+// Logs per-attempt timing (connect/TLS/total) + status code for diagnosing
+// hangs and slow responses.
 func (c *Client) post(ctx context.Context, path string, body any, out any) error {
 	fullURL := c.baseURL + path
 
@@ -200,16 +202,29 @@ func (c *Client) post(ctx context.Context, path string, body any, out any) error
 			}
 		}
 
+		start := time.Now()
 		resp, err := c.http.Do(req)
+		total := time.Since(start)
 		if err != nil {
+			c.log.Warn("kalshi post: request failed",
+				"path", path, "attempt", attempt+1,
+				"total_ms", total.Milliseconds(), "error", err)
 			return err
 		}
 
 		respBody, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
+			c.log.Warn("kalshi post: read body failed",
+				"path", path, "attempt", attempt+1,
+				"status", resp.StatusCode, "total_ms", total.Milliseconds(), "error", err)
 			return err
 		}
+
+		c.log.Info("kalshi post: response",
+			"path", path, "attempt", attempt+1,
+			"status", resp.StatusCode, "total_ms", total.Milliseconds(),
+			"body_bytes", len(respBody))
 
 		if resp.StatusCode == 429 && attempt < maxRetries {
 			c.log.Warn("rate limited, retrying", "path", path, "attempt", attempt+1, "backoff", backoff)

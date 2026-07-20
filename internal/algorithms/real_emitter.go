@@ -9,6 +9,7 @@ import (
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
+	"github.com/google/uuid"
 )
 
 // RealOrderConfig controls real order submission to Kalshi.
@@ -23,6 +24,7 @@ type RealOrderConfig struct {
 // createOrderV2Request maps to Kalshi's POST /portfolio/events/orders body.
 type createOrderV2Request struct {
 	Ticker                  string `json:"ticker"`
+	ClientOrderID           string `json:"client_order_id,omitempty"`
 	Side                    string `json:"side"`
 	Count                   string `json:"count"`
 	Price                   string `json:"price"`
@@ -30,12 +32,17 @@ type createOrderV2Request struct {
 	SelfTradePreventionType string `json:"self_trade_prevention_type"`
 	PostOnly                bool   `json:"post_only"`
 	ReduceOnly              bool   `json:"reduce_only"`
+	// ExchangeIndex: -1 = auto-route by market ticker. Avoids cross-shard
+	// routing latency when a market lives on a non-zero shard.
+	ExchangeIndex int `json:"exchange_index"`
 }
 
 type createOrderV2Response struct {
 	OrderID        string `json:"order_id"`
 	FillCount      string `json:"fill_count"`
 	RemainingCount string `json:"remaining_count"`
+	// TsMS: matching engine processing timestamp (Unix epoch ms).
+	TsMS int64 `json:"ts_ms"`
 }
 
 // KalshiOrderEmitter submits real orders to Kalshi via REST.
@@ -211,20 +218,31 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	priceStr := fmt.Sprintf("%.4f", o.MarketPrice)
 	countStr := fmt.Sprintf("%.2f", count)
 
+	// client_order_id: per-order UUID for idempotency. If a timeout leaves the
+	// order in an ambiguous state, retrying with the same client_order_id is
+	// safe — Kalshi dedupes. Also surfaces in Kalshi's response so we can
+	// correlate client and server side of a submission.
+	clientOrderID := uuid.NewString()
+
 	req := createOrderV2Request{
 		Ticker:                  o.MarketTicker,
+		ClientOrderID:           clientOrderID,
 		Side:                    "bid",
 		Count:                   countStr,
 		Price:                   priceStr,
 		TimeInForce:             e.cfg.TimeInForce,
 		SelfTradePreventionType: "taker_at_cross",
+		// -1 lets Kalshi route by market ticker. Default 0 forces cross-shard
+		// routing when the market lives on a non-zero shard — suspected cause
+		// of the 10s hangs on CHABOU-CHA near settlement.
+		ExchangeIndex: -1,
 	}
 
 	var resp createOrderV2Response
 	err = e.client.Post(orderCtx, "/portfolio/events/orders", req, &resp)
 	if err != nil {
 		e.log.Error("real: order submission FAILED",
-			"order_id", o.ID,
+			"order_id", o.ID, "client_order_id", clientOrderID,
 			"market", o.MarketTicker, "strategy", o.Strategy,
 			"side", "bid", "count", countStr, "price", priceStr,
 			"error", err)
@@ -255,7 +273,8 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 
 	e.log.Info("real: order submitted",
 		"market", o.MarketTicker, "strategy", o.Strategy,
-		"order_id", resp.OrderID,
+		"order_id", resp.OrderID, "client_order_id", clientOrderID,
+		"server_ts_ms", resp.TsMS,
 		"fill_count", resp.FillCount,
 		"remaining_count", resp.RemainingCount,
 		"count", countStr, "price", priceStr,
