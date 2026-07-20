@@ -5,7 +5,6 @@ package backtest
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"math"
@@ -14,8 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
+	"gorm.io/gorm"
 )
 
 // MarketRow maps a market row from the DB.
@@ -93,7 +94,7 @@ type CloseTimeStrategy interface {
 
 // Engine holds loaded DB data and runs strategies against it.
 type Engine struct {
-	db            *sql.DB
+	db            *gorm.DB
 	log           *slog.Logger
 	markets       map[string][]MarketRow
 	marketCloseTs map[string]int64
@@ -115,7 +116,7 @@ type TickVolume struct {
 // NewEngine creates a backtest engine from a read-only SQLite DB.
 func NewEngine(dbPath string, log *slog.Logger) (*Engine, error) {
 	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", dbPath)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
@@ -135,7 +136,8 @@ func NewEngine(dbPath string, log *slog.Logger) (*Engine, error) {
 	}
 
 	if err := e.load(); err != nil {
-		db.Close()
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
 		return nil, err
 	}
 	return e, nil
@@ -143,7 +145,8 @@ func NewEngine(dbPath string, log *slog.Logger) (*Engine, error) {
 
 // Close closes the underlying DB connection.
 func (e *Engine) Close() {
-	e.db.Close()
+	sqlDB, _ := e.db.DB()
+	sqlDB.Close()
 }
 
 // EventTitle returns the cached title for an event, or empty string if unknown.
@@ -157,26 +160,19 @@ func (e *Engine) EventOccurrenceTS(ctx context.Context, eventTickers []string) (
 	if len(eventTickers) == 0 {
 		return nil, nil
 	}
-	placeholders := strings.Repeat("?,", len(eventTickers))
-	placeholders = placeholders[:len(placeholders)-1]
-	args := make([]any, len(eventTickers))
-	for i, t := range eventTickers {
-		args[i] = t
+	var results []struct {
+		EventTicker  string `gorm:"column:event_ticker"`
+		OccurrenceTS int64  `gorm:"column:occurrence_ts"`
 	}
-	rows, err := e.db.QueryContext(ctx,
-		`SELECT event_ticker, MAX(occurrence_ts) FROM markets WHERE event_ticker IN (`+placeholders+`) GROUP BY event_ticker`, args...)
+	err := e.db.WithContext(ctx).Raw(
+		`SELECT event_ticker, MAX(occurrence_ts) as occurrence_ts FROM markets WHERE event_ticker IN ? GROUP BY event_ticker`,
+		eventTickers).Scan(&results).Error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := make(map[string]int64, len(eventTickers))
-	for rows.Next() {
-		var et string
-		var ts sql.NullInt64
-		if err := rows.Scan(&et, &ts); err != nil {
-			return nil, err
-		}
-		out[et] = ts.Int64
+	out := make(map[string]int64, len(results))
+	for _, r := range results {
+		out[r.EventTicker] = r.OccurrenceTS
 	}
 	return out, nil
 }
@@ -188,30 +184,23 @@ func (e *Engine) LatestTickTS(ctx context.Context, eventTickers []string) (map[s
 	if len(eventTickers) == 0 {
 		return nil, nil
 	}
-	placeholders := strings.Repeat("?,", len(eventTickers))
-	placeholders = placeholders[:len(placeholders)-1]
-	args := make([]any, len(eventTickers))
-	for i, t := range eventTickers {
-		args[i] = t
+	var results []struct {
+		EventTicker string `gorm:"column:event_ticker"`
+		TS          int64  `gorm:"column:ts"`
 	}
-	rows, err := e.db.QueryContext(ctx,
-		`SELECT m.event_ticker, MAX(t.ts)
+	err := e.db.WithContext(ctx).Raw(
+		`SELECT m.event_ticker, MAX(t.ts) as ts
 		 FROM ticks t JOIN markets m ON t.market_ticker = m.market_ticker
-		 WHERE m.event_ticker IN (`+placeholders+`) GROUP BY m.event_ticker`, args...)
+		 WHERE m.event_ticker IN ? GROUP BY m.event_ticker`,
+		eventTickers).Scan(&results).Error
 	if err != nil {
 		return nil, fmt.Errorf("latest tick ts: %w", err)
 	}
-	defer rows.Close()
-	out := make(map[string]int64, len(eventTickers))
-	for rows.Next() {
-		var et string
-		var ts sql.NullInt64
-		if err := rows.Scan(&et, &ts); err != nil {
-			return nil, err
-		}
-		out[et] = ts.Int64
+	out := make(map[string]int64, len(results))
+	for _, r := range results {
+		out[r.EventTicker] = r.TS
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // LiveScore is the latest point-by-point score for a tracked match.
@@ -240,17 +229,12 @@ func (e *Engine) LatestScores(ctx context.Context, eventTickers []string) (map[s
 	if len(eventTickers) == 0 {
 		return nil, nil
 	}
-	placeholders := strings.Repeat("?,", len(eventTickers))
-	placeholders = placeholders[:len(placeholders)-1]
-	args := make([]any, len(eventTickers))
-	for i, t := range eventTickers {
-		args[i] = t
-	}
-	query := fmt.Sprintf(`
-		SELECT match_ticker, set_number, game_number, point_number,
+	var apiScores []LiveScore
+	err := e.db.WithContext(ctx).Raw(`
+		SELECT match_ticker as event_ticker, set_number, game_number, point_number,
 		       server, home_points, away_points,
 		       home_games, away_games,
-		       COALESCE(home_set_games, 0), COALESCE(away_set_games, 0),
+		       COALESCE(home_set_games, 0) as home_set_games, COALESCE(away_set_games, 0) as away_set_games,
 		       is_tiebreak, is_break_point, is_set_point, is_match_point
 		FROM (
 			SELECT *, ROW_NUMBER() OVER (
@@ -258,99 +242,84 @@ func (e *Engine) LatestScores(ctx context.Context, eventTickers []string) (map[s
 				ORDER BY ts_ms DESC, set_number DESC, game_number DESC, point_number DESC
 			) as rn
 			FROM points
-			WHERE match_ticker IN (%s)
+			WHERE match_ticker IN ?
 		) WHERE rn = 1
-	`, placeholders)
-	rows, err := e.db.QueryContext(ctx, query, args...)
+	`, eventTickers).Scan(&apiScores).Error
 	if err != nil {
 		return nil, fmt.Errorf("latest scores: %w", err)
 	}
-	defer rows.Close()
 	out := make(map[string]*LiveScore, len(eventTickers))
-	for rows.Next() {
-		var s LiveScore
-		var isTB, isBP, isSP, isMP int
-		if err := rows.Scan(
-			&s.EventTicker, &s.SetNumber, &s.GameNumber, &s.PointNumber,
-			&s.Server, &s.HomePoints, &s.AwayPoints,
-			&s.HomeGames, &s.AwayGames, &s.HomeSetGames, &s.AwaySetGames,
-			&isTB, &isBP, &isSP, &isMP,
-		); err != nil {
-			return nil, fmt.Errorf("scan live score: %w", err)
-		}
-		s.IsTiebreak = isTB != 0
-		s.IsBreakPoint = isBP != 0
-		s.IsSetPoint = isSP != 0
-		s.IsMatchPoint = isMP != 0
-		out[s.EventTicker] = &s
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	for i := range apiScores {
+		out[apiScores[i].EventTicker] = &apiScores[i]
 	}
 
 	// Fill gaps with Kalshi live-data scores for events not in API-Tennis.
-	kalshiScores, err := e.db.QueryContext(ctx, fmt.Sprintf(`
+	var kalshiScores []struct {
+		EventTicker     string `gorm:"column:event_ticker"`
+		Status          string `gorm:"column:status"`
+		SetsHome        int    `gorm:"column:sets_home"`
+		SetsAway        int    `gorm:"column:sets_away"`
+		GamesHome       int    `gorm:"column:games_home"`
+		GamesAway       int    `gorm:"column:games_away"`
+		PointsHome      int    `gorm:"column:points_home"`
+		PointsAway      int    `gorm:"column:points_away"`
+		Server          int    `gorm:"column:server"`
+		CompletedRounds int    `gorm:"column:completed_rounds"`
+	}
+	err = e.db.WithContext(ctx).Raw(`
 		SELECT event_ticker, status, sets_home, sets_away, games_home, games_away,
 		       points_home, points_away, server, completed_rounds
-		FROM kalshi_scores WHERE event_ticker IN (%s)
-	`, placeholders), args...)
+		FROM kalshi_scores WHERE event_ticker IN ?
+	`, eventTickers).Scan(&kalshiScores).Error
 	if err != nil {
 		// Non-fatal — return API-Tennis scores only.
 		return out, nil
 	}
-	defer kalshiScores.Close()
-	for kalshiScores.Next() {
-		var et, status string
-		var setsHome, setsAway, gamesHome, gamesAway, pointsHome, pointsAway, server, completedRounds int
-		if err := kalshiScores.Scan(&et, &status, &setsHome, &setsAway,
-			&gamesHome, &gamesAway, &pointsHome, &pointsAway,
-			&server, &completedRounds); err != nil {
-			continue
-		}
-		if _, hasAPItennis := out[et]; hasAPItennis {
+	for _, ks := range kalshiScores {
+		if _, hasAPItennis := out[ks.EventTicker]; hasAPItennis {
 			continue
 		}
 		// Skip not_started matches — zero scores would falsely mark them live.
-		if status == "not_started" || status == "" {
+		if ks.Status == "not_started" || ks.Status == "" {
 			continue
 		}
-		currentSet := completedRounds + 1
-		isTB := gamesHome == 6 && gamesAway == 6
-		isSetPoint := canWinSetKalshi(gamesHome, gamesAway, true) ||
-			canWinSetKalshi(gamesHome, gamesAway, false)
+		currentSet := ks.CompletedRounds + 1
+		isTB := ks.GamesHome == 6 && ks.GamesAway == 6
+		isSetPoint := canWinSetKalshi(ks.GamesHome, ks.GamesAway, true) ||
+			canWinSetKalshi(ks.GamesHome, ks.GamesAway, false)
 		isMatchPoint := false
-		if setsHome == 1 && canWinSetKalshi(gamesHome, gamesAway, true) {
+		if ks.SetsHome == 1 && canWinSetKalshi(ks.GamesHome, ks.GamesAway, true) {
 			isMatchPoint = true
 		}
-		if setsAway == 1 && canWinSetKalshi(gamesHome, gamesAway, false) {
+		if ks.SetsAway == 1 && canWinSetKalshi(ks.GamesHome, ks.GamesAway, false) {
 			isMatchPoint = true
 		}
 		isBreakPoint := false
-		if server == 1 && canWinSetKalshi(gamesHome, gamesAway, false) {
+		if ks.Server == 1 && canWinSetKalshi(ks.GamesHome, ks.GamesAway, false) {
 			isBreakPoint = true
 		}
-		if server == 2 && canWinSetKalshi(gamesHome, gamesAway, true) {
+		if ks.Server == 2 && canWinSetKalshi(ks.GamesHome, ks.GamesAway, true) {
 			isBreakPoint = true
 		}
-		out[et] = &LiveScore{
-			EventTicker:  et,
+		out[ks.EventTicker] = &LiveScore{
+			EventTicker:  ks.EventTicker,
 			SetNumber:    currentSet,
-			GameNumber:   gamesHome + gamesAway + 1,
+			GameNumber:   ks.GamesHome + ks.GamesAway + 1,
 			PointNumber:  0,
-			Server:       server,
-			HomePoints:   kalshiPointToString(pointsHome),
-			AwayPoints:   kalshiPointToString(pointsAway),
-			HomeGames:    gamesHome,
-			AwayGames:    gamesAway,
-			HomeSetGames: setsHome,
-			AwaySetGames: setsAway,
+			Server:       ks.Server,
+			HomePoints:   kalshiPointToString(ks.PointsHome),
+			AwayPoints:   kalshiPointToString(ks.PointsAway),
+			HomeGames:    ks.GamesHome,
+			AwayGames:    ks.GamesAway,
+			HomeSetGames: ks.SetsHome,
+			AwaySetGames: ks.SetsAway,
 			IsTiebreak:   isTB,
 			IsBreakPoint: isBreakPoint,
 			IsSetPoint:   isSetPoint,
 			IsMatchPoint: isMatchPoint,
 		}
 	}
-	return out, kalshiScores.Err()
+	return out, nil
 }
 
 // kalshiPointToString converts Kalshi's integer point score to tennis notation.
@@ -444,21 +413,18 @@ func (e *Engine) GetEventTickPrices(ctx context.Context, eventTicker string) (*E
 	mkts, ok := e.markets[eventTicker]
 	if !ok {
 		// Not in cache — query DB directly
-		rows, err := e.db.QueryContext(ctx,
+		var dbMkts []struct {
+			MarketTicker string `gorm:"column:market_ticker"`
+			PlayerName   string `gorm:"column:player_name"`
+		}
+		if err := e.db.WithContext(ctx).Raw(
 			`SELECT market_ticker, player_name FROM markets WHERE event_ticker = ? ORDER BY market_ticker`,
-			eventTicker)
-		if err != nil {
+			eventTicker).Scan(&dbMkts).Error; err != nil {
 			return nil, fmt.Errorf("query markets: %w", err)
 		}
-		for rows.Next() {
-			var mt, pn string
-			if err := rows.Scan(&mt, &pn); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			mkts = append(mkts, MarketRow{MarketTicker: mt, PlayerName: pn})
+		for _, m := range dbMkts {
+			mkts = append(mkts, MarketRow{MarketTicker: m.MarketTicker, PlayerName: m.PlayerName})
 		}
-		rows.Close()
 		if len(mkts) == 0 {
 			return &EventTickData{EventTicker: eventTicker, Title: title}, nil
 		}
@@ -471,44 +437,22 @@ func (e *Engine) GetEventTickPrices(ctx context.Context, eventTicker string) (*E
 	}
 
 	// Query orders for this event
-	orderRows, err := e.db.QueryContext(ctx,
+	var orders []OrderRow
+	if err := e.db.WithContext(ctx).Raw(
 		`SELECT o.ts, o.market_ticker, m.player_name, o.context, o.market_price, o.edge_cents, o.suggested_size, o.strategy
 		 FROM orders o LEFT JOIN markets m ON o.market_ticker = m.market_ticker
-		 WHERE o.match_ticker = ? ORDER BY o.ts`, eventTicker)
-	if err != nil {
+		 WHERE o.match_ticker = ? ORDER BY o.ts`, eventTicker).Scan(&orders).Error; err != nil {
 		return nil, fmt.Errorf("query orders: %w", err)
 	}
-	for orderRows.Next() {
-		var o OrderRow
-		var playerName sql.NullString
-		if err := orderRows.Scan(&o.TS, &o.MarketTicker, &playerName, &o.Context, &o.MarketPrice,
-			&o.EdgeCents, &o.SuggestedSize, &o.Strategy); err != nil {
-			orderRows.Close()
-			return nil, err
-		}
-		o.PlayerName = playerName.String
-		result.Orders = append(result.Orders, o)
-	}
-	orderRows.Close()
+	result.Orders = orders
 
 	for _, m := range mkts {
-		rows, err := e.db.QueryContext(ctx,
+		var ticks []MarketTick
+		if err := e.db.WithContext(ctx).Raw(
 			`SELECT ts, price FROM ticks WHERE market_ticker = ? AND price IS NOT NULL AND price > 0 ORDER BY ts`,
-			m.MarketTicker)
-		if err != nil {
+			m.MarketTicker).Scan(&ticks).Error; err != nil {
 			return nil, fmt.Errorf("query ticks: %w", err)
 		}
-		var ticks []MarketTick
-		for rows.Next() {
-			var ts int64
-			var price float64
-			if err := rows.Scan(&ts, &price); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			ticks = append(ticks, MarketTick{TS: ts, Price: price})
-		}
-		rows.Close()
 		result.Markets = append(result.Markets, MarketTickData{
 			MarketTicker: m.MarketTicker,
 			PlayerName:   m.PlayerName,
@@ -517,10 +461,11 @@ func (e *Engine) GetEventTickPrices(ctx context.Context, eventTicker string) (*E
 	}
 
 	// Query game-completion score events (last point per game)
-	scoreRows, err := e.db.QueryContext(ctx,
-		`SELECT recv_ts, set_number, game_number,
+	var scores []ScoreEvent
+	if err := e.db.WithContext(ctx).Raw(
+		`SELECT recv_ts as ts, set_number, game_number,
 		        home_games, away_games, home_points, away_points,
-		        COALESCE(home_set_games, 0), COALESCE(away_set_games, 0)
+		        COALESCE(home_set_games, 0) as home_set_games, COALESCE(away_set_games, 0) as away_set_games
 		 FROM (
 			SELECT *, ROW_NUMBER() OVER (
 				PARTITION BY set_number, game_number
@@ -529,21 +474,10 @@ func (e *Engine) GetEventTickPrices(ctx context.Context, eventTicker string) (*E
 			FROM points
 			WHERE match_ticker = ?
 		 ) WHERE rn = 1
-		 ORDER BY recv_ts`, eventTicker)
-	if err != nil {
+		 ORDER BY recv_ts`, eventTicker).Scan(&scores).Error; err != nil {
 		return nil, fmt.Errorf("query score events: %w", err)
 	}
-	for scoreRows.Next() {
-		var s ScoreEvent
-		if err := scoreRows.Scan(&s.TS, &s.SetNumber, &s.GameNumber,
-			&s.HomeGames, &s.AwayGames, &s.HomePoints, &s.AwayPoints,
-			&s.HomeSetGames, &s.AwaySetGames); err != nil {
-			scoreRows.Close()
-			return nil, err
-		}
-		result.Scores = append(result.Scores, s)
-	}
-	scoreRows.Close()
+	result.Scores = scores
 
 	return result, nil
 }
@@ -562,127 +496,92 @@ func (e *Engine) load() error {
 	ctx := context.Background()
 
 	// Load event titles + series
-	rows, err := e.db.QueryContext(ctx, `SELECT event_ticker, title, series_ticker FROM events`)
-	if err != nil {
+	var events []struct {
+		EventTicker  string `gorm:"column:event_ticker"`
+		Title        string `gorm:"column:title"`
+		SeriesTicker string `gorm:"column:series_ticker"`
+	}
+	if err := e.db.WithContext(ctx).Raw(`SELECT event_ticker, title, series_ticker FROM events`).Scan(&events).Error; err != nil {
 		return fmt.Errorf("query events: %w", err)
 	}
-	for rows.Next() {
-		var et, title, series string
-		if err := rows.Scan(&et, &title, &series); err != nil {
-			rows.Close()
-			return err
-		}
-		e.eventTitles[et] = title
-		e.eventSeries[et] = series
+	for _, ev := range events {
+		e.eventTitles[ev.EventTicker] = ev.Title
+		e.eventSeries[ev.EventTicker] = ev.SeriesTicker
 	}
-	rows.Close()
 
 	// Load surface from flashscore_matches
-	fsRows, err := e.db.QueryContext(ctx,
-		`SELECT event_ticker, surface FROM flashscore_matches WHERE event_ticker IS NOT NULL AND surface IS NOT NULL`)
-	if err != nil {
+	var fsMatches []struct {
+		EventTicker string `gorm:"column:event_ticker"`
+		Surface     string `gorm:"column:surface"`
+	}
+	if err := e.db.WithContext(ctx).Raw(`SELECT event_ticker, surface FROM flashscore_matches WHERE event_ticker IS NOT NULL AND surface IS NOT NULL`).Scan(&fsMatches).Error; err != nil {
 		return fmt.Errorf("query flashscore surfaces: %w", err)
 	}
-	for fsRows.Next() {
-		var et, surface string
-		if err := fsRows.Scan(&et, &surface); err != nil {
-			fsRows.Close()
-			return err
-		}
-		e.eventSurface[et] = surface
+	for _, fm := range fsMatches {
+		e.eventSurface[fm.EventTicker] = fm.Surface
 	}
-	fsRows.Close()
 
 	// Load markets
-	mRows, err := e.db.QueryContext(ctx, `SELECT event_ticker, market_ticker, player_name, result, status, close_ts FROM markets ORDER BY event_ticker, market_ticker`)
-	if err != nil {
+	var mkts []struct {
+		EventTicker  string `gorm:"column:event_ticker"`
+		MarketTicker string `gorm:"column:market_ticker"`
+		PlayerName   string `gorm:"column:player_name"`
+		Result       string `gorm:"column:result"`
+		Status       string `gorm:"column:status"`
+		CloseTs      int64  `gorm:"column:close_ts"`
+	}
+	if err := e.db.WithContext(ctx).Raw(`SELECT event_ticker, market_ticker, player_name, result, status, close_ts FROM markets ORDER BY event_ticker, market_ticker`).Scan(&mkts).Error; err != nil {
 		return fmt.Errorf("query markets: %w", err)
 	}
-	for mRows.Next() {
-		var et, mt, pn, res, st string
-		var closeTs sql.NullInt64
-		if err := mRows.Scan(&et, &mt, &pn, &res, &st, &closeTs); err != nil {
-			mRows.Close()
-			return err
-		}
-		e.markets[et] = append(e.markets[et], MarketRow{mt, pn, res, st})
-		if closeTs.Valid && closeTs.Int64 > 0 {
-			e.marketCloseTs[et] = closeTs.Int64
+	for _, m := range mkts {
+		e.markets[m.EventTicker] = append(e.markets[m.EventTicker], MarketRow{m.MarketTicker, m.PlayerName, m.Result, m.Status})
+		if m.CloseTs > 0 {
+			e.marketCloseTs[m.EventTicker] = m.CloseTs
 		}
 	}
-	mRows.Close()
 
 	// Load tick prices
-	tRows, err := e.db.QueryContext(ctx, `SELECT market_ticker, ts, price FROM ticks WHERE price IS NOT NULL AND price > 0 ORDER BY market_ticker, ts`)
-	if err != nil {
+	var tickPrices []struct {
+		MarketTicker string  `gorm:"column:market_ticker"`
+		TS           int64   `gorm:"column:ts"`
+		Price        float64 `gorm:"column:price"`
+	}
+	if err := e.db.WithContext(ctx).Raw(`SELECT market_ticker, ts, price FROM ticks WHERE price IS NOT NULL AND price > 0 ORDER BY market_ticker, ts`).Scan(&tickPrices).Error; err != nil {
 		return fmt.Errorf("query ticks: %w", err)
 	}
-	for tRows.Next() {
-		var mt string
-		var ts int64
-		var price float64
-		if err := tRows.Scan(&mt, &ts, &price); err != nil {
-			tRows.Close()
-			return err
-		}
-		e.tickPrices[mt] = append(e.tickPrices[mt], TickPrice{ts, price})
+	for _, t := range tickPrices {
+		e.tickPrices[t.MarketTicker] = append(e.tickPrices[t.MarketTicker], TickPrice{t.TS, t.Price})
 	}
-	tRows.Close()
 
 	// Load dollar_volume time series per market (for volratio strategy)
-	vRows, err := e.db.QueryContext(ctx,
-		`SELECT market_ticker, ts, dollar_volume FROM ticks
-		 WHERE dollar_volume IS NOT NULL AND dollar_volume > 0
-		 ORDER BY market_ticker, ts`)
-	if err != nil {
+	var tickVols []struct {
+		MarketTicker string  `gorm:"column:market_ticker"`
+		TS           int64   `gorm:"column:ts"`
+		DollarVolume float64 `gorm:"column:dollar_volume"`
+	}
+	if err := e.db.WithContext(ctx).Raw(`SELECT market_ticker, ts, dollar_volume FROM ticks WHERE dollar_volume IS NOT NULL AND dollar_volume > 0 ORDER BY market_ticker, ts`).Scan(&tickVols).Error; err != nil {
 		return fmt.Errorf("query tick volumes: %w", err)
 	}
-	for vRows.Next() {
-		var mt string
-		var ts int64
-		var dv float64
-		if err := vRows.Scan(&mt, &ts, &dv); err != nil {
-			vRows.Close()
-			return err
-		}
-		e.tickVolumes[mt] = append(e.tickVolumes[mt], TickVolume{ts, dv})
+	for _, v := range tickVols {
+		e.tickVolumes[v.MarketTicker] = append(e.tickVolumes[v.MarketTicker], TickVolume{v.TS, v.DollarVolume})
 	}
-	vRows.Close()
 
 	// Load point-by-point score data
-	pRows, err := e.db.QueryContext(ctx, `
+	var points []store.Point
+	if err := e.db.WithContext(ctx).Raw(`
 		SELECT match_ticker, ts_ms, set_number, game_number, point_number,
 		       server, scorer, home_points, away_points,
 		       home_games, away_games,
-		       COALESCE(home_set_games, 0), COALESCE(away_set_games, 0),
+		       COALESCE(home_set_games, 0) as home_set_games, COALESCE(away_set_games, 0) as away_set_games,
 		       is_tiebreak, is_break_point, is_set_point, is_match_point
 		FROM points WHERE ts_ms IS NOT NULL
 		ORDER BY match_ticker, ts_ms
-	`)
-	if err != nil {
+	`).Scan(&points).Error; err != nil {
 		return fmt.Errorf("query points: %w", err)
 	}
-	for pRows.Next() {
-		var mt string
-		var p store.Point
-		var isTB, isBP, isSP, isMP int
-		if err := pRows.Scan(
-			&mt, &p.TS, &p.SetNumber, &p.GameNumber, &p.PointNumber,
-			&p.Server, &p.Scorer, &p.HomePoints, &p.AwayPoints,
-			&p.HomeGames, &p.AwayGames,
-			&p.HomeSetGames, &p.AwaySetGames,
-			&isTB, &isBP, &isSP, &isMP,
-		); err != nil {
-			pRows.Close()
-			return err
-		}
-		p.IsTiebreak = isTB != 0
-		p.IsBreakPoint = isBP != 0
-		p.IsSetPoint = isSP != 0
-		p.IsMatchPoint = isMP != 0
-		e.points[mt] = append(e.points[mt], p)
+	for _, p := range points {
+		e.points[p.MatchTicker] = append(e.points[p.MatchTicker], p)
 	}
-	pRows.Close()
 
 	return nil
 }
@@ -1051,17 +950,17 @@ func sqrt(x float64) float64 {
 
 // PaperOrder is a simulated order with resolved P&L, for the dashboard.
 type PaperOrder struct {
-	ID            int64   `json:"id"`
-	TS            int64   `json:"ts"`
-	MatchTicker   string  `json:"match_ticker"`
-	MarketTicker  string  `json:"market_ticker"`
-	PlayerName    string  `json:"player_name"`
-	Context       string  `json:"context"`
-	MarketPrice   float64 `json:"market_price"`
-	EdgeCents     int     `json:"edge_cents"`
-	SuggestedSize float64 `json:"suggested_size"`
-	Strategy      string  `json:"strategy"`
-	Result        string  `json:"result"`
+	ID            int64   `json:"id" gorm:"column:id"`
+	TS            int64   `json:"ts" gorm:"column:ts"`
+	MatchTicker   string  `json:"match_ticker" gorm:"column:match_ticker"`
+	MarketTicker  string  `json:"market_ticker" gorm:"column:market_ticker"`
+	PlayerName    string  `json:"player_name" gorm:"column:player_name"`
+	Context       string  `json:"context" gorm:"column:context"`
+	MarketPrice   float64 `json:"market_price" gorm:"column:market_price"`
+	EdgeCents     int     `json:"edge_cents" gorm:"column:edge_cents"`
+	SuggestedSize float64 `json:"suggested_size" gorm:"column:suggested_size"`
+	Strategy      string  `json:"strategy" gorm:"column:strategy"`
+	Result        string  `json:"result" gorm:"column:result"`
 	Won           bool    `json:"won"`
 	PnL           float64 `json:"pnl"`
 }
@@ -1098,27 +997,39 @@ type PaperOrderCursor struct {
 // GetPaperOrderSummary computes aggregate stats over all orders in a single
 // SQL pass. Replaces the old Go loop that re-iterated every row.
 func (e *Engine) GetPaperOrderSummary(ctx context.Context) (PaperOrderSummary, error) {
-	row := e.db.QueryRowContext(ctx, `
+	var result struct {
+		TotalOrders    int     `gorm:"column:total_orders"`
+		Resolved       int     `gorm:"column:resolved"`
+		Wins           int     `gorm:"column:wins"`
+		Losses         int     `gorm:"column:losses"`
+		Pending        int     `gorm:"column:pending"`
+		TotalInvested  float64 `gorm:"column:total_invested"`
+		NetPnL         float64 `gorm:"column:net_pnl"`
+	}
+	err := e.db.WithContext(ctx).Raw(`
 SELECT
-  COUNT(*),
-  SUM(CASE WHEN m.result IS NOT NULL AND m.result != '' THEN 1 ELSE 0 END),
-  SUM(CASE WHEN m.result = 'yes' THEN 1 ELSE 0 END),
-  SUM(CASE WHEN m.result IS NOT NULL AND m.result != '' AND m.result != 'yes' THEN 1 ELSE 0 END),
-  SUM(CASE WHEN m.result IS NULL OR m.result = '' THEN 1 ELSE 0 END),
-  COALESCE(SUM(o.suggested_size * o.market_price), 0),
+  COUNT(*) as total_orders,
+  SUM(CASE WHEN m.result IS NOT NULL AND m.result != '' THEN 1 ELSE 0 END) as resolved,
+  SUM(CASE WHEN m.result = 'yes' THEN 1 ELSE 0 END) as wins,
+  SUM(CASE WHEN m.result IS NOT NULL AND m.result != '' AND m.result != 'yes' THEN 1 ELSE 0 END) as losses,
+  SUM(CASE WHEN m.result IS NULL OR m.result = '' THEN 1 ELSE 0 END) as pending,
+  COALESCE(SUM(o.suggested_size * o.market_price), 0) as total_invested,
   COALESCE(SUM(CASE WHEN m.result = 'yes' THEN o.suggested_size * (1.0 - o.market_price)
                     WHEN m.result IS NOT NULL AND m.result != '' THEN -o.suggested_size * o.market_price
-                    ELSE 0 END), 0)
-FROM orders o LEFT JOIN markets m ON o.market_ticker = m.market_ticker`)
-	var s PaperOrderSummary
-	var resolved, wins, losses int
-	if err := row.Scan(&s.TotalOrders, &resolved, &wins, &losses, &s.Pending,
-		&s.TotalInvested, &s.NetPnL); err != nil {
-		return s, fmt.Errorf("query paper order summary: %w", err)
+                    ELSE 0 END), 0) as net_pnl
+FROM orders o LEFT JOIN markets m ON o.market_ticker = m.market_ticker`).Scan(&result).Error
+	if err != nil {
+		return PaperOrderSummary{}, fmt.Errorf("query paper order summary: %w", err)
 	}
-	s.Resolved = resolved
-	s.Wins = wins
-	s.Losses = losses
+	s := PaperOrderSummary{
+		TotalOrders:   result.TotalOrders,
+		Resolved:      result.Resolved,
+		Wins:          result.Wins,
+		Losses:        result.Losses,
+		Pending:       result.Pending,
+		TotalInvested: result.TotalInvested,
+		NetPnL:        result.NetPnL,
+	}
 	if s.Resolved > 0 {
 		s.WinRate = float64(s.Wins) / float64(s.Resolved) * 100
 	}
@@ -1132,22 +1043,14 @@ FROM orders o LEFT JOIN markets m ON o.market_ticker = m.market_ticker`)
 // at least one order. Used to populate the dashboard filter sidebar regardless
 // of which orders are currently loaded on the page.
 func (e *Engine) GetPaperOrderStrategies(ctx context.Context) ([]string, error) {
-	rows, err := e.db.QueryContext(ctx, `
+	var out []string
+	err := e.db.WithContext(ctx).Raw(`
 SELECT DISTINCT strategy FROM orders
-WHERE strategy != '' ORDER BY strategy`)
+WHERE strategy != '' ORDER BY strategy`).Scan(&out).Error
 	if err != nil {
 		return nil, fmt.Errorf("query paper order strategies: %w", err)
 	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // GetPaperOrdersPage returns one keyset-paginated page of paper orders, newest
@@ -1163,21 +1066,21 @@ func (e *Engine) GetPaperOrdersPage(ctx context.Context, cursor *PaperOrderCurso
 		limit = 1000
 	}
 
-	var (
-		rows *sql.Rows
-		err  error
-	)
+	var orders []PaperOrder
 	if cursor == nil {
-		rows, err = e.db.QueryContext(ctx, `
+		err := e.db.WithContext(ctx).Raw(`
 SELECT o.ts, o.id, o.match_ticker, o.market_ticker, o.context,
        o.market_price, o.edge_cents, o.suggested_size, o.strategy,
        m.player_name, m.result
 FROM orders o
 LEFT JOIN markets m ON o.market_ticker = m.market_ticker
 ORDER BY o.ts DESC, o.id DESC
-LIMIT ?`, limit+1)
+LIMIT ?`, limit+1).Scan(&orders).Error
+		if err != nil {
+			return nil, false, nil, fmt.Errorf("query paper orders page: %w", err)
+		}
 	} else {
-		rows, err = e.db.QueryContext(ctx, `
+		err := e.db.WithContext(ctx).Raw(`
 SELECT o.ts, o.id, o.match_ticker, o.market_ticker, o.context,
        o.market_price, o.edge_cents, o.suggested_size, o.strategy,
        m.player_name, m.result
@@ -1185,36 +1088,21 @@ FROM orders o
 LEFT JOIN markets m ON o.market_ticker = m.market_ticker
 WHERE (o.ts, o.id) < (?, ?)
 ORDER BY o.ts DESC, o.id DESC
-LIMIT ?`, cursor.TS, cursor.ID, limit+1)
-	}
-	if err != nil {
-		return nil, false, nil, fmt.Errorf("query paper orders page: %w", err)
-	}
-	defer rows.Close()
-
-	orders := make([]PaperOrder, 0, limit)
-	for rows.Next() {
-		var o PaperOrder
-		var playerName, result sql.NullString
-		if err := rows.Scan(&o.TS, &o.ID, &o.MatchTicker, &o.MarketTicker, &o.Context,
-			&o.MarketPrice, &o.EdgeCents, &o.SuggestedSize, &o.Strategy,
-			&playerName, &result); err != nil {
-			return nil, false, nil, err
+LIMIT ?`, cursor.TS, cursor.ID, limit+1).Scan(&orders).Error
+		if err != nil {
+			return nil, false, nil, fmt.Errorf("query paper orders page: %w", err)
 		}
-		o.PlayerName = playerName.String
-		o.Result = result.String
-		o.Won = result.String == "yes"
-		if result.Valid && result.String != "" {
-			if o.Won {
-				o.PnL = o.SuggestedSize * (1.0 - o.MarketPrice)
+	}
+
+	for i := range orders {
+		orders[i].Won = orders[i].Result == "yes"
+		if orders[i].Result != "" {
+			if orders[i].Won {
+				orders[i].PnL = orders[i].SuggestedSize * (1.0 - orders[i].MarketPrice)
 			} else {
-				o.PnL = -o.SuggestedSize * o.MarketPrice
+				orders[i].PnL = -orders[i].SuggestedSize * orders[i].MarketPrice
 			}
 		}
-		orders = append(orders, o)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, nil, err
 	}
 
 	hasMore := len(orders) > limit
@@ -1231,33 +1119,29 @@ LIMIT ?`, cursor.TS, cursor.ID, limit+1)
 
 // GetOrderCountsByEvent returns a map of event_ticker → simulated order count.
 func (e *Engine) GetOrderCountsByEvent(ctx context.Context) (map[string]int, error) {
-	rows, err := e.db.QueryContext(ctx,
-		`SELECT match_ticker, COUNT(*) FROM orders GROUP BY match_ticker`)
+	var results []struct {
+		MatchTicker string `gorm:"column:match_ticker"`
+		Count       int    `gorm:"column:count"`
+	}
+	err := e.db.WithContext(ctx).Raw(`SELECT match_ticker, COUNT(*) as count FROM orders GROUP BY match_ticker`).Scan(&results).Error
 	if err != nil {
 		return nil, fmt.Errorf("query order counts: %w", err)
 	}
-	defer rows.Close()
-
-	counts := make(map[string]int)
-	for rows.Next() {
-		var ticker string
-		var count int
-		if err := rows.Scan(&ticker, &count); err != nil {
-			return nil, err
-		}
-		counts[ticker] = count
+	counts := make(map[string]int, len(results))
+	for _, r := range results {
+		counts[r.MatchTicker] = r.Count
 	}
 	return counts, nil
 }
 
 // PassedMatch is a finalized event with winner + aggregate P&L, for the dashboard.
 type PassedMatch struct {
-	EventTicker string  `json:"event_ticker"`
-	Title       string  `json:"title"`
-	Series      string  `json:"series"`
-	Winner      string  `json:"winner"`
-	CloseTs     int64   `json:"close_ts"`
-	SettledTs   int64   `json:"settled_ts"`
+	EventTicker string  `json:"event_ticker" gorm:"column:event_ticker"`
+	Title       string  `json:"title" gorm:"column:title"`
+	Series      string  `json:"series" gorm:"column:series"`
+	Winner      string  `json:"winner" gorm:"column:winner"`
+	CloseTs     int64   `json:"close_ts" gorm:"column:close_ts"`
+	SettledTs   int64   `json:"settled_ts" gorm:"column:settled_ts"`
 	OrderCount  int     `json:"order_count"`
 	NetPnL      float64 `json:"net_pnl"`
 }
@@ -1268,10 +1152,11 @@ func (e *Engine) GetPassedMatches(ctx context.Context, limit int) ([]PassedMatch
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := e.db.QueryContext(ctx, `
-SELECT e.event_ticker, e.title, e.series_ticker,
-       (SELECT player_name FROM markets WHERE event_ticker = e.event_ticker AND result = 'yes' LIMIT 1),
-       MAX(mk.close_ts), MAX(mk.settlement_ts)
+	var out []PassedMatch
+	err := e.db.WithContext(ctx).Raw(`
+SELECT e.event_ticker, e.title, e.series_ticker as series,
+       (SELECT player_name FROM markets WHERE event_ticker = e.event_ticker AND result = 'yes' LIMIT 1) as winner,
+       MAX(mk.close_ts) as close_ts, MAX(mk.settlement_ts) as settled_ts
 FROM events e
 JOIN markets mk ON mk.event_ticker = e.event_ticker
 WHERE mk.status = 'finalized'
@@ -1280,89 +1165,63 @@ WHERE mk.status = 'finalized'
   )
 GROUP BY e.event_ticker, e.title, e.series_ticker
 ORDER BY MAX(mk.settlement_ts) DESC
-LIMIT ?`, limit)
+LIMIT ?`, limit).Scan(&out).Error
 	if err != nil {
 		return nil, fmt.Errorf("query passed matches: %w", err)
-	}
-	defer rows.Close()
-
-	out := make([]PassedMatch, 0, limit)
-	for rows.Next() {
-		var pm PassedMatch
-		var closeTs, settledTs sql.NullInt64
-		var winner sql.NullString
-		if err := rows.Scan(&pm.EventTicker, &pm.Title, &pm.Series, &winner, &closeTs, &settledTs); err != nil {
-			return nil, err
-		}
-		pm.Winner = winner.String
-		pm.CloseTs = closeTs.Int64
-		pm.SettledTs = settledTs.Int64
-		out = append(out, pm)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	if len(out) == 0 {
 		return out, nil
 	}
 
-	tickers := make([]any, len(out))
+	tickers := make([]string, len(out))
 	idx := make(map[string]int, len(out))
 	for i, pm := range out {
 		tickers[i] = pm.EventTicker
 		idx[pm.EventTicker] = i
 	}
-	placeholders := strings.Repeat("?,", len(out))
-	placeholders = placeholders[:len(placeholders)-1]
 
-	oRows, err := e.db.QueryContext(ctx, fmt.Sprintf(`
-SELECT o.match_ticker, COUNT(*),
-       SUM(CASE WHEN m.result = 'yes' THEN o.suggested_size * (1.0 - o.market_price)
+	var orderAggs []struct {
+		MatchTicker string  `gorm:"column:match_ticker"`
+		Count       int     `gorm:"column:count"`
+		NetPnL      float64 `gorm:"column:net_pnl"`
+	}
+	err = e.db.WithContext(ctx).Raw(`
+SELECT o.match_ticker, COUNT(*) as count,
+       COALESCE(SUM(CASE WHEN m.result = 'yes' THEN o.suggested_size * (1.0 - o.market_price)
                 WHEN m.result = 'no'  THEN -o.suggested_size * o.market_price
-                ELSE 0 END)
+                ELSE 0 END), 0) as net_pnl
 FROM orders o
 LEFT JOIN markets m ON o.market_ticker = m.market_ticker
-WHERE o.match_ticker IN (%s)
-GROUP BY o.match_ticker`, placeholders), tickers...)
+WHERE o.match_ticker IN ?
+GROUP BY o.match_ticker`, tickers).Scan(&orderAggs).Error
 	if err != nil {
 		return nil, fmt.Errorf("query passed order aggregates: %w", err)
 	}
-	defer oRows.Close()
-	for oRows.Next() {
-		var ticker string
-		var count int
-		var pnl sql.NullFloat64
-		if err := oRows.Scan(&ticker, &count, &pnl); err != nil {
-			return nil, err
-		}
-		if i, ok := idx[ticker]; ok {
-			out[i].OrderCount = count
-			out[i].NetPnL = pnl.Float64
+	for _, oa := range orderAggs {
+		if i, ok := idx[oa.MatchTicker]; ok {
+			out[i].OrderCount = oa.Count
+			out[i].NetPnL = oa.NetPnL
 		}
 	}
-	return out, oRows.Err()
+	return out, nil
 }
 
 // GetPendingOrderCountsByEvent returns a map of event_ticker → unsettled order count.
 func (e *Engine) GetPendingOrderCountsByEvent(ctx context.Context) (map[string]int, error) {
-	rows, err := e.db.QueryContext(ctx,
-		`SELECT o.match_ticker, COUNT(*)
+	var results []struct {
+		MatchTicker string `gorm:"column:match_ticker"`
+		Count       int    `gorm:"column:count"`
+	}
+	err := e.db.WithContext(ctx).Raw(`SELECT o.match_ticker, COUNT(*) as count
 		 FROM orders o LEFT JOIN markets m ON o.market_ticker = m.market_ticker
 		 WHERE m.result IS NULL OR m.result = ''
-		 GROUP BY o.match_ticker`)
+		 GROUP BY o.match_ticker`).Scan(&results).Error
 	if err != nil {
 		return nil, fmt.Errorf("query pending order counts: %w", err)
 	}
-	defer rows.Close()
-
-	counts := make(map[string]int)
-	for rows.Next() {
-		var ticker string
-		var count int
-		if err := rows.Scan(&ticker, &count); err != nil {
-			return nil, err
-		}
-		counts[ticker] = count
+	counts := make(map[string]int, len(results))
+	for _, r := range results {
+		counts[r.MatchTicker] = r.Count
 	}
 	return counts, nil
 }
