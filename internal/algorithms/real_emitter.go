@@ -227,12 +227,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 			"market", o.MarketTicker, "strategy", o.Strategy,
 			"side", "bid", "count", countStr, "price", priceStr,
 			"error", err)
-		// refund liquidity pool — order never executed
-		if _, refundErr := e.db.RefundLiquidityPool(context.Background(), spendCents); refundErr != nil {
-			e.log.Error("real: failed to refund liquidity pool",
-				"market", o.MarketTicker, "spend_cents", spendCents, "error", refundErr)
-		}
-		// mark order as failed in DB
+		// MarkRealOrderFailed handles pool refund transactionally
 		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID); dbErr != nil {
 			e.log.Error("real: failed to mark order as failed", "error", dbErr)
 		}
@@ -240,11 +235,15 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	}
 
 	fillCount, _ := strconv.ParseFloat(resp.FillCount, 64)
+	remainingCount, _ := strconv.ParseFloat(resp.RemainingCount, 64)
 	status := "submitted"
-	if resp.RemainingCount == "0" && fillCount > 0 {
+	if remainingCount == 0 && fillCount > 0 {
 		status = "filled"
 	} else if fillCount > 0 {
 		status = "partial"
+	} else if remainingCount == 0 {
+		// IOC with zero fill — fully canceled by Kalshi
+		status = "canceled"
 	}
 
 	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status); err != nil {
