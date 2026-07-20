@@ -7,13 +7,8 @@ DB-based configuration loading. All config read from `app_config` table in SQLit
 - `LoadFromDB(db *store.DB) (*Config, error)` — reads all keys from `app_config`, populates `Config` struct.
 - `ConfigCache` — thread-safe wrapper with `Get()`, `Refresh()`, `Update()`, `UpdateBatch()`.
 - Dashboard writes call `Update()` → writes DB + refreshes cache. No restart needed.
-- If `app_config` empty → error: "Run migrate-config first".
+- If `app_config` empty → error: "seed app_config, liquidity_pool, strategy_config tables manually".
 - `DB_PATH` env var sets SQLite path (default: `kalshi_tennis.db`).
-
-## Migration
-
-- `cmd/migrate-config/main.go` — one-time tool. Reads `config.yaml`, seeds `app_config` + `liquidity_pool` + `strategy_config`.
-- Run once, then delete `config.yaml`.
 
 ## Config Fields (app_config keys)
 

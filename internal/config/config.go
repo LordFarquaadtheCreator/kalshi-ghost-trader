@@ -9,8 +9,6 @@
 // `app_config` table, applies defaults for unset fields, and derives
 // REST/WebSocket URLs from the environment.
 //
-// The migration tool (cmd/migrate-config) reads config.yaml once and seeds
-// the app_config table. The main app never reads config.yaml.
 package config
 
 import (
@@ -127,7 +125,7 @@ func LoadFromDB(db *store.DB) (*Config, error) {
 		return nil, fmt.Errorf("read app_config: %w", err)
 	}
 	if len(pairs) == 0 {
-		return nil, fmt.Errorf("app_config table is empty — run migrate-config first")
+		return nil, fmt.Errorf("app_config table is empty — seed app_config, liquidity_pool, strategy_config tables manually")
 	}
 
 	m := make(map[string]string, len(pairs))

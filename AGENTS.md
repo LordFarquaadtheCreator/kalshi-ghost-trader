@@ -12,16 +12,10 @@ go vet ./...
 
 ## Run
 
-Config now lives in SQLite (`app_config` table). Legacy `config.yaml` supported via
-`cmd/migrate-config` one-time migration.
+Config lives in SQLite (`app_config` table). Seed `app_config`, `liquidity_pool`,
+`strategy_config` tables manually (one-time setup).
 
 ```bash
-# First-time setup (migrate from YAML):
-cp config.yaml.example config.yaml
-# Edit config.yaml: set api_key_id, private_key_path, environment
-go run ./cmd/migrate-config    # seeds app_config, liquidity_pool, strategy_config
-# config.yaml can now be deleted
-
 # Run:
 go run ./cmd/ghost-trader
 ```
@@ -46,8 +40,8 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `cmd/validate/` — config + connectivity validation tool
 - `cmd/ws-debug/` — WS + REST debug tool
 - `cmd/backtest/` — replay historical data through trading strategies
+- `cmd/pricebands/` — price band analysis across all strategies (per-day + aggregate)
 - `cmd/backfill/` — backfill historical data
-- `cmd/migrate-config/` — one-time YAML→SQLite config migration tool
 - `cmd/test-order/` — manual test order CLI tool (single IOC bid to Kalshi)
 - `internal/config/` — YAML config loading (legacy, superseded by app_config table)
 - `internal/kalshiauth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
@@ -148,22 +142,7 @@ ssh mint 'cd /home/fahad/kalshi-ghost-trader && \
   sudo -n systemctl restart kalshi-dashboard'
 ```
 
-If schema changed, run migration first (see Config Migration below).
-
-### Config Migration (YAML → SQLite)
-
-Phase 1 moved config from `config.yaml` to SQLite tables: `app_config`, `liquidity_pool`, `strategy_config`.
-One-time migration tool: `cmd/migrate-config`. Reads `config.yaml`, seeds tables, then `config.yaml` can be deleted.
-
-```bash
-ssh mint 'cd /home/fahad/kalshi-ghost-trader && go run ./cmd/migrate-config'
-```
-
-Gotcha: `idx_orders_real` index references `is_real` column. On pre-existing DBs, `orders` table
-exists without `is_real` — `CREATE TABLE IF NOT EXISTS` won't recreate it. Index creation moved
-to post-migration step (after `addColumnIfMissing`). Fixed in c206378.
-
-`liquidity_pool` not seeded if `order_quota_budget_total=0` — set initial balance via dashboard.
+If schema changed, run migration first.
 
 ## Snapshots (Remote → Local)
 
@@ -253,12 +232,33 @@ go run ./cmd/backtest -strategy matchpoint -debug   # log filter reasons
 Strategies register in `strategies` map in `cmd/backtest/main.go`.
 Must implement `replayStrategy` (Strategy + `SetReplayTime` + `OnPriceAt`).
 
+## Price Band Analysis
+
+Run all strategies, bucket orders into fixed price bands, output per-day +
+aggregate tables to `pricebands_output.txt`.
+
+```bash
+go run ./cmd/pricebands -db kalshi_tennis.db
+# Filter to single day:
+go run ./cmd/pricebands -db kalshi_tennis.db -day 2026-07-17
+# Custom output path:
+go run ./cmd/pricebands -db kalshi_tennis.db -out /tmp/bands.txt
+```
+
+Outputs 4 sections per day: per-strategy-per-band, cross-strategy band totals,
+best bands (N≥5, WR≥55%), and a cross-day tier-1 summary excluding
+fadelongshot*/nofade. Run on mint when DB is large.
+
 ## Verification
 
 ```bash
 go build ./...   # compiles
 go vet ./...     # no issues
 ```
+
+## Temp Scripts
+
+One-off scripts (analysis, data exports, throwaway code) go in `temp-scripts/`. Gitignored. Never write to `/tmp` or other external paths. Remove temp files when done.
 
 ## Simulated Trades
 
