@@ -27,6 +27,7 @@ import (
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
+	"github.com/google/uuid"
 )
 
 func envOr(key, def string) string {
@@ -75,6 +76,7 @@ func main() {
 
 	type req struct {
 		Ticker                  string `json:"ticker"`
+		ClientOrderID           string `json:"client_order_id,omitempty"`
 		Side                    string `json:"side"`
 		Count                   string `json:"count"`
 		Price                   string `json:"price"`
@@ -82,25 +84,30 @@ func main() {
 		SelfTradePreventionType string `json:"self_trade_prevention_type"`
 		PostOnly                bool   `json:"post_only"`
 		ReduceOnly              bool   `json:"reduce_only"`
+		ExchangeIndex           int    `json:"exchange_index"`
 	}
 
 	type resp struct {
 		OrderID        string `json:"order_id"`
 		FillCount      string `json:"fill_count"`
 		RemainingCount string `json:"remaining_count"`
+		TsMS           int64  `json:"ts_ms"`
 	}
 
+	clientOrderID := uuid.NewString()
 	body := req{
 		Ticker:                  *ticker,
+		ClientOrderID:           clientOrderID,
 		Side:                    "bid",
 		Count:                   fmt.Sprintf("%.2f", *count),
 		Price:                   fmt.Sprintf("%.4f", *price),
 		TimeInForce:             "immediate_or_cancel",
 		SelfTradePreventionType: "taker_at_cross",
+		ExchangeIndex:           -1,
 	}
 
 	bodyJSON, _ := json.MarshalIndent(body, "", "  ")
-	fmt.Printf("Sending order:\n%s\n\n", bodyJSON)
+	fmt.Printf("Sending order (client_order_id=%s):\n%s\n\n", clientOrderID, bodyJSON)
 
 	var r resp
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
