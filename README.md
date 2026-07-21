@@ -211,7 +211,7 @@ go run ./cmd/backtest -strategy matchpoint -debug
 
 ## Notebooks
 
-Analysis notebooks live in `notebooks/`. They query the live SQLite DB
+Analysis notebooks live in `research/`. They query the live SQLite DB
 read-only — never write to the DB from notebooks.
 
 ```bash
@@ -223,7 +223,7 @@ conda env create -f environment.yml
 Open in Zed or Jupyter:
 
 ```bash
-zed notebooks/nothing_happens.ipynb
+zed research/nothing_happens.ipynb
 ```
 
 ## Snapshots (remote → local)

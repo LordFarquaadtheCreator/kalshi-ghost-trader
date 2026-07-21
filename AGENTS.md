@@ -214,7 +214,7 @@ sqlite3 kalshi_tennis.db ".backup backups/kalshi_tennis_$(date +%Y%m%d_%H%M).db"
 
 ## Python (notebooks)
 
-Conda env for analysis notebooks in `notebooks/`.
+Conda env for analysis notebooks in `research/`.
 
 ```bash
 conda activate kalshi-ghost-trader
