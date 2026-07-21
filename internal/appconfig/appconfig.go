@@ -19,20 +19,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// AppConfig holds technical/environment configuration loaded from YAML.
+// EnvConfig holds technical/environment configuration loaded from YAML.
 // These values are read once at startup and never change at runtime.
-type AppConfig struct {
-	Environment     string `yaml:"environment"`             // "demo" or "prod"
-	APIKeyID        string `yaml:"kalshi_api_key_id"`       // Kalshi API key ID
-	PrivateKeyPath  string `yaml:"kalshi_private_key_path"` // path to RSA PEM private key
-	DBPath          string `yaml:"db_path"`                 // SQLite database path
-	MetricsAddr     string `yaml:"metrics_addr"`            // metrics/pprof bind address (e.g. "127.0.0.1:6060")
-	APITennisAPIKey string `yaml:"apitennis_api_key"`       // API-Tennis external API key
+type EnvConfig struct {
+	Environment       string `yaml:"environment"`             // "demo" or "prod"
+	APIKeyID          string `yaml:"kalshi_api_key_id"`       // Kalshi API key ID
+	PrivateKeyPath    string `yaml:"kalshi_private_key_path"` // path to RSA PEM private key
+	DBPath            string `yaml:"db_path"`                 // SQLite database path
+	MetricsAddr       string `yaml:"metrics_addr"`            // metrics/pprof bind address (e.g. "127.0.0.1:6060")
+	APITennisAPIKey   string `yaml:"apitennis_api_key"`       // API-Tennis external API key
+	DisableWSDataSave bool   `yaml:"disable_ws_data_save"`    // skip persisting Kalshi WS data to DB
+	RESTBaseURL       string `yaml:"rest_base_url"`           // Kalshi REST API base URL
+	WSURL             string `yaml:"ws_url"`                  // Kalshi WebSocket URL
 }
 
 // Load reads the appropriate YAML config file based on APP_ENV.
 // If APP_ENV is unset, prefers app.dev.yaml if it exists, else app.yaml.
-func Load() (*AppConfig, error) {
+func Load() (*EnvConfig, error) {
 	path, err := resolvePath()
 	if err != nil {
 		return nil, err
@@ -41,13 +44,13 @@ func Load() (*AppConfig, error) {
 }
 
 // LoadFromPath reads a specific YAML config file.
-func LoadFromPath(path string) (*AppConfig, error) {
+func LoadFromPath(path string) (*EnvConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	var cfg AppConfig
+	var cfg EnvConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -60,15 +63,15 @@ func LoadFromPath(path string) (*AppConfig, error) {
 }
 
 // validate checks required fields and applies defaults.
-func (c *AppConfig) validate(path string) error {
+func (c *EnvConfig) validate(path string) error {
 	if c.Environment == "" {
 		return fmt.Errorf("environment is required in %s (demo or prod)", path)
 	}
-	if c.APIKeyID == "" {
-		return fmt.Errorf("kalshi_api_key_id is required in %s", path)
+	if c.RESTBaseURL == "" {
+		return fmt.Errorf("rest_base_url is required in %s", path)
 	}
-	if c.PrivateKeyPath == "" {
-		return fmt.Errorf("kalshi_private_key_path is required in %s", path)
+	if c.WSURL == "" {
+		return fmt.Errorf("ws_url is required in %s", path)
 	}
 	if c.DBPath == "" {
 		c.DBPath = "kalshi_tennis.db"

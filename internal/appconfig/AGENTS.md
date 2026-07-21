@@ -23,6 +23,7 @@ Dev machines keep `app.dev.yaml` and auto-run dev. Prod boxes only have `app.yam
 - `db_path` — SQLite database path (default: `kalshi_tennis.db`)
 - `metrics_addr` — metrics/pprof bind address (default: `127.0.0.1:6060`)
 - `apitennis_api_key` — API-Tennis external API key
+- `disable_ws_data_save` — skip persisting Kalshi WS ticks/orderbook/lifecycle to DB
 
 ## Gotchas
 
