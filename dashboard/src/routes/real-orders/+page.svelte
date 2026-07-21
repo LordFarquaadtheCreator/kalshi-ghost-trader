@@ -15,6 +15,9 @@
   let error = $derived($ordersStore.error);
 
   let filterStatus = $state('all');
+  let resetDollars = $state('');
+  let topupDollars = $state('');
+  let poolMsg = $state(null); // { type: 'ok' | 'err', text: string }
 
   /** @type {any[]} */
   let orders = $derived(ordersData?.orders ?? []);
@@ -57,6 +60,37 @@
   function handleRowClick(/** @type {any} */ o) {
     goto(`/matches/${encodeURIComponent(o.MatchTicker)}`);
   }
+
+  async function handleReset() {
+    const dollars = parseFloat(resetDollars);
+    if (!dollars || dollars <= 0) {
+      poolMsg = { type: 'err', text: 'Enter a positive dollar amount' };
+      return;
+    }
+    if (!confirm(`Reset pool to $${dollars.toFixed(2)}? Wipes total_spent and total_pnl.`)) return;
+    try {
+      await api.resetLiquidityPool(Math.round(dollars * 100));
+      poolMsg = { type: 'ok', text: `Pool reset to $${dollars.toFixed(2)}` };
+      resetDollars = '';
+    } catch (e) {
+      poolMsg = { type: 'err', text: `Reset failed: ${e.message}` };
+    }
+  }
+
+  async function handleTopUp() {
+    const dollars = parseFloat(topupDollars);
+    if (!dollars || dollars <= 0) {
+      poolMsg = { type: 'err', text: 'Enter a positive dollar amount' };
+      return;
+    }
+    try {
+      await api.topUpLiquidityPool(Math.round(dollars * 100));
+      poolMsg = { type: 'ok', text: `Topped up $${dollars.toFixed(2)}` };
+      topupDollars = '';
+    } catch (e) {
+      poolMsg = { type: 'err', text: `Top-up failed: ${e.message}` };
+    }
+  }
 </script>
 
 <svelte:head><title>Real Orders — Kalshi Ghost Trader</title></svelte:head>
@@ -84,6 +118,22 @@
           {fmtCents(pool.total_pnl_cents)}
         </span>
       </div>
+    </div>
+
+    <div class="pool-controls">
+      <div class="pool-control-group">
+        <input type="number" bind:value={resetDollars} placeholder="20.00" step="0.01" min="0" />
+        <button class="btn btn-warn" onclick={handleReset}>Reset Pool ($)</button>
+      </div>
+      <div class="pool-control-group">
+        <input type="number" bind:value={topupDollars} placeholder="5.00" step="0.01" min="0" />
+        <button class="btn" onclick={handleTopUp}>Top Up ($)</button>
+      </div>
+      {#if poolMsg}
+        <span class="pool-msg" class:ok={poolMsg.type === 'ok'} class:err={poolMsg.type === 'err'}>
+          {poolMsg.text}
+        </span>
+      {/if}
     </div>
   {/if}
 
@@ -181,4 +231,44 @@
 <style>
   .win { color: var(--win); }
   .loss { color: var(--loss); }
+
+  .pool-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .pool-control-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pool-control-group input {
+    width: 90px;
+    padding: 4px 8px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font: inherit;
+  }
+  .btn {
+    padding: 4px 12px;
+    background: var(--accent, #3b82f6);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+  }
+  .btn:hover { filter: brightness(1.1); }
+  .btn-warn { background: var(--loss, #ef4444); }
+  .pool-msg { font-size: 0.9em; }
+  .pool-msg.ok { color: var(--win); }
+  .pool-msg.err { color: var(--loss); }
 </style>

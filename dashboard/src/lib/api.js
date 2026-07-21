@@ -173,6 +173,14 @@ export const api = {
     return cachedFetch(`${GHOST_TRADER_URL}/api/liquidity-pool`, TTL.orders);
   },
 
+  async resetLiquidityPool(/** @type {number} */ balanceCents) {
+    return mutate(`${GHOST_TRADER_URL}/api/liquidity-pool/reset`, 'POST', { balance_cents: balanceCents });
+  },
+
+  async topUpLiquidityPool(/** @type {number} */ addCents) {
+    return mutate(`${GHOST_TRADER_URL}/api/liquidity-pool/topup`, 'POST', { add_cents: addCents });
+  },
+
   async getStrategyConfig() {
     return cachedFetch(`${GHOST_TRADER_URL}/api/strategy-config`, TTL.strategies);
   },

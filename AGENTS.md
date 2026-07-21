@@ -73,6 +73,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `internal/apitennis/` — API-Tennis WebSocket real-time scraper (optional, primary score source)
 - `internal/kalshilivedata/` — Kalshi live-data REST poller (optional, backup score source)
 - `internal/algorithms/` — pluggable trading strategies (match-point detection, order emission)
+- `internal/liquiditypool/` — liquidity pool (single source of truth for real cash, kelly sizing reads balance live)
 - `internal/signal/` — close-timer strategy, simulated order emission
 - `dashboard/` — SvelteKit + Vite dashboard (real orders, liquidity pool, config management, charts)
 
