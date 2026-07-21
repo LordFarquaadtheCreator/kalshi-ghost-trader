@@ -112,29 +112,32 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 			"status", mkt.Status,
 			"result", mkt.Result)
 
+		// Resolve orders whenever REST gives us a result — independent of
+		// event-level finalization. Tennis events have 2 markets (one per
+		// player); gating on finalized[event] would skip the second market.
+		if mkt.Result != "" {
+			if err := r.db.ResolveRealOrders(ctx, m.MarketTicker, mkt.Result); err != nil {
+				r.log.Warn("reconciler: resolve real orders failed",
+					"market", m.MarketTicker, "err", err)
+			} else {
+				r.log.Info("reconciler: resolved real orders",
+					"market", m.MarketTicker, "result", mkt.Result)
+			}
+			if err := r.db.ResolveSimulatedOrders(ctx, m.MarketTicker, mkt.Result); err != nil {
+				r.log.Warn("reconciler: resolve simulated orders failed",
+					"market", m.MarketTicker, "err", err)
+			} else {
+				r.log.Info("reconciler: resolved simulated orders",
+					"market", m.MarketTicker, "result", mkt.Result)
+			}
+		}
+
 		// Run finalization once per event (both markets finalized check inside)
 		if mkt.Status == "finalized" && m.EventTicker != "" && !finalized[m.EventTicker] {
 			finalized[m.EventTicker] = true
 			if err := r.db.FinalizeEventIfNeeded(ctx, m.EventTicker); err != nil {
 				r.log.Warn("reconciler: finalize event failed",
 					"event", m.EventTicker, "err", err)
-			}
-			// Resolve all orders for this market
-			if mkt.Result != "" {
-				if err := r.db.ResolveRealOrders(ctx, m.MarketTicker, mkt.Result); err != nil {
-					r.log.Warn("reconciler: resolve real orders failed",
-						"market", m.MarketTicker, "err", err)
-				} else {
-					r.log.Info("reconciler: resolved real orders",
-						"market", m.MarketTicker, "result", mkt.Result)
-				}
-				if err := r.db.ResolveSimulatedOrders(ctx, m.MarketTicker, mkt.Result); err != nil {
-					r.log.Warn("reconciler: resolve simulated orders failed",
-						"market", m.MarketTicker, "err", err)
-				} else {
-					r.log.Info("reconciler: resolved simulated orders",
-						"market", m.MarketTicker, "result", mkt.Result)
-				}
 			}
 		}
 	}
