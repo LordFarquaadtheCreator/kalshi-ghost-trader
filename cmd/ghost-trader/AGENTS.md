@@ -4,18 +4,19 @@ Entrypoint. Wires all components via errgroup.
 
 ## Wiring order
 
-1. Load config
-2. Load RSA signer
-3. Open SQLite
-4. Create tick writer
-5. Create REST client
-6. Build order emission pipeline (paper guard + real guard + emitter)
-7. Create strategies (all wired to paper guard as their OrderEmitter)
-8. Create WS manager
-9. Create tracker (wired to strategies)
-10. Create scanner
-11. Create scheduler
-12. Launch goroutines via errgroup (metrics server, tick writer, WS, scanner, scheduler)
+1. Load app config (app.yaml / app.dev.yaml)
+2. Open SQLite (db_path from app config)
+3. Load runtime config from DB (merged with app config)
+4. Load RSA signer
+5. Create tick writer
+6. Create REST client
+7. Build order emission pipeline (paper guard + real guard + emitter)
+8. Create strategies (all wired to paper guard as their OrderEmitter)
+9. Create WS manager
+10. Create tracker (wired to strategies)
+11. Create scanner
+12. Create scheduler
+13. Launch goroutines via errgroup (metrics server, tick writer, WS, scanner, scheduler)
 
 ## Order emission pipeline
 
@@ -45,8 +46,7 @@ SIGINT/SIGTERM cancels root ctx. errgroup cancels all. Then:
 
 - Don't move `db.Close()` before errgroup `Wait()`. Tick writer may still flush.
 - Don't add goroutines outside errgroup. Won't get cancelled on signal.
-- Metrics server binds 127.0.0.1 only. Not exposed externally.
-- `METRICS_PORT=0` disables metrics server.
+- Metrics server bind address comes from `app.yaml` (`metrics_addr`). Empty string disables it.
 - `guard.Close()` must be deferred — stops rate limiter goroutine.
 - Real guard `Close()` must also be deferred when `real_trading_enabled`.
 - Strategies receive `paperGuard` as their emitter — not the raw `TickWriterEmitter`.

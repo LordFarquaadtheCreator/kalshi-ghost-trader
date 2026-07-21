@@ -1,0 +1,10 @@
+# Development config — demo Kalshi keys, demo API endpoints.
+# Copy to app.dev.yaml and fill in demo values.
+# Auto-selected when APP_ENV is unset and this file exists.
+
+environment: demo
+kalshi_api_key_id: "00000000-0000-0000-0000-000000000000"
+kalshi_private_key_path: /path/to/demo_key.pem
+db_path: kalshi_tennis.db
+metrics_addr: "127.0.0.1:6060"
+apitennis_api_key: ""

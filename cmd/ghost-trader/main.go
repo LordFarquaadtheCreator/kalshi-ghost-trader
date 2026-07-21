@@ -18,7 +18,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	_ "net/http/pprof"
@@ -32,6 +31,7 @@ import (
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/apitennis"
+	"github.com/farquaad/kalshi-ghost-trader/internal/appconfig"
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
@@ -62,11 +62,13 @@ func main() {
 	}))
 	slog.SetDefault(log)
 
-	// Bootstrap: DB path from env, open SQLite, load config from app_config table
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "kalshi_tennis.db"
+	// Load technical config from app.yaml / app.dev.yaml
+	appCfg, err := appconfig.Load()
+	if err != nil {
+		log.Error("app config load failed", "err", err)
+		os.Exit(1)
 	}
+	log.Info("app config loaded", "env", appCfg.Environment, "db", appCfg.DBPath)
 
 	// Root context cancelled on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(),
@@ -74,23 +76,23 @@ func main() {
 	defer stop()
 
 	// Open SQLite store
-	db, err := store.New(ctx, dbPath, log)
+	db, err := store.New(ctx, appCfg.DBPath, log)
 	if err != nil {
 		log.Error("store init failed", "err", err)
 		os.Exit(1)
 	}
 	defer db.Close()
 
-	// Load config from DB
-	cfg, err := config.LoadFromDB(db)
+	// Load runtime config from DB, merged with app config
+	cfg, err := config.LoadFromDB(db, appCfg)
 	if err != nil {
 		log.Error("config load from DB failed", "err", err)
 		os.Exit(1)
 	}
-	cfgCache := config.NewConfigCache(db, cfg) // dashboard writes refresh this; live config reads use it
+	cfgCache := config.NewConfigCache(db, cfg, appCfg) // dashboard writes refresh this; live config reads use it
 	algorithms.SetSizingParams(cfg.PaperBankroll, cfg.KellyFraction)
 	algorithms.SetRealBankroll(cfg.RealBankroll)
-	log.Info("config loaded from DB", "env", cfg.Environment, "db", cfg.DBPath, "series_count", len(cfg.SeriesTickers), "paper_bankroll", cfg.PaperBankroll, "real_bankroll", cfg.RealBankroll, "kelly", cfg.KellyFraction)
+	log.Info("config loaded", "env", cfg.Environment, "db", cfg.DBPath, "series_count", len(cfg.SeriesTickers), "paper_bankroll", cfg.PaperBankroll, "real_bankroll", cfg.RealBankroll, "kelly", cfg.KellyFraction)
 
 	// Load signer
 	signer, err := kalshiauth.NewSignerFromFile(cfg.APIKeyID, cfg.PrivateKeyPath)
@@ -391,7 +393,7 @@ func main() {
 	btCache := backtest.NewCache(5 * time.Minute)
 
 	// pprof + runtime metrics + strategy API server
-	if cfg.MetricsPort > 0 {
+	if cfg.MetricsAddr != "" {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/metrics", metricsHandler)
 		mux.HandleFunc("/api/tracked", trackedHandler(tr, btEngine))
@@ -410,7 +412,7 @@ func main() {
 		mux.HandleFunc("/api/app-config", corsHandler(appConfigHandler(db, cfgCache, log)))
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{
-			Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.MetricsPort),
+			Addr:         cfg.MetricsAddr,
 			Handler:      corsMiddleware(mux),
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 120 * time.Second,

@@ -1,25 +1,34 @@
 # internal/config
 
-DB-based configuration loading. All config read from `app_config` table in SQLite.
+Two-layer config: technical from `app.yaml`, runtime from `app_config` DB table.
+
+## Two-Layer Config
+
+- **`app.yaml` / `app.dev.yaml`** (`internal/appconfig`) — technical config: environment, API keys, DB path, metrics addr. Read once at startup, never changes at runtime. See `internal/appconfig/AGENTS.md`.
+- **`app_config` table** (this package) — runtime tunables: intervals, batch sizes, strategy params, bankroll. Dashboard-editable, no restart.
 
 ## Loading
 
-- `LoadFromDB(db *store.DB) (*Config, error)` — reads all keys from `app_config`, populates `Config` struct.
+- `LoadFromDB(db *store.DB, appCfg *appconfig.AppConfig) (*Config, error)` — merges both layers.
 - `ConfigCache` — thread-safe wrapper with `Get()`, `Refresh()`, `Update()`, `UpdateBatch()`.
 - Dashboard writes call `Update()` → writes DB + refreshes cache. No restart needed.
-- If `app_config` empty → error: "seed app_config, liquidity_pool, strategy_config tables manually".
-- `DB_PATH` env var sets SQLite path (default: `kalshi_tennis.db`).
+- If `app_config` empty → error: "Run migrate-config first".
 
-## Config Fields (app_config keys)
+## app.yaml Fields (technical config)
 
-- `api_key_id`, `private_key_path`, `environment` (demo/prod)
+- `environment` (demo/prod), `kalshi_api_key_id`, `kalshi_private_key_path`
+- `db_path`, `metrics_addr`
+- `apitennis_api_key`
+
+## app_config DB Keys (runtime tunables)
+
 - `series_tickers` (JSON array)
 - `scan_interval_hours`, `track_lead_minutes`
 - `ws_min_backoff_secs`, `ws_max_backoff_secs`
 - `batch_size`, `flush_timeout_ms`
 - `http_timeout_secs`, `rate_limit_rps`
-- `scheduler_poll_secs`, `metrics_port`
-- `apitennis_enabled`, `apitennis_api_key`, `apitennis_timezone`
+- `scheduler_poll_secs`
+- `apitennis_enabled`, `apitennis_timezone`
 - `kalshi_livedata_enabled`, `kalshi_livedata_poll_secs`
 - `close_timer_enabled`, `close_timer_lead_min`, `close_timer_min_price`, `close_timer_poll_secs`, `close_timer_size`
 - `reconciler_interval_secs`, `schedule_checker_interval_secs`
@@ -31,12 +40,12 @@ DB-based configuration loading. All config read from `app_config` table in SQLit
 
 ## Derived Fields
 
-- `RESTBaseURL` — computed from `environment` in `LoadFromDB()`, not stored in DB.
-- `WSURL` — computed from `environment` in `LoadFromDB()`, not stored in DB.
+- `RESTBaseURL` — computed from `environment` in `LoadFromDB()`.
+- `WSURL` — computed from `environment` in `LoadFromDB()`.
 
 ## Gotchas
 
-- Demo vs prod URLs differ in host. Don't hardcode.
+- Credentials come from app.yaml, not DB. Dashboard cannot change environment or keys.
 - `app_config` must be seeded before app starts. Empty table = error.
-- `ConfigCache.Refresh()` re-reads entire config from DB. Call after any `Update()`.
+- `ConfigCache.Refresh()` re-reads entire config from DB + re-applies app.yaml. Call after any `Update()`.
 - `series_tickers` stored as JSON array string in DB.

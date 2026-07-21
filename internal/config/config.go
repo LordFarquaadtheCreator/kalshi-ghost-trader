@@ -16,11 +16,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/appconfig"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -76,8 +76,8 @@ type Config struct {
 	// Schedule checker poll interval (seconds) — refreshes stale occurrence_ts from REST
 	ScheduleCheckerIntervalSecs int
 
-	// pprof/metrics HTTP server port (0 = disabled)
-	MetricsPort int
+	// pprof/metrics HTTP server bind address (from app.yaml)
+	MetricsAddr string
 
 	// API-Tennis scraper settings (WebSocket real-time push)
 	APITennisEnabled  bool
@@ -116,9 +116,10 @@ type Config struct {
 	RealOrderTimeoutS    int
 }
 
-// LoadFromDB reads all configuration from the app_config table in the SQLite DB.
+// LoadFromDB reads runtime configuration from the app_config table and merges
+// technical config (credentials, environment, paths) from appCfg.
 // Returns error if app_config is empty (migration not run yet).
-func LoadFromDB(db *store.DB) (*Config, error) {
+func LoadFromDB(db *store.DB, appCfg *appconfig.AppConfig) (*Config, error) {
 	ctx := context.Background()
 	pairs, err := db.GetAllAppConfig(ctx)
 	if err != nil {
@@ -135,6 +136,7 @@ func LoadFromDB(db *store.DB) (*Config, error) {
 
 	cfg := &Config{}
 	cfg.applyFromMap(m)
+	cfg.applyAppConfig(appCfg)
 	cfg.applyDefaults(slog.Default())
 	cfg.applyNewDefaults()
 
@@ -167,14 +169,15 @@ func LoadFromDB(db *store.DB) (*Config, error) {
 // ConfigCache provides thread-safe access to Config with refresh capability.
 // Dashboard updates call Refresh() after writing to app_config.
 type ConfigCache struct {
-	mu  sync.RWMutex
-	cfg *Config
-	db  *store.DB
+	mu     sync.RWMutex
+	cfg    *Config
+	db     *store.DB
+	appCfg *appconfig.AppConfig
 }
 
 // NewConfigCache creates a cache wrapping the current config.
-func NewConfigCache(db *store.DB, cfg *Config) *ConfigCache {
-	return &ConfigCache{cfg: cfg, db: db}
+func NewConfigCache(db *store.DB, cfg *Config, appCfg *appconfig.AppConfig) *ConfigCache {
+	return &ConfigCache{cfg: cfg, db: db, appCfg: appCfg}
 }
 
 // Get returns the current config (thread-safe snapshot).
@@ -186,7 +189,7 @@ func (c *ConfigCache) Get() *Config {
 
 // Refresh reloads config from the DB and swaps the cached copy.
 func (c *ConfigCache) Refresh() error {
-	cfg, err := LoadFromDB(c.db)
+	cfg, err := LoadFromDB(c.db, c.appCfg)
 	if err != nil {
 		return err
 	}
@@ -216,11 +219,6 @@ func (c *ConfigCache) UpdateBatch(pairs []store.AppConfigKV) error {
 
 // applyFromMap populates Config fields from a key-value map.
 func (c *Config) applyFromMap(m map[string]string) {
-	c.APIKeyID = m["api_key_id"]
-	c.PrivateKeyPath = m["private_key_path"]
-	c.Environment = m["environment"]
-	c.DBPath = getEnv("DB_PATH", "kalshi_tennis.db")
-
 	c.SeriesTickers = parseJSONStringArray(m["series_tickers"])
 
 	c.ScanIntervalHours = atoi(m["scan_interval_hours"])
@@ -232,10 +230,8 @@ func (c *Config) applyFromMap(m map[string]string) {
 	c.HTTPTimeoutSecs = atoi(m["http_timeout_secs"])
 	c.RateLimitRPS = atoi(m["rate_limit_rps"])
 	c.SchedulerPollSecs = atoi(m["scheduler_poll_secs"])
-	c.MetricsPort = atoi(m["metrics_port"])
 
 	c.APITennisEnabled = atob(m["apitennis_enabled"])
-	c.APITennisAPIKey = m["apitennis_api_key"]
 	c.APITennisTimezone = m["apitennis_timezone"]
 
 	c.KalshiLiveDataEnabled = atob(m["kalshi_livedata_enabled"])
@@ -270,12 +266,6 @@ func (c *Config) applyFromMap(m map[string]string) {
 
 // applyDefaults fills zero-valued fields with sensible defaults.
 func (c *Config) applyDefaults(log *slog.Logger) {
-	if c.Environment == "" {
-		c.Environment = "demo"
-	}
-	if c.DBPath == "" {
-		c.DBPath = "kalshi_tennis.db"
-	}
 	if len(c.SeriesTickers) == 0 {
 		c.SeriesTickers = []string{
 			"KXATPMATCH", "KXWTAMATCH",
@@ -312,9 +302,6 @@ func (c *Config) applyDefaults(log *slog.Logger) {
 	}
 	if c.SchedulerPollSecs == 0 {
 		c.SchedulerPollSecs = 30
-	}
-	if c.MetricsPort == 0 {
-		c.MetricsPort = 6060
 	}
 	if c.APITennisTimezone == "" {
 		c.APITennisTimezone = "+00:00"
@@ -373,14 +360,18 @@ func (c *Config) applyNewDefaults() {
 	}
 }
 
-// --- helpers ---
-
-func getEnv(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
+// applyAppConfig merges technical config from app.yaml into Config.
+// These fields come from the YAML file, not the DB.
+func (c *Config) applyAppConfig(appCfg *appconfig.AppConfig) {
+	c.APIKeyID = appCfg.APIKeyID
+	c.PrivateKeyPath = appCfg.PrivateKeyPath
+	c.Environment = appCfg.Environment
+	c.DBPath = appCfg.DBPath
+	c.MetricsAddr = appCfg.MetricsAddr
+	c.APITennisAPIKey = appCfg.APITennisAPIKey
 }
+
+// --- helpers ---
 
 func atoi(s string) int {
 	if s == "" {

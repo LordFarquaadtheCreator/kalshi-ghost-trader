@@ -12,12 +12,25 @@ go vet ./...
 
 ## Run
 
-Config lives in SQLite (`app_config` table). Seed `app_config`, `liquidity_pool`,
-`strategy_config` tables manually (one-time setup).
+Two-layer config:
+- **`app.yaml` / `app.dev.yaml`** — technical config (environment, credentials, paths). See `internal/appconfig/`.
+- **`app_config` DB table** — runtime tunables (intervals, strategy params, bankroll). Dashboard-editable.
 
 ```bash
-# Run:
+# First-time setup:
+cp app.dev.yaml.example app.dev.yaml   # dev (demo keys)
+# OR
+cp app.yaml.example app.yaml           # prod (real keys)
+# Edit: set kalshi_api_key_id, kalshi_private_key_path, environment
+
+# If migrating from legacy config.yaml:
+go run ./cmd/migrate-config    # seeds app_config, liquidity_pool, strategy_config
+
+# Run (dev — auto-selects app.dev.yaml if present):
 go run ./cmd/ghost-trader
+
+# Run (prod — explicit):
+APP_ENV=prod go run ./cmd/ghost-trader
 ```
 
 ## Monitoring
