@@ -172,7 +172,7 @@ func (d *DB) ResolveRealOrders(ctx context.Context, marketTicker, result string)
 		// Recalculate total_pnl_cents from all resolved orders
 		if err := tx.Exec(`
 UPDATE liquidity_pool SET total_pnl_cents = (
-    SELECT COALESCE(SUM(resolved_pnl_cents), 0) FROM orders WHERE is_real = 1 AND order_status = 'resolved'
+    SELECT COALESCE(SUM(resolved_pnl_cents), 0) FROM orders WHERE is_real = true AND order_status = 'resolved'
 )`).Error; err != nil {
 			return err
 		}
@@ -191,7 +191,7 @@ SET order_status = 'resolved',
         WHEN ? = 'yes' THEN CAST(suggested_size * 100 AS INTEGER) - CAST(suggested_size * market_price * 100 AS INTEGER)
         ELSE -CAST(suggested_size * market_price * 100 AS INTEGER)
     END
-WHERE is_real = 0
+WHERE is_real = false
   AND market_ticker = ?
   AND (order_status IS NULL OR order_status NOT IN ('resolved','failed','canceled'))`,
 		result, marketTicker).Error
@@ -212,7 +212,7 @@ func (d *DB) GetUnresolvedRealOrders(ctx context.Context) ([]UnresolvedRealOrder
 	err := d.db.WithContext(ctx).Raw(`
 		SELECT id, kalshi_order_id, market_ticker, order_status
 		FROM orders
-		WHERE is_real = 1
+		WHERE is_real = true
 		  AND kalshi_order_id IS NOT NULL AND kalshi_order_id != ''
 		  AND order_status NOT IN ('resolved', 'failed', 'canceled')`).Scan(&out).Error
 	return out, err
