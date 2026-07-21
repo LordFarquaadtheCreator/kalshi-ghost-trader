@@ -13,9 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -114,8 +115,9 @@ type TickVolume struct {
 }
 
 // NewEngine creates a backtest engine from a read-only SQLite DB.
-func NewEngine(dbPath string, log *slog.Logger) (*Engine, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", dbPath)
+// Reads DB path from the global config.Cfg.
+func NewEngine(log *slog.Logger) (*Engine, error) {
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", config.Cfg.DBPath)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -998,13 +1000,13 @@ type PaperOrderCursor struct {
 // SQL pass. Replaces the old Go loop that re-iterated every row.
 func (e *Engine) GetPaperOrderSummary(ctx context.Context) (PaperOrderSummary, error) {
 	var result struct {
-		TotalOrders    int     `gorm:"column:total_orders"`
-		Resolved       int     `gorm:"column:resolved"`
-		Wins           int     `gorm:"column:wins"`
-		Losses         int     `gorm:"column:losses"`
-		Pending        int     `gorm:"column:pending"`
-		TotalInvested  float64 `gorm:"column:total_invested"`
-		NetPnL         float64 `gorm:"column:net_pnl"`
+		TotalOrders   int     `gorm:"column:total_orders"`
+		Resolved      int     `gorm:"column:resolved"`
+		Wins          int     `gorm:"column:wins"`
+		Losses        int     `gorm:"column:losses"`
+		Pending       int     `gorm:"column:pending"`
+		TotalInvested float64 `gorm:"column:total_invested"`
+		NetPnL        float64 `gorm:"column:net_pnl"`
 	}
 	err := e.db.WithContext(ctx).Raw(`
 SELECT

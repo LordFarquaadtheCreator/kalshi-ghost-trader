@@ -4,12 +4,13 @@
 //
 // Usage:
 //
-//	go run ./cmd/pricebands -db kalshi_tennis.db
-//	go run ./cmd/pricebands -db kalshi_tennis.db -day 2026-07-17
-//	go run ./cmd/pricebands -db kalshi_tennis.db -out /tmp/bands.txt
+//	go run ./cmd/pricebands
+//	go run ./cmd/pricebands -day 2026-07-17
+//	go run ./cmd/pricebands -out /tmp/bands.txt
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -18,7 +19,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/appconfig"
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
+	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
 var out *os.File
@@ -88,7 +92,6 @@ func (a *agg) avgEdge() float64 {
 }
 
 func main() {
-	dbPath := flag.String("db", "kalshi_tennis.db", "path to SQLite DB")
 	minN := flag.Int("min-n", 5, "minimum sample size to show in best-bands table")
 	minWR := flag.Float64("min-wr", 55, "minimum win rate %% to show in best-bands table")
 	dayFilter := flag.String("day", "", "filter to specific day YYYY-MM-DD; empty = all days")
@@ -105,8 +108,25 @@ func main() {
 	}
 	defer out.Close()
 
+	// Load config (sets config.Cfg global)
+	appCfg, err := appconfig.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "appconfig load: %v\n", err)
+		os.Exit(1)
+	}
+	db, err := store.New(context.Background(), appCfg.DBPath, log)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store init: %v\n", err)
+		os.Exit(1)
+	}
+	if _, err := config.Load(db); err != nil {
+		fmt.Fprintf(os.Stderr, "config load: %v\n", err)
+		os.Exit(1)
+	}
+	db.Close()
+
 	fmt.Fprintln(os.Stderr, "Loading data + running all strategies...")
-	engine, err := backtest.NewEngine(*dbPath, log)
+	engine, err := backtest.NewEngine(log)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -123,7 +143,10 @@ func main() {
 
 	// Group orders by day
 	type dayKey struct{ day string }
-	type sbKey struct{ strat string; bandIdx int }
+	type sbKey struct {
+		strat   string
+		bandIdx int
+	}
 	dayAggs := map[string]map[sbKey]*agg{}
 	dayOrderCounts := map[string]int{}
 
