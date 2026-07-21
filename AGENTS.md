@@ -142,11 +142,8 @@ ssh mint 'sudo -n systemctl restart kalshi-ghost-trader kalshi-dashboard'
 ### Update workflow
 
 ```bash
-ssh mint 'cd /home/fahad/kalshi-ghost-trader && \
-  git pull --ff-only origin main && \
-  mkdir -p bin && go build -o bin/ghost-trader . && \
-  sudo -n systemctl restart kalshi-ghost-trader && sleep 2 && \
-  sudo -n systemctl restart kalshi-dashboard'
+# Build locally, scp artifacts, sync service file, restart
+./scripts/update-remote.sh mint main
 ```
 
 If schema changed, run migration first.
