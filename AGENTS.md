@@ -139,20 +139,11 @@ ssh mint 'sudo -n journalctl -u kalshi-ghost-trader --no-pager -n 40 --since "5 
 ssh mint 'sudo -n systemctl restart kalshi-ghost-trader kalshi-dashboard'
 ```
 
-### Mint deploy tweaks (uncommitted, stashed on pull)
-
-Mint has local-only changes never committed — stashed before `git pull`, popped after:
-- `main.go` — metrics binds `0.0.0.0` (not `127.0.0.1`)
-- `dashboard/src/lib/api.js` — empty API URLs (uses Vite proxy, not localhost)
-- `dashboard/vite.config.js` — `server.host=0.0.0.0`, proxy `/api`+`/metrics`+`/debug` to `127.0.0.1:6060`
-
 ### Update workflow
 
 ```bash
 ssh mint 'cd /home/fahad/kalshi-ghost-trader && \
-  git stash push -u -m "mint-deploy-tweaks" && \
   git pull --ff-only origin main && \
-  git stash pop && \
   mkdir -p bin && go build -o bin/ghost-trader . && \
   sudo -n systemctl restart kalshi-ghost-trader && sleep 2 && \
   sudo -n systemctl restart kalshi-dashboard'
