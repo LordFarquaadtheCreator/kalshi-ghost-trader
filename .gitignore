@@ -32,6 +32,7 @@ app.dev.yaml
 /strategy-api
 /go
 /test-order
+/migrate
 deploy/out/
 
 # OS
@@ -62,4 +63,7 @@ research/kalshi_crawl/
 
 # Temp scripts (one-off analysis, throwaway)
 temp-scripts/
+
+# Temp migration tool (SQLite -> Postgres one-off)
+cmd/migrate/
 
