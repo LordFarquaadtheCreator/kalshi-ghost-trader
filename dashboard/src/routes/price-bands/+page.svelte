@@ -283,7 +283,7 @@
   {/if}
 
   {#if rows.length === 0 && !loading}
-    <EmptyState text="No price band data yet. Cron computes missing days hourly." />
+    <EmptyState text="No price band data yet. Cron computes missing days daily." />
   {:else if rows.length > 0}
     <div class="layout">
       <div class="main-content">

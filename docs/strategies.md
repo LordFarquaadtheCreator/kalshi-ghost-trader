@@ -185,7 +185,7 @@ Result cache: 5min TTL.
 
 ## Price Band Analysis
 
-Cron goroutine in `internal/pricebands/` runs hourly, computes days not
+Cron goroutine in `internal/pricebands/` runs daily, computes days not
 yet in `price_band_results` table. Dashboard `/price-bands` page displays
 results with charts + filters.
 

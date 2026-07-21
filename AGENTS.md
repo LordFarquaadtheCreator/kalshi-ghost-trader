@@ -84,7 +84,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - One API-Tennis goroutine (if enabled): WS read loop, per-match dispatch
 - One goroutine per active match (if Kalshi live-data enabled): REST poll loop
 - One goroutine per scheduled match: waits until start time, then subscribes
-- One pricebands cron goroutine: computes missing days hourly, persists to price_band_results
+- One pricebands cron goroutine: computes missing days daily, persists to price_band_results
 
 ## SQLite Schema
 
@@ -238,7 +238,7 @@ Must implement `replayStrategy` (Strategy + `SetReplayTime` + `OnPriceAt`).
 
 ## Price Band Analysis
 
-Cron goroutine in `internal/pricebands/` runs hourly, computes days not
+Cron goroutine in `internal/pricebands/` runs daily, computes days not
 yet in `price_band_results` table, persists per-day per-strategy per-band
 aggregates. Dashboard `/price-bands` page displays results with charts + filters.
 

@@ -308,9 +308,9 @@ func main() {
 		}
 	})
 
-	// 8. Price bands cron — compute missing days hourly, persist to DB
+	// 8. Price bands cron — compute missing days daily, persist to DB
 	g.Go(func() error {
-		ticker := time.NewTicker(1 * time.Hour)
+		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		pricebands.ComputeMissingDays(btEngine, db, log) // initial run at startup
 		for {
