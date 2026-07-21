@@ -32,6 +32,8 @@ func Init(ctx context.Context, db *gorm.DB, initialBalanceCents int64) error {
 }
 
 // Reset resets the pool to a new initial balance.
+// Wipes balance, initial_balance, total_spent, total_pnl. Use when changing
+// the risk envelope — e.g. "I want to risk $20 now, fresh start".
 func Reset(ctx context.Context, db *gorm.DB, initialBalanceCents int64) error {
 	return db.WithContext(ctx).Model(&store.LiquidityPool{}).Where("id = 1").
 		Updates(map[string]any{
@@ -41,6 +43,20 @@ func Reset(ctx context.Context, db *gorm.DB, initialBalanceCents int64) error {
 			"total_pnl_cents":       0,
 			"updated_ts":            time.Now().UnixMilli(),
 		}).Error
+}
+
+// TopUp adds capital to the pool without wiping history.
+// Increases balance_cents and initial_balance_cents by addCents so P&L %
+// stays meaningful against the new contribution baseline. Use when injecting
+// more capital mid-run without resetting the track record.
+func TopUp(ctx context.Context, db *gorm.DB, addCents int64) error {
+	return db.WithContext(ctx).Exec(`
+UPDATE liquidity_pool
+SET balance_cents = balance_cents + ?,
+    initial_balance_cents = initial_balance_cents + ?,
+    updated_ts = ?
+WHERE id = 1`,
+		addCents, addCents, time.Now().UnixMilli()).Error
 }
 
 // Deduct atomically deducts spendCents from the pool balance
