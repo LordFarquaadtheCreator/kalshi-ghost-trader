@@ -198,16 +198,11 @@ func main() {
 	}
 	defer btEngine.Close()
 
-	// Backtest result cache — TTL from env config (default 30 min)
-	btCacheTTL := time.Duration(config.Cfg.BacktestCacheTTLMin) * time.Minute
-	btCache := backtest.NewCache(btCacheTTL)
-
 	// pprof + runtime metrics + strategy API server
 	if config.Cfg.MetricsAddr != "" {
 		apiSrv := dashboardapi.NewServer(dashboardapi.Deps{
 			Tracker: tr,
 			Engine:  btEngine,
-			Cache:   btCache,
 			DB:      db,
 			Log:     log,
 		})
@@ -292,18 +287,17 @@ func main() {
 		return multi.RunTimer(ctx)
 	})
 
-	// 7. Backtest cache pre-warm — runs all strategies every TTL to keep cache fresh
+	// 7. Backtest recompute cron — recompute only when new finalized markets appear
 	g.Go(func() error {
-		ticker := time.NewTicker(btCacheTTL)
+		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
-		// pre-warm immediately at startup
-		btEngine.PrewarmCache(btCache, log)
+		backtest.RecomputeIfNeeded(btEngine, db, log) // initial run at startup
 		for {
 			select {
 			case <-ctx.Done():
 				return nil
 			case <-ticker.C:
-				btEngine.PrewarmCache(btCache, log)
+				backtest.RecomputeIfNeeded(btEngine, db, log)
 			}
 		}
 	})
