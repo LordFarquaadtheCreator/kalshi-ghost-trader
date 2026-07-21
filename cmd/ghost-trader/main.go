@@ -296,13 +296,13 @@ func main() {
 		ticker := time.NewTicker(btCacheTTL)
 		defer ticker.Stop()
 		// pre-warm immediately at startup
-		prewarmBacktestCache(btEngine, btCache, log)
+		btEngine.PrewarmCache(btCache, log)
 		for {
 			select {
 			case <-ctx.Done():
 				return nil
 			case <-ticker.C:
-				prewarmBacktestCache(btEngine, btCache, log)
+				btEngine.PrewarmCache(btCache, log)
 			}
 		}
 	})
@@ -318,19 +318,4 @@ func main() {
 	// Orderly teardown
 	tr.StopAll()
 	log.Info("clean shutdown complete")
-}
-
-// prewarmBacktestCache runs all strategies at minPrice=0 and populates the cache
-// so dashboard requests hit warm entries instead of computing on-demand.
-func prewarmBacktestCache(e *backtest.Engine, cache *backtest.Cache, log *slog.Logger) {
-	start := time.Now()
-	results, err := e.RunAll(0.0)
-	if err != nil {
-		log.Error("cache prewarm failed", "err", err)
-		return
-	}
-	for _, res := range results {
-		cache.Put(res.Name, 0.0, res)
-	}
-	log.Info("cache prewarm complete", "strategies", len(results), "elapsed", time.Since(start).Round(time.Millisecond))
 }
