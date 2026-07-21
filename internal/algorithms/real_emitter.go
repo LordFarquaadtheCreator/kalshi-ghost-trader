@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
@@ -276,3 +277,32 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 }
 
 var _ OrderEmitter = (*KalshiOrderEmitter)(nil)
+
+// LiveToggleEmitter gates the real order pipeline on real_trading_enabled.
+// Checks config.Cfg per EmitOrder call so dashboard flips take effect without restart.
+// Returns false before delegating to inner when flag is off — prevents QuotaGuard
+// from tracking budget spend on orders that will never submit.
+// Logs each on/off transition for audit.
+type LiveToggleEmitter struct {
+	Inner OrderEmitter
+	Log   *slog.Logger
+	Prev  atomic.Bool
+}
+
+func (e *LiveToggleEmitter) EmitOrder(o store.Order) bool {
+	on := config.Cfg.RealTradingEnabled
+	if !on {
+		if e.Prev.Load() {
+			e.Log.Warn("real trading disabled — live orders suppressed", "market", o.MarketTicker)
+			e.Prev.Store(false)
+		}
+		return false
+	}
+	if !e.Prev.Load() {
+		e.Log.Warn("real trading enabled — live orders active", "bankroll", config.Cfg.RealBankroll)
+		e.Prev.Store(true)
+	}
+	return e.Inner.EmitOrder(o)
+}
+
+var _ OrderEmitter = (*LiveToggleEmitter)(nil)

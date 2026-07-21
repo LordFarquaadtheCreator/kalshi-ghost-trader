@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -144,7 +143,7 @@ func main() {
 	realQuotaGuard := algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter, log)
 	defer realQuotaGuard.Close()
 
-	paperQuotaGuard.SetInner(&liveToggleEmitter{inner: realQuotaGuard, log: log})
+	paperQuotaGuard.SetInner(&algorithms.LiveToggleEmitter{Inner: realQuotaGuard, Log: log})
 
 	multi := strategies.Build(paperQuotaGuard, db, log)
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())
@@ -319,33 +318,6 @@ func main() {
 	// Orderly teardown
 	tr.StopAll()
 	log.Info("clean shutdown complete")
-}
-
-// liveToggleEmitter gates the real order pipeline on real_trading_enabled.
-// Checks config.Cfg per EmitOrder call so dashboard flips take effect without restart.
-// Returns false before delegating to inner when flag is off — prevents realQuotaGuard
-// from tracking budget spend on orders that will never submit.
-// Logs each on/off transition for audit.
-type liveToggleEmitter struct {
-	inner algorithms.OrderEmitter
-	log   *slog.Logger
-	prev  atomic.Bool
-}
-
-func (e *liveToggleEmitter) EmitOrder(o store.Order) bool {
-	on := config.Cfg.RealTradingEnabled
-	if !on {
-		if e.prev.Load() {
-			e.log.Warn("real trading disabled — live orders suppressed", "market", o.MarketTicker)
-			e.prev.Store(false)
-		}
-		return false
-	}
-	if !e.prev.Load() {
-		e.log.Warn("real trading enabled — live orders active", "bankroll", config.Cfg.RealBankroll)
-		e.prev.Store(true)
-	}
-	return e.inner.EmitOrder(o)
 }
 
 // prewarmBacktestCache runs all strategies at minPrice=0 and populates the cache
