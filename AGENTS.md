@@ -130,7 +130,7 @@ Linux Mint 24.04, x86_64. Passwordless sudo granted for `systemctl` + `journalct
 
 Unit files: `/etc/systemd/system/kalshi-{ghost-trader,dashboard}.service`
 Repo: `/home/fahad/kalshi-ghost-trader`
-DB: `/home/fahad/kalshi-ghost-trader/kalshi_tennis.db`
+DB: PostgreSQL `kalshi_tennis` on `127.0.0.1:5432`
 Ports: backend `6060` (all interfaces), dashboard `5173` (all interfaces)
 
 ```bash
@@ -192,14 +192,14 @@ zcat snapshots/<dir>/backtest.txt.gz
 
 On mint — daily full DB backup, keep 7 days:
 ```bash
-ssh mint 'sqlite3 /home/fahad/kalshi-ghost-trader/kalshi_tennis.db ".backup /home/fahad/kalshi-ghost-trader/backups/kalshi_$(date +%Y%m%d).db"'
-ssh mint 'find /home/fahad/kalshi-ghost-trader/backups/ -name "kalshi_*.db" -mtime +7 -delete'
+ssh mint 'pg_dump -U kalshi kalshi_tennis | gzip > /home/fahad/kalshi-ghost-trader/backups/kalshi_$(date +%Y%m%d).sql.gz'
+ssh mint 'find /home/fahad/kalshi-ghost-trader/backups/ -name "kalshi_*.sql.gz" -mtime +7 -delete'
 ```
 
 Locally — atomic snapshot while scraper running:
 ```bash
 mkdir -p backups
-sqlite3 kalshi_tennis.db ".backup backups/kalshi_tennis_$(date +%Y%m%d_%H%M).db"
+pg_dump -U kalshi kalshi_tennis | gzip > backups/kalshi_tennis_$(date +%Y%m%d_%H%M).sql.gz
 ```
 
 ## Tennis Series
@@ -222,14 +222,14 @@ conda activate kalshi-ghost-trader
 conda env create -f environment.yml
 ```
 
-Notebooks query the live SQLite DB read-only. Never open the DB for writes from notebooks.
+Notebooks query the live PostgreSQL DB read-only. Never open the DB for writes from notebooks.
 
 ## Backtest
 
 Replay historical tick data through a strategy and report P&L.
 
 ```bash
-go run ./cmd/backtest -strategy matchpoint -db kalshi_tennis.db
+go run ./cmd/backtest -strategy matchpoint
 go run ./cmd/backtest -strategy matchpoint -debug   # log filter reasons
 ```
 
@@ -242,11 +242,11 @@ Run all strategies, bucket orders into fixed price bands, output per-day +
 aggregate tables to `pricebands_output.txt`.
 
 ```bash
-go run ./cmd/pricebands -db kalshi_tennis.db
+go run ./cmd/pricebands
 # Filter to single day:
-go run ./cmd/pricebands -db kalshi_tennis.db -day 2026-07-17
+go run ./cmd/pricebands -day 2026-07-17
 # Custom output path:
-go run ./cmd/pricebands -db kalshi_tennis.db -out /tmp/bands.txt
+go run ./cmd/pricebands -out /tmp/bands.txt
 ```
 
 Outputs 4 sections per day: per-strategy-per-band, cross-strategy band totals,

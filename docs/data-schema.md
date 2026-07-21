@@ -23,10 +23,10 @@ in-memory. Always enabled; configured via `apitennis_timezone` in app_config.
 REST poller for `/live_data` endpoint. One goroutine per active match.
 Provides score snapshots when API-Tennis has no coverage.
 
-## SQLite Tables
+## PostgreSQL Tables
 
-WAL mode, synchronous=NORMAL, busy_timeout=5000, cache_size=-64000,
-temp_store=MEMORY, foreign_keys=ON. Single writer (MaxOpenConns=1).
+Single writer (TickWriter goroutine), connection pool MaxOpenConns=10.
+Foreign keys enabled. Cascade deletes via PL/pgSQL triggers.
 
 ### `events` — tennis match events (1 per match)
 

@@ -1,7 +1,7 @@
 // Package scanner implements a periodic REST scan of Kalshi tennis series.
 //
 // The Scanner queries the Kalshi REST API for all events and markets in each
-// configured series ticker, upserts new entries into SQLite, and records an
+// configured series ticker, upserts new entries into PostgreSQL, and records an
 // audit log via scan_runs. It detects dead scans (series returning zero events
 // after previously returning >500) as a sentinel for API or auth failures.
 //

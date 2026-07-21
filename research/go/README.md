@@ -1,13 +1,13 @@
 # Research Modules (Go)
 
-Exploratory data analysis on `kalshi_tennis.db`. Each module queries fresh
+Exploratory data analysis on PostgreSQL `kalshi_tennis`. Each module queries fresh
 data on every run — safe to re-run daily as the scraper accumulates.
 
 ## Usage
 
 ```bash
 # from repo root
-go run ./research/go <module> [-db kalshi_tennis.db]
+go run ./research/go <module> [-dsn "host=127.0.0.1 user=kalshi password=kalshi_dev dbname=kalshi_tennis port=5432 sslmode=disable"]
 
 # list modules
 go run ./research/go

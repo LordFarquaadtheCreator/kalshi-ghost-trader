@@ -1,5 +1,5 @@
 // Package main implements exploratory research modules that query the live
-// kalshi_tennis.db read-only. Each subcommand runs a fresh analysis on
+// PostgreSQL database read-only. Each subcommand runs a fresh analysis on
 // whatever data is present — safe to re-run daily as the scraper accumulates.
 package main
 
@@ -7,21 +7,16 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"path/filepath"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// openDB opens the SQLite database read-only. Tries repo-root kalshi_tennis.db
-// by default, overridable via -db flag.
-func openDB(path string) *sql.DB {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "resolve db path: %v\n", err)
-		os.Exit(1)
+// openDB opens the PostgreSQL database. DSN defaults to the dev config.
+func openDB(dsn string) *sql.DB {
+	if dsn == "" {
+		dsn = "host=127.0.0.1 user=kalshi password=kalshi_dev dbname=kalshi_tennis port=5432 sslmode=disable"
 	}
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", abs)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open db: %v\n", err)
 		os.Exit(1)

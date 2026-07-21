@@ -49,7 +49,7 @@ fi
 echo ""
 echo "==> Setup complete."
 echo "    Repo:     $REMOTE_DIR"
-echo "    DB:       $REMOTE_DIR/kalshi_tennis.db (created on first run)"
+echo "    DB:       PostgreSQL kalshi_tennis on 127.0.0.1:5432 (created on first run)"
 echo "    Config:   $REMOTE_DIR/app.yaml (create from app.yaml.example)"
 echo ""
 echo "    Next steps:"

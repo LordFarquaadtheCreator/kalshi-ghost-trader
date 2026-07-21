@@ -1,6 +1,6 @@
 // Package scheduler schedules per-match WebSocket tracking based on match start times.
 //
-// The Scheduler periodically polls the SQLite database for active markets and
+// The Scheduler periodically polls the PostgreSQL database for active markets and
 // starts tracking each market at occurrence_datetime minus a configurable lead
 // time (default: 5 minutes). Markets already tracked or pending are skipped.
 // Markets no longer active in the DB (settled/closed/finalized) are unsubscribed.

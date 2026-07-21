@@ -16,7 +16,7 @@ tennis win probability, betting market efficiency, and sports prediction ML.
     Real-Time              │  │          │    │ (predictions) │   │
                           │  └─────┬────┘    └───────┬───────┘   │
                           │  ┌─────▼──────────────────▼───────┐   │
-                          │  │      SQLite DB                  │   │
+                          │  │      PostgreSQL DB             │   │
                           │  └─────▲───────────────────────────┘   │
                           │  ┌─────┴────────────┐                  │
                           │  │ Offline Trainer   │                  │

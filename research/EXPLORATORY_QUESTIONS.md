@@ -350,7 +350,7 @@ magnitude vs control (normal spread periods).
 
 ## Reproduce
 
-All queries in this doc run against `kalshi_tennis.db` read-only.
+All queries in this doc run against PostgreSQL `kalshi_tennis` read-only.
 Modules to write (in `research/strategy_analysis/`):
 - `breakpoint_overreaction.py` (RQ7)
 - `matchpoint_calibration.py` (RQ8)

@@ -173,7 +173,7 @@ before DB insert. Strategies can also call directly.
 Replay historical tick data through strategies and report P&L.
 
 ```bash
-go run ./cmd/backtest -strategy matchpoint -db kalshi_tennis.db
+go run ./cmd/backtest -strategy matchpoint
 go run ./cmd/backtest -strategy matchpoint -debug   # log filter reasons
 ```
 
@@ -186,8 +186,8 @@ Result cache: 5min TTL.
 ## Price Band Analysis
 
 ```bash
-go run ./cmd/pricebands -db kalshi_tennis.db
-go run ./cmd/pricebands -db kalshi_tennis.db -day 2026-07-17
+go run ./cmd/pricebands
+go run ./cmd/pricebands -day 2026-07-17
 ```
 
 Buckets orders into fixed price bands. Outputs 4 sections per day:

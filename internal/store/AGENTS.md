@@ -1,6 +1,6 @@
 # internal/store
 
-SQLite layer. Single-writer architecture via TickWriter.
+PostgreSQL layer. Single-writer architecture via TickWriter.
 
 ## Files
 
@@ -18,15 +18,13 @@ SQLite layer. Single-writer architecture via TickWriter.
 - `appconfig.go` — app_config KV store, app_config_history (change tracking), liquidity_pool, strategy_config, trigger_ranges
 - `migrations.go` — embedded SQL migration runner (files in `migrations/*.sql`, applied in order)
 
-## PRAGMA
+## Connection settings
 
-WAL mode, synchronous=NORMAL, busy_timeout=5000, cache_size=-64000, temp_store=MEMORY, foreign_keys=ON.
-
-Set in DSN so every pooled connection gets them.
+Foreign keys enabled. Cascade deletes via PL/pgSQL trigger functions (see `store.go` Migrate).
 
 ## Connection pool
 
-MaxOpenConns=1, MaxIdleConns=1. Single writer. SQLite serializes writes anyway.
+MaxOpenConns=10, MaxIdleConns=5. Single writer via TickWriter goroutine.
 
 ## Tables
 
@@ -78,7 +76,7 @@ Multi-step writes **must** use transactions. Wrap in `db.Transaction(func(tx *go
 ## Gotchas
 
 - Don't add FK to ticks, lifecycle_events, or event_lifecycle_events. See above.
-- Don't increase MaxOpenConns. SQLite + WAL still serializes writes. Multiple writers = lock contention.
+- Don't increase MaxOpenConns beyond 10. TickWriter serializes writes via single goroutine.
 - `Close()` must be called after TickWriter exits, not before.
 - `ApplyLifecycleEvent` only handles explicit WS events. Implicit transitions need REST scan.
 - Multi-step writes must use transactions. See Transactions section above.

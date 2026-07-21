@@ -11,14 +11,14 @@
 #
 # Usage:
 #   /data/snapshot.sh
-#   DB_PATH=/data/kalshi_tennis.db /data/snapshot.sh
+#   DB_DSN="host=127.0.0.1 user=kalshi password=kalshi_dev dbname=kalshi_tennis port=5432 sslmode=disable" /data/snapshot.sh
 #
 # Cron (every 6 hours):
 #   0 */6 * * * /data/snapshot.sh >> /data/snapshots/cron.log 2>&1
 
 set -euo pipefail
 
-DB_PATH="${DB_PATH:-/data/kalshi_tennis.db}"
+DB_DSN="${DB_DSN:-host=127.0.0.1 user=kalshi password=kalshi_dev dbname=kalshi_tennis port=5432 sslmode=disable}"
 BINARY_PATH="${BINARY_PATH:-/data/ghost-trader}"
 SNAPSHOTS_DIR="${SNAPSHOTS_DIR:-/data/snapshots}"
 TIMESTAMP=$(date +%Y%m%d_%H%M)
@@ -30,9 +30,9 @@ mkdir -p "$OUT_DIR"
 sql_export() {
   local name="$1"
   local query="$2"
-  sqlite3 -json -readonly -bail "$DB_PATH" "$query" 2>/dev/null | gzip > "$OUT_DIR/${name}.json.gz"
+  psql -t -A -d "$DB_DSN" -c "$query" 2>/dev/null | gzip > "$OUT_DIR/${name}.json.gz"
   local rows
-  rows=$(sqlite3 -readonly "$DB_PATH" "SELECT COUNT(*) FROM (${query})" 2>/dev/null || echo "?")
+  rows=$(psql -t -A -d "$DB_DSN" -c "SELECT COUNT(*) FROM (${query})" 2>/dev/null || echo "?")
   echo "  ${name}.json.gz — ${rows} rows"
 }
 

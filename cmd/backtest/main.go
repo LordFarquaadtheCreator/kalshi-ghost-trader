@@ -1,11 +1,11 @@
-// Command backtest replays historical point + tick data from the SQLite DB
+// Command backtest replays historical point + tick data from the PostgreSQL DB
 // through a trading strategy and reports P&L.
 //
 // Usage:
 //
 //	go run ./cmd/backtest -strategy <name> [flags]
 //
-// Default db_path is kalshi_tennis.db in the current directory.
+// Connects via the DSN in app.dev.yaml / app.yaml.
 // Available strategies: matchpoint, matchpoint-aggro, setpoint, setpoint-serve,
 // setpoint-cheap, fadelongshot
 package main

@@ -67,3 +67,4 @@ temp-scripts/
 # Temp migration tool (SQLite -> Postgres one-off)
 cmd/migrate/
 
+pricebands_output.txt

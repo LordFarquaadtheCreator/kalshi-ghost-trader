@@ -1,6 +1,6 @@
 # Strategy Backtest Results — All Strategies
 
-Run against `kalshi_tennis.db` (Jul 13-17 2026, 4 days, 864 matches with
+Run against PostgreSQL `kalshi_tennis` (Jul 13-17 2026, 4 days, 864 matches with
 markets, 1.29M tick prices, 56k points across 470 matches).
 
 ```bash

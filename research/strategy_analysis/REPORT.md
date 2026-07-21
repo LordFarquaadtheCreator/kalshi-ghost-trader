@@ -1,6 +1,6 @@
 # Strategy Analysis Report — Kalshi Tennis Match-Winner Markets
 
-Generated from `kalshi_tennis.db` (live, read-only). 3 days of data
+Generated from PostgreSQL `kalshi_tennis` (live, read-only). 3 days of data
 (Jul 13–16, 2026). 494 finalized events with both YES/NO markets, 89 gold-set
 matches with point-by-point + tick overlap, 924k ticks, 34M orderbook events,
 54k points. Challenger/ITF heavy.

@@ -20,7 +20,7 @@ Dev machines keep `app.dev.yaml` and auto-run dev. Prod boxes only have `app.yam
 - `environment` — "demo" or "prod"
 - `kalshi_api_key_id` — Kalshi API key ID
 - `kalshi_private_key_path` — path to RSA PEM private key
-- `db_path` — SQLite database path (required)
+- `db_dsn` — PostgreSQL DSN (required)
 - `metrics_addr` — metrics/pprof bind address (required)
 - `apitennis_api_key` — API-Tennis external API key
 - `disable_ws_data_save` — skip persisting Kalshi WS ticks/orderbook/lifecycle to DB

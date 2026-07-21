@@ -1,10 +1,10 @@
 // Command ghost-trader is the main entrypoint for the Kalshi Ghost Trader service.
 //
-// It loads configuration from the SQLite database (app_config table), initializes
-// an RSA signer for Kalshi API authentication, opens a SQLite database with WAL
-// mode, and launches all core goroutines via errgroup:
+// It loads configuration from the PostgreSQL database (app_config table), initializes
+// an RSA signer for Kalshi API authentication, opens a PostgreSQL database, and
+// launches all core goroutines via errgroup:
 //
-//   - TickWriter — single SQLite writer for batched tick/orderbook/lifecycle/points inserts
+//   - TickWriter — single writer for batched tick/orderbook/lifecycle/points inserts
 //   - WebSocket Manager — auto-reconnecting connection to Kalshi's real-time feed
 //   - Scanner — periodic REST scan for new tennis events and markets
 //   - Scheduler — starts per-market WS tracking at occurrence_datetime minus lead time
@@ -232,7 +232,7 @@ func main() {
 		}()
 	}
 
-	// 1. Tick writer (single SQLite writer)
+	// 1. Tick writer (single DB writer)
 	g.Go(func() error {
 		return tickWriter.Run(ctx)
 	})

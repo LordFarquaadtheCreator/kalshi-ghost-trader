@@ -94,7 +94,7 @@ ssh fahad@192.168.1.246                     # direct
 - Key: `~/.ssh/id_ed25519` (copied via `ssh-copy-id`)
 - Passwordless sudo for `systemctl` + `journalctl` (via `/etc/sudoers.d/fahad-systemctl`)
 - Repo: `/home/fahad/kalshi-ghost-trader`
-- DB: `/home/fahad/kalshi-ghost-trader/kalshi_tennis.db` (31GB+)
+- DB: PostgreSQL `kalshi_tennis` on `127.0.0.1:5432`
 
 ### systemd services
 
@@ -149,8 +149,8 @@ Cron: `0 */6 * * *` on mint.
 
 On mint — daily full DB backup, keep 7 days:
 ```bash
-ssh mint 'sqlite3 /home/fahad/kalshi-ghost-trader/kalshi_tennis.db ".backup /home/fahad/kalshi-ghost-trader/backups/kalshi_$(date +%Y%m%d).db"'
-ssh mint 'find /home/fahad/kalshi-ghost-trader/backups/ -name "kalshi_*.db" -mtime +7 -delete'
+ssh mint 'pg_dump -U kalshi kalshi_tennis | gzip > /home/fahad/kalshi-ghost-trader/backups/kalshi_$(date +%Y%m%d).sql.gz'
+ssh mint 'find /home/fahad/kalshi-ghost-trader/backups/ -name "kalshi_*.sql.gz" -mtime +7 -delete'
 ```
 
 ## Dashboard

@@ -49,10 +49,10 @@ func main() {
 	}
 
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
-	dbPath := fs.String("db", "kalshi_tennis.db", "path to kalshi_tennis.db")
+	dsn := fs.String("dsn", "", "PostgreSQL DSN (defaults to dev config)")
 	fs.Parse(os.Args[2:])
 
-	db := openDB(*dbPath)
+	db := openDB(*dsn)
 	defer db.Close()
 
 	t0 := time.Now()

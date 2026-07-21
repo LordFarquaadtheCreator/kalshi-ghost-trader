@@ -5,12 +5,14 @@ package backtest
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
@@ -531,7 +533,7 @@ func (e *Engine) load() error {
 		Status       string `gorm:"column:status"`
 		CloseTs      int64  `gorm:"column:close_ts"`
 	}
-	if err := e.db.WithContext(ctx).Raw(`SELECT event_ticker, market_ticker, player_name, result, status, close_ts FROM markets ORDER BY event_ticker, market_ticker`).Scan(&mkts).Error; err != nil {
+	if err := e.db.WithContext(ctx).Raw(`SELECT event_ticker, market_ticker, player_name, result, status, close_ts FROM markets WHERE status = 'finalized' ORDER BY event_ticker, market_ticker`).Scan(&mkts).Error; err != nil {
 		return fmt.Errorf("query markets: %w", err)
 	}
 	for _, m := range mkts {
@@ -541,30 +543,34 @@ func (e *Engine) load() error {
 		}
 	}
 
-	// Load tick prices
-	var tickPrices []struct {
-		MarketTicker string  `gorm:"column:market_ticker"`
-		TS           int64   `gorm:"column:ts"`
-		Price        float64 `gorm:"column:price"`
-	}
-	if err := e.db.WithContext(ctx).Raw(`SELECT market_ticker, ts, price FROM ticks WHERE price IS NOT NULL AND price > 0 ORDER BY market_ticker, ts`).Scan(&tickPrices).Error; err != nil {
+	// Load tick prices + dollar_volume in one streaming query (finalized markets only)
+	tickRows, err := e.db.WithContext(ctx).Raw(`
+		SELECT market_ticker, ts, price, dollar_volume
+		FROM ticks
+		WHERE market_ticker IN (SELECT market_ticker FROM markets WHERE status = 'finalized')
+		  AND (price IS NOT NULL AND price > 0 OR dollar_volume IS NOT NULL AND dollar_volume > 0)
+		ORDER BY market_ticker, ts
+	`).Rows()
+	if err != nil {
 		return fmt.Errorf("query ticks: %w", err)
 	}
-	for _, t := range tickPrices {
-		e.tickPrices[t.MarketTicker] = append(e.tickPrices[t.MarketTicker], TickPrice{t.TS, t.Price})
+	defer tickRows.Close()
+	for tickRows.Next() {
+		var mkt string
+		var ts int64
+		var price, dollarVol sql.NullFloat64
+		if err := tickRows.Scan(&mkt, &ts, &price, &dollarVol); err != nil {
+			return fmt.Errorf("scan tick row: %w", err)
+		}
+		if price.Valid && price.Float64 > 0 {
+			e.tickPrices[mkt] = append(e.tickPrices[mkt], TickPrice{ts, price.Float64})
+		}
+		if dollarVol.Valid && dollarVol.Float64 > 0 {
+			e.tickVolumes[mkt] = append(e.tickVolumes[mkt], TickVolume{ts, dollarVol.Float64})
+		}
 	}
-
-	// Load dollar_volume time series per market (for volratio strategy)
-	var tickVols []struct {
-		MarketTicker string  `gorm:"column:market_ticker"`
-		TS           int64   `gorm:"column:ts"`
-		DollarVolume float64 `gorm:"column:dollar_volume"`
-	}
-	if err := e.db.WithContext(ctx).Raw(`SELECT market_ticker, ts, dollar_volume FROM ticks WHERE dollar_volume IS NOT NULL AND dollar_volume > 0 ORDER BY market_ticker, ts`).Scan(&tickVols).Error; err != nil {
-		return fmt.Errorf("query tick volumes: %w", err)
-	}
-	for _, v := range tickVols {
-		e.tickVolumes[v.MarketTicker] = append(e.tickVolumes[v.MarketTicker], TickVolume{v.TS, v.DollarVolume})
+	if err := tickRows.Err(); err != nil {
+		return fmt.Errorf("iterate tick rows: %w", err)
 	}
 
 	// Load point-by-point score data
@@ -576,6 +582,7 @@ func (e *Engine) load() error {
 		       COALESCE(home_set_games, 0) as home_set_games, COALESCE(away_set_games, 0) as away_set_games,
 		       is_tiebreak, is_break_point, is_set_point, is_match_point
 		FROM points WHERE ts_ms IS NOT NULL
+		  AND match_ticker IN (SELECT event_ticker FROM markets WHERE status = 'finalized')
 		ORDER BY match_ticker, ts_ms
 	`).Scan(&points).Error; err != nil {
 		return fmt.Errorf("query points: %w", err)
@@ -693,13 +700,25 @@ func (e *Engine) PrewarmCache(cache *Cache, log *slog.Logger) {
 // RunAll runs all registered strategies and returns their results.
 func (e *Engine) RunAll(minPrice float64) ([]*StrategyResult, error) {
 	names := e.AvailableStrategies()
-	results := make([]*StrategyResult, 0, len(names))
-	for _, name := range names {
-		res, err := e.RunStrategy(name, minPrice)
+	results := make([]*StrategyResult, len(names))
+	errs := make([]error, len(names))
+
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Add(1)
+		go func(idx int, strategyName string) {
+			defer wg.Done()
+			res, err := e.RunStrategy(strategyName, minPrice)
+			results[idx] = res
+			errs[idx] = err
+		}(i, name)
+	}
+	wg.Wait()
+
+	for _, err := range errs {
 		if err != nil {
 			return nil, err
 		}
-		results = append(results, res)
 	}
 	return results, nil
 }

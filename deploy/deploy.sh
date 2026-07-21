@@ -37,14 +37,12 @@ ssh "$HOST" "cd $REMOTE_DIR && git fetch origin && git checkout $BRANCH && git p
 
 echo "==> Restarting backend..."
 ssh "$HOST" 'sudo -n systemctl restart kalshi-ghost-trader'
-sleep 3
 
 echo "==> Restarting dashboard..."
 ssh "$HOST" 'sudo -n systemctl restart kalshi-dashboard'
-sleep 2
 
 echo "==> Health check..."
-ssh "$HOST" 'curl -s -o /dev/null -w "backend: %{http_code}\n" http://127.0.0.1:6060/metrics && curl -s -o /dev/null -w "dashboard: %{http_code}\n" http://127.0.0.1:5173/'
+ssh "$HOST" 'for i in $(seq 1 15); do code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:6060/metrics 2>/dev/null); if [ "$code" = "200" ]; then break; fi; sleep 2; done; echo "backend: $code"; curl -s -o /dev/null -w "dashboard: %{http_code}\n" http://127.0.0.1:5173/'
 
 echo "==> Done. Check logs with:"
 echo "    ssh $HOST 'sudo -n journalctl -u kalshi-ghost-trader --no-pager -n 40 --since "5 min ago"'"

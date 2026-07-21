@@ -63,11 +63,11 @@ Full reference in `config.yaml.example`.
 | `api_key_id` | — | Kalshi API key ID (required) |
 | `private_key_path` | — | Path to RSA private key PEM (required) |
 | `environment` | `demo` | `demo` or `prod` |
-| `db_path` | `kalshi_tennis.db` | SQLite file path |
+| `db_dsn` | — | PostgreSQL DSN (required) |
 | `series_tickers` | 8 tennis series | List of series to scan |
 | `scan_interval_hours` | `24` | Hours between daily scans |
 | `track_lead_minutes` | `5` | Start WS this many minutes before match |
-| `batch_size` | `500` | SQLite batch insert size |
+| `batch_size` | `500` | DB batch insert size |
 | `flush_timeout_ms` | `250` | Max ms before partial batch flushes |
 | `http_timeout_secs` | `30` | REST client timeout |
 | `rate_limit_rps` | `15` | REST client max requests per second |
@@ -148,9 +148,9 @@ SQLite with WAL mode. Single writer, batched inserts. Schema:
 Inspect:
 
 ```bash
-sqlite3 kalshi_tennis.db
-.tables
-.schema ticks
+psql kalshi_tennis
+\dt
+\d ticks
 SELECT COUNT(*) FROM ticks;
 ```
 
@@ -202,16 +202,16 @@ Official docs at <https://docs.kalshi.com>.
 
 ```bash
 # Backtest a strategy on historical data
-go run ./cmd/backtest -strategy matchpoint -db kalshi_tennis.db
+go run ./cmd/backtest -strategy matchpoint
 # Skip dead/illiquid markets (price < 0.05)
-go run ./cmd/backtest -strategy matchpoint -db kalshi_tennis.db -min-price 0.05
+go run ./cmd/backtest -strategy matchpoint -min-price 0.05
 # Debug mode: log strategy filter reasons (why signals were skipped)
 go run ./cmd/backtest -strategy matchpoint -debug
 ```
 
 ## Notebooks
 
-Analysis notebooks live in `research/`. They query the live SQLite DB
+Analysis notebooks live in `research/`. They query the live PostgreSQL DB
 read-only — never write to the DB from notebooks.
 
 ```bash
