@@ -1,6 +1,9 @@
 package algorithms
 
-import "math"
+import (
+	"math"
+	"strconv"
+)
 
 // MarkovModel computes tennis win probability from any score state
 // using a hierarchical Markov chain: point → game → set → match.
@@ -140,14 +143,14 @@ func (m *MarkovModel) setWinProb(gamesHome, gamesAway int, pHomeGame float64, se
 	if gamesAway >= 6 && gamesAway-gamesHome >= 2 {
 		return 0.0
 	}
-	if gamesHome >= 6 && gamesAway >= 6 && gamesHome == gamesAway {
-		// Tiebreak or extended deuce set: 50-50 approximation
-		pTB := 0.5*m.pServe + 0.5*m.pReturn
-		return pTB
-	}
 	if isTiebreak {
-		// Already in tiebreak — pHomeGame already computed
+		// Already in tiebreak — pHomeGame already computed from current TB score
 		return pHomeGame
+	}
+	if gamesHome >= 6 && gamesAway >= 6 && gamesHome == gamesAway {
+		// Tiebreak: first to 7, win by 2, serve alternates 1-2-2-1...
+		// Server of game 12 (tiebreak) = same as game 0 = `server`.
+		return m.tiebreakWinProb("0", "0", server == 1)
 	}
 
 	// Current game uses pHomeGame (computed from point score).
@@ -173,8 +176,8 @@ func (m *MarkovModel) setWinProb(gamesHome, gamesAway int, pHomeGame float64, se
 // homeServing: who serves the next point in tiebreak.
 // Tiebreak: first to 7, win by 2. Serve alternates: 1-2-2-1-1-2-2-1...
 func (m *MarkovModel) tiebreakWinProb(homePoints, awayPoints string, homeServing bool) float64 {
-	h := pointValueMarkov(homePoints)
-	a := pointValueMarkov(awayPoints)
+	h := tbPointValue(homePoints)
+	a := tbPointValue(awayPoints)
 
 	// Tiebreak points: 0=0, 1=1, 2=2, 3=3, 4=4, 5=5, 6=6
 	// First to 7, win by 2
@@ -183,7 +186,7 @@ func (m *MarkovModel) tiebreakWinProb(homePoints, awayPoints string, homeServing
 		p = m.pReturn
 	}
 
-	return m.tbWinProbRecursive(h, a, p, homeServing, 0)
+	return m.tbWinProbRecursive(h, a, p, homeServing, h+a)
 }
 
 // tbWinProbRecursive computes P(home wins tiebreak) from TB score h, a.
@@ -244,6 +247,16 @@ func pointValueMarkov(s string) int {
 	default:
 		return 0
 	}
+}
+
+// tbPointValue converts tiebreak point string to numeric value.
+// Tiebreak points are plain integers: "0","1","2",...,"12",...
+func tbPointValue(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // FairValue returns the Markov fair-value probability for the home player

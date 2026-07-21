@@ -97,7 +97,7 @@ Hierarchical Markov chain computing tennis win probabilities from any score stat
 Layers:
 1. **Point win** — `P(point | server)` using `pServe` (default 0.64). Handles deuce/advantage recursion.
 2. **Game win** — `P(game | server)` via point-level recursion. Handles 40-40, A-40, 40-A.
-3. **Set win** — `P(set | server)` via game-level recursion. Handles 6-6 tiebreak (assumes 50/50).
+3. **Set win** — `P(set | server)` via game-level recursion. Handles 6-6 tiebreak via full tiebreak Markov chain (first to 7, win by 2, serve alternation 1-2-2-1...).
 4. **Match win** — `P(match)` via set-level recursion. Best-of-3 only (first to 2 sets).
 
 Key methods:
@@ -106,7 +106,7 @@ Key methods:
 
 **Gaps:**
 - **Best-of-3 only.** No support for best-of-5 (Grand Slams). Adding it requires changing `setsToWin` from 2 to 3 and is not parameterized.
-- **Tiebreak model is crude.** Assumes 50/50 at 6-6. Real tiebreak win probability depends on server and returner strength. A more accurate model would use a mini-break Markov chain.
+- **Tiebreak model uses symmetric serve assumption.** At 0-0, tiebreak is exactly 50/50 because `pReturn = 1 - pServe` and serve alternates evenly. Non-50/50 only appears at mid-scores or with per-player serve strengths.
 - **No serve strength parameterization per player.** Uses a single global `pServe`. In reality, each player has a different serve win rate. The model could accept per-player `pServe` values.
 - **No caching/memoization.** Recomputes full recursion on every call. For live use this is fine (called once per point), but for backtest over thousands of points it could be slow. A memo table keyed by score state would help.
 - **Deuce recursion depth.** The point-level recursion for deuce/advantage is mathematically exact (geometric series converges), but Go's floating point may lose precision after ~20+ deuce cycles. In practice this never happens (max ~5 deuce cycles in real tennis).
