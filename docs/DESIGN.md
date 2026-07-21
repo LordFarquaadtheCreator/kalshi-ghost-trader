@@ -134,7 +134,9 @@ P_win_set(A, B, a, b, P_game):
   # A, B = games won in set
   # a, b = points in current game
   # P_game = prob of winning current game from its state
-  # Uses tiebreak formula at 6-6
+  # At 6-6: full tiebreak Markov chain (first to 7, win by 2,
+  #   serve alternates 1-2-2-1-1-2-2-1...)
+  # Mid-tiebreak: uses current TB score + correct serve alternation
   # Returns P(winning the set)
   
 P_win_match(S, A, B, P_set):
@@ -266,7 +268,7 @@ Every permutation of (model_class × feature_set × calibration) is trained and 
 |---|---|---|---|---|
 | 1 | **Constant: pre-match market price** | — | Floor. If you can't beat the opening line consistently, you have no edge. | Wilkens 2021 |
 | 2 | **Logistic Regression** | S1 (score) | Simplest calibrated model. Inherently well-calibrated (log-loss optimal). Fast to train. | Klaassen & Magnus baseline |
-| 3 | **Markov Chain (closed-form)** | S1 (score only) | The structural truth. No training — just serve/return rates. On par with ML at ~70% accuracy. | Wang & Drekic 2026 |
+| 3 | **Markov Chain (closed-form)** | S1 (score only) | The structural truth. No training — just serve/return rates. Full tiebreak model (first to 7, win by 2, serve alternation). On par with ML at ~70% accuracy. | Wang & Drekic 2026 |
 
 ### 4.2 Tier 2 — Gradient Boosted Trees
 
