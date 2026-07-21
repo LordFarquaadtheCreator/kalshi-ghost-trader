@@ -8,6 +8,7 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/data
 EnvironmentFile=/data/.env
+Environment=APP_ENV=prod
 ExecStart=/data/ghost-trader
 Restart=always
 RestartSec=10
