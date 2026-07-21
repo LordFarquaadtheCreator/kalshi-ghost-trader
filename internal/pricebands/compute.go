@@ -1,6 +1,7 @@
 package pricebands
 
 import (
+	"encoding/json"
 	"log/slog"
 	"sort"
 	"time"
@@ -9,28 +10,41 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
-// ComputeMissingDays runs all strategies, finds days not yet in the DB,
-// computes fixed-band aggregates for those days, and persists them.
+// stratOrders pairs a strategy name with its unmarshalled orders.
+type stratOrders struct {
+	name   string
+	orders []backtest.Order
+}
+
+// ComputeMissingDays reads persisted backtest results from DB, finds days
+// not yet in price_band_results, computes fixed-band aggregates for those
+// days, and persists them.
 //
-// RunAll is called once; missing days are filtered from the same result set.
-// Most cron runs find 0-1 new days and do minimal work.
-func ComputeMissingDays(engine *backtest.Engine, db *store.DB, log *slog.Logger) error {
+// No engine.RunAll call — reads orders_json from backtest_results table.
+func ComputeMissingDays(db *store.DB, log *slog.Logger) error {
 	start := time.Now()
 
-	log.Info("pricebands: running all strategies")
-	results, err := engine.RunAll(0)
+	rows, err := db.GetAllBacktestResults()
 	if err != nil {
 		return err
 	}
 
-	// Extract all distinct days from order timestamps
-	sourceDays := extractDays(results)
+	var allOrders []stratOrders
+	for _, row := range rows {
+		var orders []backtest.Order
+		if err := json.Unmarshal([]byte(row.OrdersJSON), &orders); err != nil {
+			log.Error("pricebands: unmarshal orders", "strategy", row.Strategy, "err", err)
+			continue
+		}
+		allOrders = append(allOrders, stratOrders{name: row.Strategy, orders: orders})
+	}
+
+	sourceDays := extractDaysFromOrders(allOrders)
 	if len(sourceDays) == 0 {
 		log.Info("pricebands: no orders found, nothing to compute")
 		return nil
 	}
 
-	// Get already computed days
 	computedDays, err := db.GetComputedDays()
 	if err != nil {
 		return err
@@ -40,7 +54,6 @@ func ComputeMissingDays(engine *backtest.Engine, db *store.DB, log *slog.Logger)
 		computedSet[d] = true
 	}
 
-	// Diff: source days not yet computed
 	var missing []string
 	for _, d := range sourceDays {
 		if !computedSet[d] {
@@ -59,23 +72,22 @@ func ComputeMissingDays(engine *backtest.Engine, db *store.DB, log *slog.Logger)
 	runTS := time.Now().UnixMilli()
 
 	for _, day := range missing {
-		rows := computeDay(results, day)
-		if err := db.SavePriceBandDay(runTS, day, rows); err != nil {
+		dayRows := computeDayFromOrders(allOrders, day)
+		if err := db.SavePriceBandDay(runTS, day, dayRows); err != nil {
 			log.Error("pricebands: save day failed", "day", day, "err", err)
 			continue
 		}
-		log.Info("pricebands: saved day", "day", day, "rows", len(rows))
+		log.Info("pricebands: saved day", "day", day, "rows", len(dayRows))
 	}
 
 	log.Info("pricebands: computation complete", "days_computed", len(missing), "elapsed", time.Since(start).Round(time.Millisecond))
 	return nil
 }
 
-// extractDays returns sorted distinct day strings from all strategy results.
-func extractDays(results []*backtest.StrategyResult) []string {
+func extractDaysFromOrders(allOrders []stratOrders) []string {
 	daySet := map[string]bool{}
-	for _, res := range results {
-		for _, o := range res.Orders {
+	for _, so := range allOrders {
+		for _, o := range so.orders {
 			if o.Price < 0.01 || o.Price >= 0.99 {
 				continue
 			}
@@ -90,16 +102,15 @@ func extractDays(results []*backtest.StrategyResult) []string {
 	return days
 }
 
-// computeDay aggregates orders for a specific day into per-strategy-per-band rows.
-func computeDay(results []*backtest.StrategyResult, day string) []store.PriceBandResultRow {
+func computeDayFromOrders(allOrders []stratOrders, day string) []store.PriceBandResultRow {
 	type sbKey struct {
 		strat   string
 		bandIdx int
 	}
 	dayAggs := map[sbKey]*Agg{}
 
-	for _, res := range results {
-		for _, o := range res.Orders {
+	for _, so := range allOrders {
+		for _, o := range so.orders {
 			if o.Price < 0.01 || o.Price >= 0.99 {
 				continue
 			}
@@ -110,11 +121,11 @@ func computeDay(results []*backtest.StrategyResult, day string) []store.PriceBan
 			if TSToDay(o.TS) != day {
 				continue
 			}
-			k := sbKey{res.Name, bi}
+			k := sbKey{so.name, bi}
 			a := dayAggs[k]
 			if a == nil {
 				a = &Agg{
-					Strategy:  res.Name,
+					Strategy:  so.name,
 					BandIdx:   bi,
 					BandLabel: BandLabel(FixedBands[bi]),
 					BandLo:    FixedBands[bi].Lo,

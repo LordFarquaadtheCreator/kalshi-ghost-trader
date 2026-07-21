@@ -306,13 +306,13 @@ func main() {
 	g.Go(func() error {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
-		pricebands.ComputeMissingDays(btEngine, db, log) // initial run at startup
+		pricebands.ComputeMissingDays(db, log) // initial run at startup
 		for {
 			select {
 			case <-ctx.Done():
 				return nil
 			case <-ticker.C:
-				pricebands.ComputeMissingDays(btEngine, db, log)
+				pricebands.ComputeMissingDays(db, log)
 			}
 		}
 	})
