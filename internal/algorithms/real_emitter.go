@@ -20,7 +20,6 @@ import (
 // RealOrderConfig controls real order submission to Kalshi.
 type RealOrderConfig struct {
 	Enabled       bool
-	Bankroll      float64 // Kelly bankroll for real order sizing
 	Environment   string  // "demo" or "prod" — logged for safety
 	TimeInForce   string  // "immediate_or_cancel" or "good_till_canceled"
 	OrderTimeoutS int     // per-order HTTP timeout
@@ -69,13 +68,9 @@ type KalshiOrderEmitter struct {
 func NewKalshiOrderEmitter(client *kalshiclient.Client, db *store.DB, log *slog.Logger) *KalshiOrderEmitter {
 	cfg := RealOrderConfig{
 		Enabled:       true,
-		Bankroll:      config.Cfg.RealBankroll,
 		Environment:   config.Cfg.Environment,
 		TimeInForce:   config.Cfg.RealOrderTimeInForce,
 		OrderTimeoutS: config.Cfg.RealOrderTimeoutS,
-	}
-	if cfg.Bankroll <= 0 {
-		cfg.Bankroll = 1000
 	}
 	if cfg.TimeInForce == "" {
 		cfg.TimeInForce = "immediate_or_cancel"
@@ -160,19 +155,9 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 		}
 	}
 
-	// Guard 3: Kelly size from real bankroll
-	count := kellySizeRaw(o.ConvProb, o.MarketPrice, e.cfg.Bankroll, kellyFractionP)
-	if count <= 0 {
-		e.log.Warn("real: skipped zero-size order", "market", o.MarketTicker)
-		return false
-	}
-	// Kalshi rejects sub-1 contract counts; round up to 1
-	if count < 1 {
-		count = 1
-	}
-
-	// Guard 4: clamp spend to available liquidity pool balance
-	spendCents := int64(count * o.MarketPrice * 100)
+	// Guard 3: fetch liquidity pool — pool balance IS the kelly bankroll.
+	// Single source of truth: profit compounds, losses shrink sizing
+	// automatically. Set via dashboard reset/topup, not real_bankroll config.
 	lp, err := liquiditypool.Get(ctx, e.db.GormDB())
 	if err != nil {
 		e.log.Error("real: failed to get liquidity pool balance",
@@ -184,6 +169,23 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 			"market", o.MarketTicker, "balance_cents", lp.BalanceCents)
 		return false
 	}
+	bankrollDollars := float64(lp.BalanceCents) / 100.0
+
+	// Kelly size from live pool balance
+	count := kellySizeRaw(o.ConvProb, o.MarketPrice, bankrollDollars, kellyFractionP)
+	if count <= 0 {
+		e.log.Warn("real: skipped zero-size order",
+			"market", o.MarketTicker, "bankroll", bankrollDollars)
+		return false
+	}
+	// Kalshi rejects sub-1 contract counts; round up to 1
+	if count < 1 {
+		count = 1
+	}
+
+	// Guard 4: clamp spend to available pool balance (race safety — balance
+	// could change between fetch and deduct under concurrent orders)
+	spendCents := int64(count * o.MarketPrice * 100)
 	if spendCents > lp.BalanceCents {
 		// clamp to what's available
 		maxCount := float64(lp.BalanceCents) / (o.MarketPrice * 100)
@@ -318,7 +320,7 @@ func (e *LiveToggleEmitter) EmitOrder(o store.Order) bool {
 		return false
 	}
 	if !e.Prev.Load() {
-		e.Log.Warn("real trading enabled — live orders active", "bankroll", config.Cfg.RealBankroll)
+		e.Log.Warn("real trading enabled — live orders active", "environment", config.Cfg.Environment)
 		e.Prev.Store(true)
 	}
 	return e.Inner.EmitOrder(o)

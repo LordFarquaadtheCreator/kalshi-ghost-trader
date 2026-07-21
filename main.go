@@ -94,7 +94,7 @@ func main() {
 	log.Info("config loaded", "env", config.Cfg.Environment, "db", config.Cfg.DBDSN,
 		"series_count", len(config.Cfg.SeriesTickers),
 		"paper_bankroll", config.Cfg.PaperBankroll,
-		"real_bankroll", config.Cfg.RealBankroll, "kelly", config.Cfg.KellyFraction)
+		"kelly", config.Cfg.KellyFraction)
 
 	// Load signer
 	signer, err := kalshiAuth.NewSignerFromFile()
@@ -106,8 +106,8 @@ func main() {
 
 	algorithms.SetSizingParams()
 	log.Info("sizing params set", "paper_bankroll", algorithms.GetPaperBankroll(), "kelly_fraction", config.Cfg.KellyFraction)
-	algorithms.SetRealBankroll()
-	log.Info("real bankroll set", "real_bankroll", config.Cfg.RealBankroll)
+	// Real order sizing reads liquidity_pool.balance_cents live — no static
+	// real_bankroll. Pool is the single source of truth for real cash at risk.
 
 	// Tick writer (single writer goroutine for batch inserts)
 	tickWriter := db.NewTickWriter(config.Cfg.BatchSize, config.Cfg.FlushTimeoutMS, log)
@@ -136,7 +136,7 @@ func main() {
 	// Dashboard flip takes effect on next order without restart.
 	if config.Cfg.RealTradingEnabled {
 		log.Warn("REAL TRADING ENABLED — live orders will be submitted to Kalshi",
-			"environment", config.Cfg.Environment, "bankroll", config.Cfg.RealBankroll)
+			"environment", config.Cfg.Environment)
 	}
 
 	realEmitter := algorithms.NewKalshiOrderEmitter(orderClient, db, log)

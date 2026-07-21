@@ -205,8 +205,9 @@ Guards (checked in order):
 0. **Pre-match gate** — looks up market via `GetMarket`, refuses if `occurrence_ts` is in future. Also populates `MatchTitle` and `PlayerName` on the order from market + event lookup.
 1. **Strategy enabled** — checks `strategy_config` table.
 2. **Trigger ranges** — price must fall within configured bands (if any).
-3. **Kelly sizing** — computes size from bankroll + Kelly fraction. Sub-1 counts rounded up to 1 (Kalshi rejects fractional minimums).
-4. **Liquidity pool** — deducts cost from pool, refunds on failure.
+3. **Liquidity pool fetch** — `balance_cents` IS the kelly bankroll. Single source of truth. Profit compounds (pool grows → next order sizes up), losses shrink sizing (pool shrinks → next order sizes down). Set via dashboard reset/topup, NOT `real_bankroll` config.
+4. **Kelly sizing** — `kellySizeRaw(convProb, marketPrice, balanceDollars, kellyFraction)`. Sub-1 counts rounded up to 1 (Kalshi rejects fractional minimums).
+5. **Pool clamp** — if `spendCents > balanceCents`, clamp count to what's available. Race safety — balance could change between fetch and deduct under concurrent orders.
 
 Safety:
 - IOC by default (no resting orders)
@@ -226,3 +227,5 @@ Safety:
 - Real orders only when `real_trading_enabled: true` — otherwise inner is `NoopEmitter`
 - `QuotaGuard` budget tracking is local (no REST balance query). `SuggestedSize` = spend per order.
 - Two independent `QuotaGuard` instances in live mode: paper guard (paper budget) + real guard (real budget)
+- `real_bankroll` config is NOT used for sizing. Kelly reads `liquidity_pool.balance_cents` live. Pool is the single source of truth — set via dashboard reset/topup. Migration 0007 syncs pool to `real_bankroll` once on upgrade; after that, dashboard owns it.
+- `algorithms.SetRealBankroll()` and `realBankroll` global removed. `RealOrderConfig.Bankroll` field removed.

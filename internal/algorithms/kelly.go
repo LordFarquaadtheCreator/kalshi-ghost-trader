@@ -3,9 +3,10 @@ package algorithms
 import "github.com/farquaad/kalshi-ghost-trader/internal/config"
 
 // Package-level sizing params, set from config via SetSizingParams.
+// Real order sizing reads liquidity_pool.balance_cents live (see real_emitter.go),
+// not a static bankroll — profit compounds, losses shrink sizing automatically.
 var (
 	paperBankroll  float64 = 1000
-	realBankroll   float64 = 1000
 	kellyFractionP float64 = 0.25
 )
 
@@ -13,11 +14,6 @@ var (
 func SetSizingParams() {
 	paperBankroll = config.Cfg.PaperBankroll
 	kellyFractionP = config.Cfg.KellyFraction
-}
-
-// SetRealBankroll reads real bankroll from config.Cfg.
-func SetRealBankroll() {
-	realBankroll = config.Cfg.RealBankroll
 }
 
 // kellySizeRaw computes order size using fractional Kelly criterion without cost cap.
