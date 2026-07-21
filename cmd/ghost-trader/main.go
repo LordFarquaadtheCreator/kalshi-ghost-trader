@@ -37,6 +37,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
+	"github.com/farquaad/kalshi-ghost-trader/internal/liquiditypool"
 	"github.com/farquaad/kalshi-ghost-trader/internal/orderbackfill"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
@@ -62,20 +63,17 @@ func main() {
 	}))
 	slog.SetDefault(log)
 
-	// Load technical config from app.yaml / app.dev.yaml
-	appCfg, err := appconfig.Load()
-	if err != nil {
-		log.Error("app config load failed", "err", err)
-		os.Exit(1)
-	}
-	log.Info("app config loaded", "env", appCfg.Environment, "db", appCfg.DBPath)
-
 	// Root context cancelled on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Open SQLite store
+	// Open SQLite store (need DB path from env config first)
+	appCfg, err := appconfig.Load()
+	if err != nil {
+		log.Error("app config load failed", "err", err)
+		os.Exit(1)
+	}
 	db, err := store.New(ctx, appCfg.DBPath, log)
 	if err != nil {
 		log.Error("store init failed", "err", err)
@@ -83,37 +81,43 @@ func main() {
 	}
 	defer db.Close()
 
-	// Load runtime config from DB, merged with app config
-	cfg, err := config.LoadFromDB(db, appCfg)
-	if err != nil {
-		log.Error("config load from DB failed", "err", err)
+	if err := db.Migrate(); err != nil {
+		log.Error("schema migration failed", "err", err)
 		os.Exit(1)
 	}
-	cfgCache := config.NewConfigCache(db, cfg, appCfg) // dashboard writes refresh this; live config reads use it
-	algorithms.SetSizingParams(cfg.PaperBankroll, cfg.KellyFraction)
-	algorithms.SetRealBankroll(cfg.RealBankroll)
-	log.Info("config loaded", "env", cfg.Environment, "db", cfg.DBPath, "series_count", len(cfg.SeriesTickers), "paper_bankroll", cfg.PaperBankroll, "real_bankroll", cfg.RealBankroll, "kelly", cfg.KellyFraction)
+
+	// Load config
+	if _, err := config.Load(db); err != nil {
+		log.Error("config load failed", "err", err)
+		os.Exit(1)
+	}
+	algorithms.SetSizingParams(config.Cfg.PaperBankroll, config.Cfg.KellyFraction)
+	algorithms.SetRealBankroll(config.Cfg.RealBankroll)
+	log.Info("config loaded", "env", config.Cfg.Environment, "db", config.Cfg.DBPath,
+		"series_count", len(config.Cfg.SeriesTickers),
+		"paper_bankroll", config.Cfg.PaperBankroll,
+		"real_bankroll", config.Cfg.RealBankroll, "kelly", config.Cfg.KellyFraction)
 
 	// Load signer
-	signer, err := kalshiauth.NewSignerFromFile(cfg.APIKeyID, cfg.PrivateKeyPath)
+	signer, err := kalshiauth.NewSignerFromFile(config.Cfg.APIKeyID, config.Cfg.PrivateKeyPath)
 	if err != nil {
 		log.Error("signer init failed", "err", err)
 		os.Exit(1)
 	}
 
 	// Tick writer (single writer goroutine for batch inserts)
-	tickWriter := db.NewTickWriter(cfg.BatchSize, cfg.FlushTimeoutMS, log)
+	tickWriter := db.NewTickWriter(config.Cfg.BatchSize, config.Cfg.FlushTimeoutMS, log)
 
 	// REST client — shared by scanner, livedata pollers, tracker.
-	restClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
-		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
+	restClient := kalshiclient.NewClient(config.Cfg.RESTBaseURL, signer,
+		time.Duration(config.Cfg.HTTPTimeoutSecs)*time.Second, config.Cfg.RateLimitRPS, log)
 
 	// Dedicated REST client for order submission. Separate rate-limiter
 	// bucket so 171 livedata pollers (~34 RPS demand) can't starve order
 	// submission and cause context deadline exceeded before HTTP fires.
 	// Orders are infrequent — small dedicated bucket is plenty.
-	orderClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
-		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
+	orderClient := kalshiclient.NewClient(config.Cfg.RESTBaseURL, signer,
+		time.Duration(config.Cfg.HTTPTimeoutSecs)*time.Second, config.Cfg.RateLimitRPS, log)
 
 	// Order emission pipeline:
 	//   strategies → paperGuard → paperEmitter (TickWriter, ALWAYS)
@@ -125,28 +129,28 @@ func main() {
 
 	// Paper guard — always active. When quota disabled, passes all through.
 	paperGuard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{}, algorithms.QuotaConfig{
-		Enabled:      cfg.OrderQuotaEnabled,
-		CooldownSecs: cfg.OrderQuotaCooldownSecs,
-		MaxPerSec:    cfg.OrderQuotaMaxPerSec,
-		BudgetTotal:  cfg.OrderQuotaBudgetTotal,
-		BudgetFloor:  cfg.OrderQuotaBudgetFloor,
+		Enabled:      config.Cfg.OrderQuotaEnabled,
+		CooldownSecs: config.Cfg.OrderQuotaCooldownSecs,
+		MaxPerSec:    config.Cfg.OrderQuotaMaxPerSec,
+		BudgetTotal:  config.Cfg.OrderQuotaBudgetTotal,
+		BudgetFloor:  config.Cfg.OrderQuotaBudgetFloor,
 	}, log)
 	defer paperGuard.Close()
 
 	// Real order pipeline — always constructed. Live on/off controlled by
-	// real_trading_enabled in cfgCache, checked per EmitOrder via liveToggleEmitter.
+	// real_trading_enabled, checked per EmitOrder via liveToggleEmitter.
 	// Dashboard flip takes effect on next order without restart.
-	if cfg.RealTradingEnabled {
+	if config.Cfg.RealTradingEnabled {
 		log.Warn("REAL TRADING ENABLED — live orders will be submitted to Kalshi",
-			"environment", cfg.Environment, "bankroll", cfg.RealBankroll)
+			"environment", config.Cfg.Environment, "bankroll", config.Cfg.RealBankroll)
 	}
 
 	// Auto-init liquidity pool if not yet seeded and bankroll is meaningful.
 	// Runs regardless of real_trading_enabled so pool is ready when flag flips on.
-	if cfg.RealBankroll > 1 {
-		if _, err := db.GetLiquidityPool(ctx); err != nil {
-			initialCents := int64(cfg.RealBankroll * 100)
-			if err := db.InitLiquidityPool(ctx, initialCents); err != nil {
+	if config.Cfg.RealBankroll > 1 {
+		if _, err := liquiditypool.Get(ctx, db.GormDB()); err != nil {
+			initialCents := int64(config.Cfg.RealBankroll * 100)
+			if err := liquiditypool.Init(ctx, db.GormDB(), initialCents); err != nil {
 				log.Error("auto-init liquidity pool", "err", err)
 			} else {
 				log.Info("auto-initialized liquidity pool", "initial_cents", initialCents)
@@ -156,25 +160,22 @@ func main() {
 
 	realEmitter := algorithms.NewKalshiOrderEmitter(orderClient, db, algorithms.RealOrderConfig{
 		Enabled:       true,
-		Bankroll:      cfg.RealBankroll,
-		Environment:   cfg.Environment,
-		TimeInForce:   cfg.RealOrderTimeInForce,
-		OrderTimeoutS: cfg.RealOrderTimeoutS,
+		Bankroll:      config.Cfg.RealBankroll,
+		Environment:   config.Cfg.Environment,
+		TimeInForce:   config.Cfg.RealOrderTimeInForce,
+		OrderTimeoutS: config.Cfg.RealOrderTimeoutS,
 	}, log)
 
 	realGuard := algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter, algorithms.QuotaConfig{
-		Enabled:      cfg.OrderQuotaEnabled,
-		CooldownSecs: cfg.OrderQuotaCooldownSecs,
-		MaxPerSec:    cfg.OrderQuotaMaxPerSec,
-		BudgetTotal:  cfg.OrderQuotaBudgetTotal,
-		BudgetFloor:  cfg.OrderQuotaBudgetFloor,
+		Enabled:      config.Cfg.OrderQuotaEnabled,
+		CooldownSecs: config.Cfg.OrderQuotaCooldownSecs,
+		MaxPerSec:    config.Cfg.OrderQuotaMaxPerSec,
+		BudgetTotal:  config.Cfg.OrderQuotaBudgetTotal,
+		BudgetFloor:  config.Cfg.OrderQuotaBudgetFloor,
 	}, log)
 	defer realGuard.Close()
 
-	// Wire liveToggleEmitter as paperGuard.inner. Checks cfgCache per call so
-	// dashboard flips to real_trading_enabled take effect without restart.
-	// Returns false before realGuard tracks budget when flag is off.
-	paperGuard.SetInner(&liveToggleEmitter{cfgCache: cfgCache, inner: realGuard, log: log})
+	paperGuard.SetInner(&liveToggleEmitter{inner: realGuard, log: log})
 
 	// matchPoint is the primary strategy and also serves as PriceLookup for CloseTimer
 	matchPoint := algorithms.NewMatchPointStrategy(paperGuard, log)
@@ -324,39 +325,40 @@ func main() {
 
 	// Close timer strategy (buy favorite N min before close)
 	var closeTimer *sigpkg.CloseTimer
-	if cfg.CloseTimerEnabled {
+	if config.Cfg.CloseTimerEnabled {
 		closeTimer = sigpkg.NewCloseTimer(db, matchPoint, tickWriter,
-			cfg.CloseTimerLeadMin, cfg.CloseTimerMinPrice, log)
+			config.Cfg.CloseTimerLeadMin, config.Cfg.CloseTimerMinPrice, log)
 		log.Info("close timer strategy enabled",
-			"lead_min", cfg.CloseTimerLeadMin,
-			"min_price", cfg.CloseTimerMinPrice)
+			"lead_min", config.Cfg.CloseTimerLeadMin,
+			"min_price", config.Cfg.CloseTimerMinPrice)
 	}
 
 	// WebSocket manager
-	wsMgr := wsclient.NewManager(cfg.WSURL, signer, tickWriter, cfg.SeriesTickers,
-		time.Duration(cfg.WSMinBackoffSecs)*time.Second,
-		time.Duration(cfg.WSMaxBackoffSecs)*time.Second,
+	wsMgr := wsclient.NewManager(config.Cfg.WSURL, signer, tickWriter, config.Cfg.SeriesTickers,
+		time.Duration(config.Cfg.WSMinBackoffSecs)*time.Second,
+		time.Duration(config.Cfg.WSMaxBackoffSecs)*time.Second,
+		config.Cfg.DisableWSDataSave,
 		log)
 	wsMgr.SetPriceUpdater(multi)
 
 	// API-Tennis scraper (optional — WebSocket real-time push, no polling delay)
 	var atScraper *apitennis.Scraper
-	if cfg.APITennisEnabled {
-		if cfg.APITennisAPIKey == "" {
+	if config.Cfg.APITennisEnabled {
+		if config.Cfg.APITennisAPIKey == "" {
 			log.Error("apitennis_enabled but apitennis_api_key is empty")
 			os.Exit(1)
 		}
-		atScraper = apitennis.New(db, multi, tickWriter, cfg.APITennisAPIKey,
-			cfg.APITennisTimezone, log)
-		log.Info("apitennis scraper enabled", "timezone", cfg.APITennisTimezone)
+		atScraper = apitennis.New(db, multi, tickWriter, config.Cfg.APITennisAPIKey,
+			config.Cfg.APITennisTimezone, log)
+		log.Info("apitennis scraper enabled", "timezone", config.Cfg.APITennisTimezone)
 	}
 
 	// Kalshi live-data poller (optional — backup score source via REST polling)
 	var kldPoller *kalshilivedata.Poller
-	if cfg.KalshiLiveDataEnabled {
+	if config.Cfg.KalshiLiveDataEnabled {
 		kldPoller = kalshilivedata.New(restClient, db, multi, tickWriter,
-			time.Duration(cfg.KalshiLiveDataPollSecs)*time.Second, log)
-		log.Info("kalshi livedata poller enabled", "poll_secs", cfg.KalshiLiveDataPollSecs)
+			time.Duration(config.Cfg.KalshiLiveDataPollSecs)*time.Second, log)
+		log.Info("kalshi livedata poller enabled", "poll_secs", config.Cfg.KalshiLiveDataPollSecs)
 	}
 
 	// Tracker (market subscription lifecycle)
@@ -380,16 +382,16 @@ func main() {
 	tr.SetMarketRegistrar(multi)
 
 	// Scanner
-	sc := scanner.New(restClient, db, cfg.SeriesTickers, log)
+	sc := scanner.New(restClient, db, config.Cfg.SeriesTickers, log)
 
 	// Scheduler
-	sched := scheduler.New(db, tr, cfg.TrackLeadMinutes, log)
+	sched := scheduler.New(db, tr, config.Cfg.TrackLeadMinutes, log)
 
 	// errgroup for top-level goroutines
 	g, ctx := errgroup.WithContext(ctx)
 
 	// Backtest engine for dashboard strategy API
-	btEngine, err := backtest.NewEngine(cfg.DBPath, log)
+	btEngine, err := backtest.NewEngine(config.Cfg.DBPath, log)
 	if err != nil {
 		log.Error("backtest engine init failed", "err", err)
 		os.Exit(1)
@@ -400,7 +402,7 @@ func main() {
 	btCache := backtest.NewCache(5 * time.Minute)
 
 	// pprof + runtime metrics + strategy API server
-	if cfg.MetricsAddr != "" {
+	if config.Cfg.MetricsAddr != "" {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/metrics", metricsHandler)
 		mux.HandleFunc("/api/tracked", trackedHandler(tr, btEngine))
@@ -416,10 +418,10 @@ func main() {
 		mux.HandleFunc("/api/liquidity-pool", corsHandler(liquidityPoolHandler(db, log)))
 		mux.HandleFunc("/api/strategy-config", corsHandler(strategyConfigHandler(db, log)))
 		mux.HandleFunc("/api/trigger-ranges", corsHandler(triggerRangesHandler(db, log)))
-		mux.HandleFunc("/api/app-config", corsHandler(appConfigHandler(db, cfgCache, log)))
+		mux.HandleFunc("/api/app-config", corsHandler(appConfigHandler(log)))
 		mux.Handle("/debug/pprof/", http.DefaultServeMux)
 		metricsSrv := &http.Server{
-			Addr:         cfg.MetricsAddr,
+			Addr:         config.Cfg.MetricsAddr,
 			Handler:      corsMiddleware(mux),
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 120 * time.Second,
@@ -451,34 +453,34 @@ func main() {
 	})
 
 	// 3. Scanner loop (daily scan for new matches)
-	scanInterval := time.Duration(cfg.ScanIntervalHours) * time.Hour
+	scanInterval := time.Duration(config.Cfg.ScanIntervalHours) * time.Hour
 	g.Go(func() error {
 		return sc.RunLoop(ctx, scanInterval)
 	})
 
 	// 4. Scheduler loop (poll DB, schedule tracking at occurrence_datetime - lead)
-	schedPoll := time.Duration(cfg.SchedulerPollSecs) * time.Second
+	schedPoll := time.Duration(config.Cfg.SchedulerPollSecs) * time.Second
 	g.Go(func() error {
 		return sched.Run(ctx, schedPoll)
 	})
 
 	// 4b. Reconciler loop (fill settlement gaps via REST for unresolved markets)
 	recon := reconciler.New(restClient, db, log)
-	reconInterval := time.Duration(cfg.ReconcilerIntervalSecs) * time.Second
+	reconInterval := time.Duration(config.Cfg.ReconcilerIntervalSecs) * time.Second
 	g.Go(func() error {
 		return recon.Run(ctx, reconInterval)
 	})
 
 	// 4c. Order backfill loop (refresh stale real order status from REST)
 	obf := orderbackfill.New(restClient, db, log)
-	obfInterval := time.Duration(cfg.OrderBackfillIntervalSecs) * time.Second
+	obfInterval := time.Duration(config.Cfg.OrderBackfillIntervalSecs) * time.Second
 	g.Go(func() error {
 		return obf.Run(ctx, obfInterval)
 	})
 
 	// 4d. Schedule checker loop (refresh stale occurrence_ts from REST)
 	schedChk := schedulechecker.New(restClient, db, multi, log)
-	schedChkInterval := time.Duration(cfg.ScheduleCheckerIntervalSecs) * time.Second
+	schedChkInterval := time.Duration(config.Cfg.ScheduleCheckerIntervalSecs) * time.Second
 	g.Go(func() error {
 		return schedChk.Run(ctx, schedChkInterval)
 	})
@@ -500,13 +502,13 @@ func main() {
 	}
 
 	// 6. Close timer strategy goroutine (optional — buys favorites near close)
-	if cfg.CloseTimerEnabled {
+	if config.Cfg.CloseTimerEnabled {
 		g.Go(func() error {
-			return closeTimer.Run(ctx, cfg.CloseTimerPollSecs)
+			return closeTimer.Run(ctx, config.Cfg.CloseTimerPollSecs)
 		})
 	}
 
-	log.Info("ghost trader running", "scan_interval", scanInterval, "lead_minutes", cfg.TrackLeadMinutes)
+	log.Info("ghost trader running", "scan_interval", scanInterval, "lead_minutes", config.Cfg.TrackLeadMinutes)
 
 	// Wait for shutdown signal or critical failure
 	err = g.Wait()
@@ -520,19 +522,18 @@ func main() {
 }
 
 // liveToggleEmitter gates the real order pipeline on real_trading_enabled.
-// Checks cfgCache per EmitOrder call so dashboard flips take effect without restart.
+// Checks config.Cfg per EmitOrder call so dashboard flips take effect without restart.
 // Returns false before delegating to inner when flag is off — prevents realGuard
 // from tracking budget spend on orders that will never submit.
 // Logs each on/off transition for audit.
 type liveToggleEmitter struct {
-	cfgCache *config.ConfigCache
-	inner    algorithms.OrderEmitter
-	log      *slog.Logger
-	prev     atomic.Bool
+	inner algorithms.OrderEmitter
+	log   *slog.Logger
+	prev  atomic.Bool
 }
 
 func (e *liveToggleEmitter) EmitOrder(o store.Order) bool {
-	on := e.cfgCache.Get().RealTradingEnabled
+	on := config.Cfg.RealTradingEnabled
 	if !on {
 		if e.prev.Load() {
 			e.log.Warn("real trading disabled — live orders suppressed", "market", o.MarketTicker)
@@ -541,7 +542,7 @@ func (e *liveToggleEmitter) EmitOrder(o store.Order) bool {
 		return false
 	}
 	if !e.prev.Load() {
-		e.log.Warn("real trading enabled — live orders active", "bankroll", e.cfgCache.Get().RealBankroll)
+		e.log.Warn("real trading enabled — live orders active", "bankroll", config.Cfg.RealBankroll)
 		e.prev.Store(true)
 	}
 	return e.inner.EmitOrder(o)

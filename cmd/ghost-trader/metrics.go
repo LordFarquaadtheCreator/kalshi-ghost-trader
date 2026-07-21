@@ -12,8 +12,11 @@ import (
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
+	"github.com/farquaad/kalshi-ghost-trader/internal/liquiditypool"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
+	"github.com/farquaad/kalshi-ghost-trader/internal/strategyconfig"
 	"github.com/farquaad/kalshi-ghost-trader/internal/tracker"
+	"github.com/farquaad/kalshi-ghost-trader/internal/triggerranges"
 )
 
 // corsMiddleware adds CORS headers for dashboard cross-origin requests.
@@ -350,7 +353,7 @@ func liquidityPoolHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "public, max-age=5")
 
-		lp, err := db.GetLiquidityPool(r.Context())
+		lp, err := liquiditypool.Get(r.Context(), db.GormDB())
 		if err != nil {
 			log.Error("get liquidity pool", "err", err)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -374,7 +377,7 @@ func strategyConfigHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			entries, err := db.GetAllStrategyConfig(r.Context())
+			entries, err := strategyconfig.GetAll(r.Context(), db.GormDB())
 			if err != nil {
 				log.Error("get strategy config", "err", err)
 				w.WriteHeader(http.StatusInternalServerError)
@@ -393,7 +396,7 @@ func strategyConfigHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 				json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
 				return
 			}
-			if err := db.SetStrategyEnabled(r.Context(), body.Strategy, body.Enabled); err != nil {
+			if err := strategyconfig.SetEnabled(r.Context(), db.GormDB(), body.Strategy, body.Enabled); err != nil {
 				log.Error("set strategy config", "err", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -415,7 +418,7 @@ func triggerRangesHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 		case http.MethodGet:
 			strategy := r.URL.Query().Get("strategy")
 			if strategy != "" {
-				ranges, err := db.GetTriggerRanges(r.Context(), strategy)
+				ranges, err := triggerranges.Get(r.Context(), db.GormDB(), strategy)
 				if err != nil {
 					log.Error("get trigger ranges", "strategy", strategy, "err", err)
 					w.WriteHeader(http.StatusInternalServerError)
@@ -424,7 +427,7 @@ func triggerRangesHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 				}
 				json.NewEncoder(w).Encode(map[string]any{"ranges": ranges})
 			} else {
-				entries, err := db.GetAllStrategyConfig(r.Context())
+				entries, err := strategyconfig.GetAll(r.Context(), db.GormDB())
 				if err != nil {
 					log.Error("get strategy config for trigger ranges", "err", err)
 					w.WriteHeader(http.StatusInternalServerError)
@@ -433,7 +436,7 @@ func triggerRangesHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 				}
 				result := make(map[string]any)
 				for _, e := range entries {
-					ranges, err := db.GetTriggerRanges(r.Context(), e.Strategy)
+					ranges, err := triggerranges.Get(r.Context(), db.GormDB(), e.Strategy)
 					if err != nil {
 						log.Error("get trigger ranges", "strategy", e.Strategy, "err", err)
 						continue
@@ -458,7 +461,7 @@ func triggerRangesHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 				json.NewEncoder(w).Encode(map[string]any{"error": "strategy is required"})
 				return
 			}
-			if err := db.ReplaceTriggerRanges(r.Context(), body.Strategy, body.Ranges); err != nil {
+			if err := triggerranges.Replace(r.Context(), db.GormDB(), body.Strategy, body.Ranges); err != nil {
 				log.Error("replace trigger ranges", "strategy", body.Strategy, "err", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
@@ -472,19 +475,13 @@ func triggerRangesHandler(db *store.DB, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-func appConfigHandler(db *store.DB, cfgCache *config.ConfigCache, log *slog.Logger) http.HandlerFunc {
+func appConfigHandler(log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		switch r.Method {
 		case http.MethodGet:
-			pairs, err := db.GetAllAppConfig(r.Context())
-			if err != nil {
-				log.Error("get app config", "err", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-				return
-			}
+			pairs := config.Cfg.GetAll()
 			json.NewEncoder(w).Encode(map[string]any{"config": pairs})
 
 		case http.MethodPut:
@@ -497,10 +494,10 @@ func appConfigHandler(db *store.DB, cfgCache *config.ConfigCache, log *slog.Logg
 				json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
 				return
 			}
-			// Route through ConfigCache so writes refresh the live config snapshot.
+			// Route through config.Update so writes refresh the live config.
 			// Bypassing it (db.SetAppConfig directly) leaves the running process
 			// holding stale startup values — real_trading_enabled flip never took.
-			if err := cfgCache.Update(body.Key, body.Value); err != nil {
+			if err := config.Cfg.Update(body.Key, body.Value); err != nil {
 				log.Error("set app config", "err", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})

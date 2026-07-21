@@ -23,8 +23,8 @@ cp app.dev.yaml.example app.dev.yaml   # dev (demo keys)
 cp app.yaml.example app.yaml           # prod (real keys)
 # Edit: set kalshi_api_key_id, kalshi_private_key_path, environment
 
-# If migrating from legacy config.yaml:
-go run ./cmd/migrate-config    # seeds app_config, liquidity_pool, strategy_config
+# app_config, liquidity_pool, strategy_config seeded automatically
+# by SQL migrations on first startup. No manual seeding needed.
 
 # Run (dev — auto-selects app.dev.yaml if present):
 go run ./cmd/ghost-trader

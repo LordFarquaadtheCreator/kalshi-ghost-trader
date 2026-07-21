@@ -6,6 +6,6 @@ var allModels = []any{
 	&Event{}, &Market{}, &Tick{}, &OrderbookEvent{},
 	&LifecycleEvent{}, &EventLifecycleEvent{}, &Order{},
 	&ScanRun{}, &FiredEvent{}, &Point{}, &KalshiScore{},
-	&AppConfigKV{}, &LiquidityPool{}, &StrategyConfigEntry{},
+	&RuntimeConfig{}, &RuntimeConfigHistory{}, &LiquidityPool{}, &StrategyConfigEntry{},
 	&TriggerRange{}, &FlashscoreMatch{}, &SchemaMigration{},
 }

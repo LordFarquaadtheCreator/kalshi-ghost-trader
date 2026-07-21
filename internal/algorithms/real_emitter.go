@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
+	"github.com/farquaad/kalshi-ghost-trader/internal/liquiditypool"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
+	"github.com/farquaad/kalshi-ghost-trader/internal/strategyconfig"
+	"github.com/farquaad/kalshi-ghost-trader/internal/triggerranges"
 )
 
 // RealOrderConfig controls real order submission to Kalshi.
@@ -108,7 +111,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	}
 
 	// Guard 1: strategy must be enabled in strategy_config
-	enabled, err := e.db.IsStrategyEnabled(ctx, o.Strategy)
+	enabled, err := strategyconfig.IsEnabled(ctx, e.db.GormDB(), o.Strategy)
 	if err != nil {
 		e.log.Error("real: failed to check strategy enabled",
 			"strategy", o.Strategy, "error", err)
@@ -121,14 +124,14 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	}
 
 	// Guard 2: price must fall within an enabled trigger range (if any bands configured)
-	hasBands, err := e.db.HasTriggerRanges(ctx, o.Strategy)
+	hasBands, err := triggerranges.Has(ctx, e.db.GormDB(), o.Strategy)
 	if err != nil {
 		e.log.Error("real: failed to check trigger ranges",
 			"strategy", o.Strategy, "error", err)
 		return false
 	}
 	if hasBands {
-		inRange, err := e.db.IsPriceInTriggerRange(ctx, o.Strategy, o.MarketPrice)
+		inRange, err := triggerranges.IsPriceIn(ctx, e.db.GormDB(), o.Strategy, o.MarketPrice)
 		if err != nil {
 			e.log.Error("real: failed to check price in trigger range",
 				"strategy", o.Strategy, "price", o.MarketPrice, "error", err)
@@ -154,7 +157,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 
 	// Guard 4: clamp spend to available liquidity pool balance
 	spendCents := int64(count * o.MarketPrice * 100)
-	lp, err := e.db.GetLiquidityPool(ctx)
+	lp, err := liquiditypool.Get(ctx, e.db.GormDB())
 	if err != nil {
 		e.log.Error("real: failed to get liquidity pool balance",
 			"market", o.MarketTicker, "error", err)
@@ -197,7 +200,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	orderCtx, cancel := context.WithTimeout(ctx, time.Duration(e.cfg.OrderTimeoutS)*time.Second)
 	defer cancel()
 
-	newBalance, err := e.db.DeductLiquidityPool(orderCtx, spendCents)
+	newBalance, err := liquiditypool.Deduct(orderCtx, e.db.GormDB(), spendCents)
 	if err != nil {
 		e.log.Error("real: failed to deduct liquidity pool",
 			"market", o.MarketTicker, "spend_cents", spendCents, "error", err)
