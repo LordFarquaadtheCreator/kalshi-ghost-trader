@@ -1,54 +1,40 @@
 #!/bin/bash
 # Deploy ghost-trader to mint box.
-# Builds artifacts locally, scp's to remote, restarts services.
-# Usage: ./scripts/update-remote.sh [host] [branch]
+# Builds artifacts locally into deploy/out/, scp's to remote, restarts services.
+# Usage: ./deploy/deploy.sh [host] [branch]
 # Defaults: host=mint, branch=main
 set -euo pipefail
 
 HOST="${1:-mint}"
 BRANCH="${2:-main}"
 REMOTE_DIR="/home/fahad/kalshi-ghost-trader"
-LOCAL_OUT="deploy/out"
+OUT="deploy/out"
 
 cd "$(dirname "$0")/.."
 
+echo "==> Cleaning build output..."
+rm -rf "$OUT"
+mkdir -p "$OUT"
+
 echo "==> Building backend (linux/amd64)..."
-mkdir -p "$LOCAL_OUT"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$LOCAL_OUT/ghost-trader" .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$OUT/ghost-trader" .
 
 echo "==> Building dashboard..."
 cd dashboard && npm run build && cd ..
+cp -r dashboard/build "$OUT/dashboard-build"
 
-echo "==> Syncing service file..."
-cat > /tmp/kalshi-ghost-trader.service << 'EOF'
-[Unit]
-Description=Kalshi Ghost Trader Backend
-After=network.target
+echo "==> Copying service file..."
+cp deploy/ghost-trader.service "$OUT/"
 
-[Service]
-Type=simple
-User=fahad
-WorkingDirectory=/home/fahad/kalshi-ghost-trader
-Environment=APP_ENV=prod
-ExecStart=/home/fahad/kalshi-ghost-trader/ghost-trader
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-scp /tmp/kalshi-ghost-trader.service "$HOST:/tmp/kalshi-ghost-trader.service"
-ssh "$HOST" 'sudo cmp -s /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service || { sudo cp /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service && sudo systemctl daemon-reload && echo "service file updated"; }'
-
-echo "==> Uploading backend..."
-scp "$LOCAL_OUT/ghost-trader" "$HOST:$REMOTE_DIR/ghost-trader"
+echo "==> Uploading artifacts..."
+scp "$OUT/ghost-trader" "$HOST:$REMOTE_DIR/ghost-trader"
 ssh "$HOST" "chmod +x $REMOTE_DIR/ghost-trader"
-
-echo "==> Uploading dashboard..."
+scp "$OUT/ghost-trader.service" "$HOST:/tmp/kalshi-ghost-trader.service"
+ssh "$HOST" 'sudo cmp -s /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service || { sudo cp /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service && sudo systemctl daemon-reload && echo "service file updated"; }'
 ssh "$HOST" "rm -rf $REMOTE_DIR/dashboard/build"
-scp -r dashboard/build "$HOST:$REMOTE_DIR/dashboard/build"
+scp -r "$OUT/dashboard-build" "$HOST:$REMOTE_DIR/dashboard/build"
 
-echo "==> Pulling latest code (for migrations, configs, ML models)..."
+echo "==> Pulling latest code..."
 ssh "$HOST" "cd $REMOTE_DIR && git fetch origin && git checkout $BRANCH && git pull --ff-only origin $BRANCH"
 
 echo "==> Restarting backend..."

@@ -1,25 +1,15 @@
 [Unit]
-Description=Kalshi Ghost Trader
-After=network-online.target
-Wants=network-online.target
+Description=Kalshi Ghost Trader Backend
+After=network.target
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/data
-EnvironmentFile=/data/.env
+User=fahad
+WorkingDirectory=/home/fahad/kalshi-ghost-trader
 Environment=APP_ENV=prod
-ExecStart=/data/ghost-trader
+ExecStart=/home/fahad/kalshi-ghost-trader/ghost-trader
 Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-# Hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/data
-PrivateTmp=true
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
