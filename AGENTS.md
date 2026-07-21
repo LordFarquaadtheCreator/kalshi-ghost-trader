@@ -5,8 +5,13 @@ storing every price/trade/lifecycle message to SQLite for algorithm testing.
 
 ## Build
 
+Compiled binaries go in `bin/` (gitignored). Never leave binaries in repo root.
+
 ```bash
-go build ./...
+mkdir -p bin
+go build -o bin/ghost-trader .
+go build -o bin/backtest ./cmd/backtest
+go build -o bin/pricebands ./cmd/pricebands
 go vet ./...
 ```
 
@@ -27,10 +32,10 @@ cp app.yaml.example app.yaml           # prod (real keys)
 # by SQL migrations on first startup. No manual seeding needed.
 
 # Run (dev — auto-selects app.dev.yaml if present):
-go run ./cmd/ghost-trader
+go run .
 
 # Run (prod — explicit):
-APP_ENV=prod go run ./cmd/ghost-trader
+APP_ENV=prod go run .
 ```
 
 ## Monitoring
@@ -49,7 +54,7 @@ go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
 
 Each package has its own `AGENTS.md` with package-specific gotchas.
 
-- `cmd/ghost-trader/` — entrypoint, signal handling, errgroup wiring
+- `main.go` — entrypoint, signal handling, errgroup wiring
 - `cmd/backtest/` — replay historical data through trading strategies
 - `cmd/pricebands/` — price band analysis across all strategies (per-day + aggregate)
 - `internal/config/` — YAML config loading (legacy, superseded by app_config table)
@@ -135,7 +140,7 @@ ssh mint 'sudo -n systemctl restart kalshi-ghost-trader kalshi-dashboard'
 ### Mint deploy tweaks (uncommitted, stashed on pull)
 
 Mint has local-only changes never committed — stashed before `git pull`, popped after:
-- `cmd/ghost-trader/main.go` — metrics binds `0.0.0.0` (not `127.0.0.1`)
+- `main.go` — metrics binds `0.0.0.0` (not `127.0.0.1`)
 - `dashboard/src/lib/api.js` — empty API URLs (uses Vite proxy, not localhost)
 - `dashboard/vite.config.js` — `server.host=0.0.0.0`, proxy `/api`+`/metrics`+`/debug` to `127.0.0.1:6060`
 
@@ -146,7 +151,7 @@ ssh mint 'cd /home/fahad/kalshi-ghost-trader && \
   git stash push -u -m "mint-deploy-tweaks" && \
   git pull --ff-only origin main && \
   git stash pop && \
-  go build -o ghost-trader ./cmd/ghost-trader && \
+  mkdir -p bin && go build -o bin/ghost-trader . && \
   sudo -n systemctl restart kalshi-ghost-trader && sleep 2 && \
   sudo -n systemctl restart kalshi-dashboard'
 ```
