@@ -50,12 +50,8 @@ go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
 Each package has its own `AGENTS.md` with package-specific gotchas.
 
 - `cmd/ghost-trader/` — entrypoint, signal handling, errgroup wiring
-- `cmd/validate/` — config + connectivity validation tool
-- `cmd/ws-debug/` — WS + REST debug tool
 - `cmd/backtest/` — replay historical data through trading strategies
 - `cmd/pricebands/` — price band analysis across all strategies (per-day + aggregate)
-- `cmd/backfill/` — backfill historical data
-- `cmd/test-order/` — manual test order CLI tool (single IOC bid to Kalshi)
 - `internal/config/` — YAML config loading (legacy, superseded by app_config table)
 - `internal/kalshiAuth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
 - `internal/kalshiclient/` — REST client (events, markets, pagination, rate limit)

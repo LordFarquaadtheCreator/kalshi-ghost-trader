@@ -174,8 +174,6 @@ Override with `series_tickers` in `config.yaml`.
 ```
 cmd/ghost-trader/        entrypoint, signal handling, errgroup wiring
 cmd/ghost-trader/metrics.go  runtime metrics + pprof HTTP handlers
-cmd/validate/            config + connectivity validation tool
-cmd/ws-debug/            WS + REST debug tool
 cmd/backtest/           replay historical data through trading strategies
 internal/config/         YAML config loading
 internal/kalshiAuth/     RSA-PSS-SHA256 request signing
@@ -204,12 +202,6 @@ Official docs at <https://docs.kalshi.com>.
 ## Diagnostic tools
 
 ```bash
-# Validate config, credentials, REST/WS connectivity, DB
-go run ./cmd/validate
-
-# Debug WS handshake + REST signing
-go run ./cmd/ws-debug
-
 # Backtest a strategy on historical data
 go run ./cmd/backtest -strategy matchpoint -db kalshi_tennis.db
 # Skip dead/illiquid markets (price < 0.05)
