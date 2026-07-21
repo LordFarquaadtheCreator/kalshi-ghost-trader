@@ -207,6 +207,28 @@ type FlashscoreMatch struct {
 
 func (FlashscoreMatch) TableName() string { return "flashscore_matches" }
 
+// PriceBandResultRow is one row in the price_band_results table.
+// Populated by the cron goroutine that computes fixed-band aggregates
+// per day per strategy.
+type PriceBandResultRow struct {
+	ID        int64   `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	RunTS     int64   `gorm:"column:run_ts" json:"run_ts"`
+	Day       string  `gorm:"column:day;index:idx_pricebands_day" json:"day"`
+	Strategy  string  `gorm:"column:strategy" json:"strategy"`
+	BandLabel string  `gorm:"column:band_label" json:"band_label"`
+	BandLo    float64 `gorm:"column:band_lo" json:"band_lo"`
+	BandHi    float64 `gorm:"column:band_hi" json:"band_hi"`
+	N         int     `gorm:"column:n" json:"n"`
+	Wins      int     `gorm:"column:wins" json:"wins"`
+	WinRate   float64 `gorm:"column:win_rate" json:"win_rate"`
+	NetPnL    float64 `gorm:"column:net_pnl" json:"net_pnl"`
+	Invested  float64 `gorm:"column:invested" json:"invested"`
+	ROI       float64 `gorm:"column:roi" json:"roi"`
+	AvgEdge   float64 `gorm:"column:avg_edge" json:"avg_edge"`
+}
+
+func (PriceBandResultRow) TableName() string { return "price_band_results" }
+
 // SchemaMigration tracks applied SQL migrations.
 type SchemaMigration struct {
 	Name      string `gorm:"primaryKey;column:name"`
