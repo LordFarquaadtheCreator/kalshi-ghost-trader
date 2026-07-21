@@ -44,6 +44,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/strategies", corsHandler(s.strategyListHandler))
 	mux.HandleFunc("/api/backtest", corsHandler(s.backtestHandler))
 	mux.HandleFunc("/api/price-bands", corsHandler(s.priceBandsHandler))
+	mux.HandleFunc("/api/price-bands-snapshot", corsHandler(s.priceBandsSnapshotHandler))
 	mux.HandleFunc("/api/ticks", corsHandler(s.ticksHandler))
 	mux.HandleFunc("/api/orders", corsHandler(s.ordersHandler))
 	mux.HandleFunc("/api/order-counts", corsHandler(s.orderCountsHandler))
@@ -338,6 +339,26 @@ func (s *Server) priceBandsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"metric":  metricName,
 		"results": results,
+	})
+}
+
+func (s *Server) priceBandsSnapshotHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+
+	rows, err := s.deps.DB.GetAllPriceBandResults()
+	if err != nil {
+		s.deps.Log.Error("get price band results", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	runTS, _ := s.deps.DB.GetPriceBandRunTS()
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"run_ts":  runTS,
+		"results": rows,
 	})
 }
 
