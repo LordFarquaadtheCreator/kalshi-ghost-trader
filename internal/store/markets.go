@@ -41,12 +41,14 @@ func (d *DB) UpsertMarketCheckNew(ctx context.Context, m Market) (bool, error) {
 }
 
 // GetActiveMarkets returns markets eligible for tracking: REST status "open"
-// or WS lifecycle status "active". Kalshi REST uses "open"; lifecycle WS
-// "activated" event maps to "active". Both mean market is live.
+// or WS lifecycle status "active"/"determined". Kalshi REST uses "open";
+// lifecycle WS "activated" maps to "active", "determined" means result known
+// but not yet settled. Keeping tracking through "determined" ensures the
+// "settled" lifecycle event still arrives and triggers order resolution.
 func (d *DB) GetActiveMarkets(ctx context.Context) ([]Market, error) {
 	var markets []Market
 	err := d.db.WithContext(ctx).
-		Where("status IN ?", []string{"open", "active"}).
+		Where("status IN ?", []string{"open", "active", "determined"}).
 		Where("result != ?", "scalar").
 		Order("occurrence_ts").Find(&markets).Error
 	return markets, err

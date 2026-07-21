@@ -20,6 +20,7 @@ func (m *Manager) Subscribe(ctx context.Context, market string) error {
 	}
 	info := &subInfo{acked: make(chan struct{})}
 	m.subs[market] = info
+	m.everTracked[market] = true
 	conn := m.conn
 	m.mu.Unlock()
 

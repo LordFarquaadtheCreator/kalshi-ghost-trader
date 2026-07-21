@@ -123,12 +123,18 @@ func (m *Manager) handleLifecycle(msg json.RawMessage, raw []byte) {
 	}
 
 	// Lifecycle channel sends ALL market events (no filter supported).
-	// Only store events for markets we're subscribed to.
+	// For most event types, only store events for markets we're subscribed to.
+	// For determined/settled, also accept markets we've ever tracked —
+	// scheduler may have stopped tracking between determination and settlement,
+	// and we need the settled event to trigger order resolution.
 	m.mu.Lock()
 	_, tracked := m.subs[lc.MarketTicker]
+	ever := m.everTracked[lc.MarketTicker]
 	m.mu.Unlock()
 	if !tracked {
-		return
+		if !(ever && (lc.EventType == "determined" || lc.EventType == "settled")) {
+			return
+		}
 	}
 
 	now := time.Now().UnixMilli()

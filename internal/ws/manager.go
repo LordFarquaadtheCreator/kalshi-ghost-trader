@@ -70,6 +70,11 @@ type Manager struct {
 	cmdMu       sync.Mutex // protects cmdToMarket (written by sendSubscribeConn, read by handleSubscribed)
 	conn        *websocket.Conn
 	subs        map[string]*subInfo // market_ticker -> subscription info
+	// everTracked holds markets we've subscribed to at least once. Not cleared
+	// on Unsubscribe — lets determined/settled lifecycle events through for
+	// markets dropped between determination and settlement (scheduler stops
+	// tracking on determined if GetActiveMarkets ever narrows again).
+	everTracked map[string]bool
 	cmdToMarket map[int64]string    // command id -> market (for sid mapping)
 	msgID       atomic.Int64
 
@@ -106,6 +111,7 @@ func NewManager(signer *kalshiAuth.Signer, tw *store.TickWriter, log *slog.Logge
 		maxBackoff:   time.Duration(config.Cfg.WSMaxBackoffSecs) * time.Second,
 		seriesFilter: sf,
 		subs:         make(map[string]*subInfo),
+		everTracked:  make(map[string]bool),
 		cmdToMarket:  make(map[int64]string),
 		lastSeq:      make(map[int64]int64),
 		tickWriter:   tw,
@@ -214,6 +220,7 @@ func (m *Manager) clearSubs() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.subs = make(map[string]*subInfo)
+	m.everTracked = make(map[string]bool)
 }
 
 func (m *Manager) sleep(ctx context.Context, d time.Duration) error {
