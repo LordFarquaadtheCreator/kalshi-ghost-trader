@@ -37,6 +37,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
 	"github.com/farquaad/kalshi-ghost-trader/internal/orderbackfill"
+	"github.com/farquaad/kalshi-ghost-trader/internal/pricebands"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
 	"github.com/farquaad/kalshi-ghost-trader/internal/schedulechecker"
@@ -303,6 +304,21 @@ func main() {
 				return nil
 			case <-ticker.C:
 				btEngine.PrewarmCache(btCache, log)
+			}
+		}
+	})
+
+	// 8. Price bands cron — compute missing days hourly, persist to DB
+	g.Go(func() error {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		pricebands.ComputeMissingDays(btEngine, db, log) // initial run at startup
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				pricebands.ComputeMissingDays(btEngine, db, log)
 			}
 		}
 	})
