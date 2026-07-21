@@ -113,6 +113,7 @@ type lifecycleMsg struct {
 	SettledTS       int64  `json:"settled_ts"`
 	Result          string `json:"result"`
 	SettlementValue string `json:"settlement_value"`
+	IsDeactivated   *bool  `json:"is_deactivated"`
 }
 
 func (m *Manager) handleLifecycle(msg json.RawMessage, raw []byte) {
@@ -142,6 +143,7 @@ func (m *Manager) handleLifecycle(msg json.RawMessage, raw []byte) {
 		CloseTS:         lc.CloseTS * secondsToMillis,
 		DeterminationTS: lc.DeterminationTS * secondsToMillis,
 		SettledTS:       lc.SettledTS * secondsToMillis,
+		IsDeactivated:   lc.IsDeactivated,
 		Payload:         string(raw),
 	}
 	if !m.disableSave {

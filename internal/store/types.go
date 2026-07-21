@@ -30,6 +30,7 @@ type Market struct {
 	SettlementValue  string `gorm:"column:settlement_value"`
 	FirstSeenTS      int64  `gorm:"column:first_seen_ts"`
 	LastUpdatedTS    int64  `gorm:"column:last_updated_ts"`
+	IsDeactivated    *bool  `gorm:"column:is_deactivated"`
 }
 
 // Tick maps a single WS message (ticker, trade, orderbook) stored verbatim.
@@ -72,6 +73,7 @@ type LifecycleEvent struct {
 	DeterminationTS int64  `gorm:"column:determination_ts"`
 	SettledTS       int64  `gorm:"column:settled_ts"`
 	SettlementValue string `gorm:"column:settlement_value"`
+	IsDeactivated   *bool  `gorm:"column:is_deactivated"`
 	Payload         string `gorm:"column:payload"`
 }
 
