@@ -51,6 +51,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/passed-matches", corsHandler(s.passedMatchesHandler))
 	mux.HandleFunc("/api/real-orders", corsHandler(s.realOrdersHandler))
 	mux.HandleFunc("/api/liquidity-pool", corsHandler(s.liquidityPoolHandler))
+	mux.HandleFunc("/api/liquidity-pool/reset", corsHandler(s.liquidityPoolResetHandler))
+	mux.HandleFunc("/api/liquidity-pool/topup", corsHandler(s.liquidityPoolTopUpHandler))
 	mux.HandleFunc("/api/strategy-config", corsHandler(s.strategyConfigHandler))
 	mux.HandleFunc("/api/trigger-ranges", corsHandler(s.triggerRangesHandler))
 	mux.HandleFunc("/api/app-config", corsHandler(s.appConfigHandler))
@@ -423,6 +425,73 @@ func (s *Server) liquidityPoolHandler(w http.ResponseWriter, r *http.Request) {
 		"total_pnl_cents":       lp.TotalPNLCents,
 		"updated_ts":            lp.UpdatedTS,
 	})
+}
+
+// liquidityPoolResetHandler resets the pool to a new initial balance.
+// Wipes total_spent, total_pnl. Use when changing the risk envelope.
+// Body: {"balance_cents": 2000}
+func (s *Server) liquidityPoolResetHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]any{"error": "POST only"})
+		return
+	}
+	var body struct {
+		BalanceCents int64 `json:"balance_cents"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
+		return
+	}
+	if body.BalanceCents <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "balance_cents must be positive"})
+		return
+	}
+	if err := liquiditypool.Reset(r.Context(), s.deps.DB.GormDB(), body.BalanceCents); err != nil {
+		s.deps.Log.Error("reset liquidity pool", "err", err, "balance_cents", body.BalanceCents)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	s.deps.Log.Info("liquidity pool reset", "new_balance_cents", body.BalanceCents)
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "balance_cents": body.BalanceCents})
+}
+
+// liquidityPoolTopUpHandler adds capital to the pool without wiping history.
+// Increases balance + initial_balance by addCents. Use when injecting more
+// capital mid-run.
+// Body: {"add_cents": 500}
+func (s *Server) liquidityPoolTopUpHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]any{"error": "POST only"})
+		return
+	}
+	var body struct {
+		AddCents int64 `json:"add_cents"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
+		return
+	}
+	if body.AddCents <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "add_cents must be positive"})
+		return
+	}
+	if err := liquiditypool.TopUp(r.Context(), s.deps.DB.GormDB(), body.AddCents); err != nil {
+		s.deps.Log.Error("topup liquidity pool", "err", err, "add_cents", body.AddCents)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	s.deps.Log.Info("liquidity pool topped up", "add_cents", body.AddCents)
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "add_cents": body.AddCents})
 }
 
 func (s *Server) strategyConfigHandler(w http.ResponseWriter, r *http.Request) {
