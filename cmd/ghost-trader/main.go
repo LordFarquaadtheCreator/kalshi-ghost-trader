@@ -37,7 +37,6 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiAuth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
-	"github.com/farquaad/kalshi-ghost-trader/internal/liquiditypool"
 	"github.com/farquaad/kalshi-ghost-trader/internal/orderbackfill"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
@@ -103,9 +102,12 @@ func main() {
 		log.Error("signer init failed", "err", err)
 		os.Exit(1)
 	}
+	log.Info("signer loaded successfully")
 
 	algorithms.SetSizingParams()
+	log.Info("sizing params set", "paper_bankroll", algorithms.GetPaperBankroll(), "kelly_fraction", config.Cfg.KellyFraction)
 	algorithms.SetRealBankroll()
+	log.Info("real bankroll set", "real_bankroll", config.Cfg.RealBankroll)
 
 	// Tick writer (single writer goroutine for batch inserts)
 	tickWriter := db.NewTickWriter(config.Cfg.BatchSize, config.Cfg.FlushTimeoutMS, log)
@@ -113,10 +115,7 @@ func main() {
 	// REST client — shared by scanner, livedata pollers, tracker.
 	restClient := kalshiclient.NewClient(signer, log)
 
-	// Dedicated REST client for order submission. Separate rate-limiter
-	// bucket so 171 livedata pollers (~34 RPS demand) can't starve order
-	// submission and cause context deadline exceeded before HTTP fires.
-	// Orders are infrequent — small dedicated bucket is plenty.
+	// Dedicated REST client for order submission.
 	orderClient := kalshiclient.NewClient(signer, log)
 
 	// Order emission pipeline:
@@ -138,19 +137,6 @@ func main() {
 	if config.Cfg.RealTradingEnabled {
 		log.Warn("REAL TRADING ENABLED — live orders will be submitted to Kalshi",
 			"environment", config.Cfg.Environment, "bankroll", config.Cfg.RealBankroll)
-	}
-
-	// Auto-init liquidity pool if not yet seeded and bankroll is meaningful.
-	// Runs regardless of real_trading_enabled so pool is ready when flag flips on.
-	if config.Cfg.RealBankroll > 1 {
-		if _, err := liquiditypool.Get(ctx, db.GormDB()); err != nil {
-			initialCents := int64(config.Cfg.RealBankroll * 100)
-			if err := liquiditypool.Init(ctx, db.GormDB(), initialCents); err != nil {
-				log.Error("auto-init liquidity pool", "err", err)
-			} else {
-				log.Info("auto-initialized liquidity pool", "initial_cents", initialCents)
-			}
-		}
 	}
 
 	realEmitter := algorithms.NewKalshiOrderEmitter(orderClient, db, log)

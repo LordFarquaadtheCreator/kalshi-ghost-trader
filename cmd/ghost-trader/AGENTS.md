@@ -11,12 +11,13 @@ Entrypoint. Wires all components via errgroup.
 5. Create tick writer
 6. Create REST client
 7. Build order emission pipeline (paper guard + real guard + emitter)
-8. Create strategies (all wired to paper guard as their OrderEmitter)
-9. Create WS manager
-10. Create tracker (wired to strategies)
-11. Create scanner
-12. Create scheduler
-13. Launch goroutines via errgroup (metrics server, tick writer, WS, scanner, scheduler)
+8. Liquidity pool seeded by migration 0002 — no runtime init needed
+9. Create strategies (all wired to paper guard as their OrderEmitter)
+10. Create WS manager
+11. Create tracker (wired to strategies)
+12. Create scanner
+13. Create scheduler
+14. Launch goroutines via errgroup (metrics server, tick writer, WS, scanner, scheduler)
 
 ## Order emission pipeline
 
