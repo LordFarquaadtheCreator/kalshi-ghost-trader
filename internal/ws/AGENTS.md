@@ -76,3 +76,4 @@ Exponential backoff with jitter. Min from config, max 30s. On reconnect: clear `
 - Read limit raised to 1MB. Default 32KB too small for ticker feeds.
 - `cmdToMarket` must be cleared on reconnect — old command ids are invalid.
 - No per-match dispatch channel. Ticks stored directly by WS manager via tickWriter. Tracker only manages subscription lifecycle.
+- `everTracked` set is marked on `Subscribe`, not cleared on `Unsubscribe` (only on full shutdown via `clearSubs`). `handleLifecycle` lets `determined`/`settled` events through for ever-tracked markets even after unsubscribe — backstop for scheduler dropping subscription between determination and settlement. Without it, the `settled` event is dropped and `ApplyLifecycleEvent` never resolves orders.

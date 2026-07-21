@@ -22,4 +22,5 @@ Schedules per-match tracking goroutines at `occurrence_datetime - leadMinutes`.
 - No REST client needed. Reads from DB only.
 - Stop-tracking compares tracked set against DB active set. Markets that transition to closed/settled/finalized get unsubscribed.
 - `status = 'active'` means Kalshi WS sent a market_lifecycle "activated" event — market is live NOW, even if scheduled occurrence_ts is in the future. Start tracking immediately.
+- `GetActiveMarkets` includes `determined` status. Markets stay tracked through determination until `settled` arrives. Unsubscribing between `determined` and `settled` drops the settled event — `ApplyLifecycleEvent` never runs, orders never resolve. WS `everTracked` set is the backstop if unsubscribe does happen.
 - Pending markets are re-checked each poll with fresh DB occurrence_ts. Schedule checker may move occurrence_ts earlier (rain delay resolved, match moved up). Without re-check, goroutine fires at stale time.

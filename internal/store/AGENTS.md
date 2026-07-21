@@ -8,7 +8,7 @@ PostgreSQL layer. Single-writer architecture via TickWriter.
 - `schema.go` — schemaDDL constant (full DDL for all tables + cascade triggers)
 - `types.go` — Event, Market, Tick, LifecycleEvent, EventLifecycleEvent, OrderbookEvent, Order
 - `events.go` — UpsertEvent, UpsertEventCheckNew, DeleteEvent, EventExists, GetSeriesTicker, GetEventTitle, SetCoverage, DropOrphanPayloads, GetCoverage, GetAllEventsForMatching
-- `markets.go` — UpsertMarket, UpsertMarketCheckNew, GetMarket, GetActiveMarkets, GetMarketsByEvent, scanMarket/scanMarketRow helpers
+- `markets.go` — UpsertMarket, UpsertMarketCheckNew, GetMarket, GetActiveMarkets (status IN open/active/determined — keeps tracking through determination until settled), GetUnresolvedMarkets (3 clauses: empty result + has orders, past close+grace, OR result set + has non-terminal real orders), GetMarketsByEvent, scanMarket/scanMarketRow helpers
 - `ticks.go` — InsertTickBatch
 - `orderbook.go` — InsertOrderbookBatch
 - `lifecycle.go` — InsertLifecycleEvent, InsertEventLifecycleEvent, ApplyLifecycleEvent
@@ -81,3 +81,6 @@ Multi-step writes **must** use transactions. Wrap in `db.Transaction(func(tx *go
 - `ApplyLifecycleEvent` only handles explicit WS events. Implicit transitions need REST scan.
 - Multi-step writes must use transactions. See Transactions section above.
 - To change default seed data (app_config, strategy_config, liquidity_pool), add a new migration `.sql` file — don't edit existing migrations.
+- Raw SQL on `is_real` column must use `true`/`false`, not `1`/`0`. PG boolean — SQLite syntax doesn't work.
+- `GetActiveMarkets` includes `determined` status. Scheduler must keep tracking through determination so the `settled` WS event arrives and `ApplyLifecycleEvent` resolves orders. Dropping subscription between `determined` and `settled` loses the settled event.
+- `GetUnresolvedMarkets` third clause (result set + non-terminal real orders) catches markets where `determined` set the result but `settled` was missed. Without it, reconciler/backfill-orders skip markets that already have a result in DB — orders stay `filled` forever.

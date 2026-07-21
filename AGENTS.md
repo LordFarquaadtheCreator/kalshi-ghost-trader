@@ -57,6 +57,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 
 - `main.go` — entrypoint, signal handling, errgroup wiring
 - `cmd/backtest/` — replay historical data through trading strategies
+- `cmd/backfill-orders/` — one-shot CLI: backfill stale real order status + resolve markets with results but unresolved orders
 - `internal/pricebands/` — fixed-band price analysis cron (computes missing days, persists to DB)
 - `internal/config/` — YAML config loading (legacy, superseded by app_config table)
 - `internal/kalshiAuth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)

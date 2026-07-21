@@ -16,7 +16,10 @@ When WS disconnects during market settlement, the `settled` lifecycle event is m
 ## Unresolved Market Criteria
 
 - Has orders but `result` is NULL/empty (missed WS settled event), OR
-- Status is `open`/`active` but `close_ts + 30min grace` has elapsed
+- Status is `open`/`active` but `close_ts + 30min grace` has elapsed, OR
+- Has `result` set AND has real orders in non-terminal status (`ResolveRealOrders` never ran — `determined` set result but `settled` event was missed)
+
+Third clause handled in `GetUnresolvedMarkets` (store/markets.go). Catches the bug class where DB already has the result from `determined` or daily scan, but order resolution never fired.
 
 ## FinalizeEventIfNeeded
 
@@ -40,3 +43,4 @@ Extracted from `ApplyLifecycleEvent` "settled" case. Runs post-settlement cleanu
 - Only fetches markets that need reconciliation, not all series. Targeted.
 - Grace period (30min) avoids fetching markets that are just slow to settle.
 - `FinalizeEventIfNeeded` protects events with orders from P6 pruning — original `ApplyLifecycleEvent` doesn't do this. Bug fix.
+- `ResolveRealOrders` / `ResolveSimulatedOrders` run per-market whenever REST returns a result — NOT gated on `finalized[event]` dedup. Tennis events have 2 markets (one per player); gating on event finalization skips the second market. Event-level dedup only applies to `FinalizeEventIfNeeded` (coverage classification, payload pruning).
