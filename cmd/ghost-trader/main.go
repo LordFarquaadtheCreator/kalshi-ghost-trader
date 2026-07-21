@@ -20,7 +20,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -34,6 +33,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/appconfig"
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
+	"github.com/farquaad/kalshi-ghost-trader/internal/dashboardapi"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiAuth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
@@ -198,31 +198,22 @@ func main() {
 	}
 	defer btEngine.Close()
 
-	// Backtest result cache — 5 min TTL
-	btCache := backtest.NewCache(5 * time.Minute)
+	// Backtest result cache — TTL from env config (default 30 min)
+	btCacheTTL := time.Duration(config.Cfg.BacktestCacheTTLMin) * time.Minute
+	btCache := backtest.NewCache(btCacheTTL)
 
 	// pprof + runtime metrics + strategy API server
 	if config.Cfg.MetricsAddr != "" {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/metrics", metricsHandler)
-		mux.HandleFunc("/api/tracked", trackedHandler(tr, btEngine))
-		mux.HandleFunc("/api/strategies", corsHandler(strategyListHandler(btEngine)))
-		mux.HandleFunc("/api/backtest", corsHandler(backtestHandler(btEngine, btCache, log)))
-		mux.HandleFunc("/api/price-bands", corsHandler(priceBandsHandler(btEngine, log)))
-		mux.HandleFunc("/api/ticks", corsHandler(ticksHandler(btEngine, log)))
-		mux.HandleFunc("/api/orders", corsHandler(ordersHandler(btEngine, log)))
-		mux.HandleFunc("/api/order-counts", corsHandler(orderCountsHandler(btEngine, log)))
-		mux.HandleFunc("/api/pending-order-counts", corsHandler(pendingOrderCountsHandler(btEngine, log)))
-		mux.HandleFunc("/api/passed-matches", corsHandler(passedMatchesHandler(btEngine, log)))
-		mux.HandleFunc("/api/real-orders", corsHandler(realOrdersHandler(db, log)))
-		mux.HandleFunc("/api/liquidity-pool", corsHandler(liquidityPoolHandler(db, log)))
-		mux.HandleFunc("/api/strategy-config", corsHandler(strategyConfigHandler(db, log)))
-		mux.HandleFunc("/api/trigger-ranges", corsHandler(triggerRangesHandler(db, log)))
-		mux.HandleFunc("/api/app-config", corsHandler(appConfigHandler(log)))
-		mux.Handle("/debug/pprof/", http.DefaultServeMux)
+		apiSrv := dashboardapi.NewServer(dashboardapi.Deps{
+			Tracker: tr,
+			Engine:  btEngine,
+			Cache:   btCache,
+			DB:      db,
+			Log:     log,
+		})
 		metricsSrv := &http.Server{
 			Addr:         config.Cfg.MetricsAddr,
-			Handler:      corsMiddleware(mux),
+			Handler:      apiSrv.Handler(),
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 120 * time.Second,
 		}
@@ -299,6 +290,22 @@ func main() {
 	// 6. Strategy timer goroutine — drives periodic OnTick calls (close_timer etc)
 	g.Go(func() error {
 		return multi.RunTimer(ctx)
+	})
+
+	// 7. Backtest cache pre-warm — runs all strategies every TTL to keep cache fresh
+	g.Go(func() error {
+		ticker := time.NewTicker(btCacheTTL)
+		defer ticker.Stop()
+		// pre-warm immediately at startup
+		prewarmBacktestCache(btEngine, btCache, log)
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				prewarmBacktestCache(btEngine, btCache, log)
+			}
+		}
 	})
 
 	log.Info("ghost trader running", "scan_interval", time.Duration(config.Cfg.ScanIntervalHours)*time.Hour, "lead_minutes", config.Cfg.TrackLeadMinutes)
