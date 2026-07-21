@@ -141,7 +141,7 @@ func (s *Set1WinnerStrategy) OnPoint(eventTicker string, p store.Point) {
 		MatchTicker:   eventTicker,
 		MarketTicker:  winnerMkt,
 		Action:        "buy",
-		Context:       fmt.Sprintf("set1winner_s2start"),
+		Context:       "set1winner_s2start",
 		ConvProb:      s.cfg.ConvProb,
 		MarketPrice:   price,
 		EdgeCents:     edgeCents,
