@@ -57,6 +57,9 @@ func (d *DB) GetActiveMarkets(ctx context.Context) ([]Market, error) {
 // GetUnresolvedMarkets returns markets that need REST reconciliation:
 //   - Has orders but no result (missed WS settled event)
 //   - Status active/open but close_ts + grace period elapsed (should have settled)
+//   - Has result but orders still in non-terminal status (ResolveRealOrders
+//     never ran — e.g. WS settled event missed, market already has result
+//     from determined event or daily scan)
 //
 // Deduplicated by market_ticker. Ordered by close_ts ascending (oldest first).
 func (d *DB) GetUnresolvedMarkets(ctx context.Context, graceMS int64) ([]Market, error) {
@@ -75,6 +78,15 @@ OR (
     m.status IN ('open', 'active')
     AND m.close_ts > 0
     AND m.close_ts + ? < ?
+)
+OR (
+    m.result IS NOT NULL AND m.result != ''
+    AND EXISTS (
+        SELECT 1 FROM orders o
+        WHERE o.market_ticker = m.market_ticker
+          AND o.is_real = true
+          AND o.order_status NOT IN ('resolved', 'failed', 'canceled')
+    )
 )
 ORDER BY m.close_ts ASC`, graceMS, now).Scan(&markets).Error
 	return markets, err
