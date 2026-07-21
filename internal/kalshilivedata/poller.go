@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
@@ -61,9 +62,10 @@ type matchPoller struct {
 	lastSetsAway   int
 }
 
-// New creates a Kalshi live-data poller. pollInterval of 0 uses default (10s).
+// New creates a Kalshi live-data poller. pollInterval is read from config.Cfg.KalshiLiveDataPollSecs.
 func New(client *kalshiclient.Client, db *store.DB, strat algorithms.Strategy,
-	tw *store.TickWriter, pollInterval time.Duration, log *slog.Logger) *Poller {
+	tw *store.TickWriter, log *slog.Logger) *Poller {
+	pollInterval := time.Duration(config.Cfg.KalshiLiveDataPollSecs) * time.Second
 	if pollInterval <= 0 {
 		pollInterval = 10 * time.Second
 	}

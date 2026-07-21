@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiAuth"
 )
 
@@ -64,10 +65,18 @@ type Client struct {
 	rateLimiter *rateLimiter
 }
 
-// NewClient creates a REST client. signer may be nil for public endpoints.
+// NewClient creates a REST client using config.Cfg for baseURL, timeout, and rate limit.
+// signer may be nil for public endpoints.
+func NewClient(signer *kalshiAuth.Signer, log *slog.Logger) *Client {
+	return NewClientWithConfig(config.Cfg.RESTBaseURL, signer,
+		time.Duration(config.Cfg.HTTPTimeoutSecs)*time.Second, config.Cfg.RateLimitRPS, log)
+}
+
+// NewClientWithConfig creates a REST client with explicit parameters.
+// signer may be nil for public endpoints.
 // httpTimeout of 0 uses defaultHTTPTimeout. rps sets the max requests/sec
 // (0 uses defaultRateLimitRPS).
-func NewClient(baseURL string, signer *kalshiAuth.Signer, httpTimeout time.Duration, rps int, log *slog.Logger) *Client {
+func NewClientWithConfig(baseURL string, signer *kalshiAuth.Signer, httpTimeout time.Duration, rps int, log *slog.Logger) *Client {
 	if log == nil {
 		log = slog.Default()
 	}

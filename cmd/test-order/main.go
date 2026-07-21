@@ -65,13 +65,18 @@ func main() {
 		baseURL = "https://external-api.kalshi.com/trade-api/v2"
 	}
 
-	signer, err := kalshiAuth.NewSignerFromFile(*keyID, *keyPath)
+	pemData, err := os.ReadFile(*keyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read private key file: %v\n", err)
+		os.Exit(1)
+	}
+	signer, err := kalshiAuth.NewSignerFromPEM(*keyID, pemData)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load signer: %v\n", err)
 		os.Exit(1)
 	}
 
-	client := kalshiclient.NewClient(baseURL, signer, 30*time.Second, 15, slog.Default())
+	client := kalshiclient.NewClientWithConfig(baseURL, signer, 30*time.Second, 15, slog.Default())
 
 	type req struct {
 		Ticker                  string `json:"ticker"`

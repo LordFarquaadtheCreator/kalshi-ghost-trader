@@ -33,6 +33,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiAuth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
@@ -88,26 +89,27 @@ type Manager struct {
 	disableSave bool         // skip persisting WS data to DB
 }
 
-// NewManager creates a WebSocket manager. series filters which event_lifecycle
-// messages get stored (lifecycle channel is unfiltered server-side).
+// NewManager creates a WebSocket manager. Config values are read from config.Cfg.
+// series filters which event_lifecycle messages get stored (lifecycle channel is unfiltered server-side).
 // disableSave skips all WS data persistence to DB.
-func NewManager(wsURL string, signer *kalshiAuth.Signer, tw *store.TickWriter, series []string, minBackoff, maxBackoff time.Duration, disableSave bool, log *slog.Logger) *Manager {
+func NewManager(signer *kalshiAuth.Signer, tw *store.TickWriter, log *slog.Logger) *Manager {
+	series := config.Cfg.SeriesTickers
 	sf := make(map[string]bool, len(series))
 	for _, s := range series {
 		sf[s] = true
 	}
 	return &Manager{
-		wsURL:        wsURL,
+		wsURL:        config.Cfg.WSURL,
 		signer:       signer,
 		log:          log,
-		minBackoff:   minBackoff,
-		maxBackoff:   maxBackoff,
+		minBackoff:   time.Duration(config.Cfg.WSMinBackoffSecs) * time.Second,
+		maxBackoff:   time.Duration(config.Cfg.WSMaxBackoffSecs) * time.Second,
 		seriesFilter: sf,
 		subs:         make(map[string]*subInfo),
 		cmdToMarket:  make(map[int64]string),
 		lastSeq:      make(map[int64]int64),
 		tickWriter:   tw,
-		disableSave:  disableSave,
+		disableSave:  config.Cfg.DisableWSDataSave,
 	}
 }
 

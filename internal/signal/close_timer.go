@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -51,39 +52,41 @@ type CloseTimer struct {
 }
 
 // NewCloseTimer creates a close-timer strategy instance.
-func NewCloseTimer(db *store.DB, prices PriceLookup, tw *store.TickWriter,
-	leadMin int, minPrice float64, log *slog.Logger) *CloseTimer {
+// leadMin and minPrice are read from config.Cfg.
+func NewCloseTimer(db *store.DB, prices PriceLookup, tw *store.TickWriter, log *slog.Logger) *CloseTimer {
 	return &CloseTimer{
 		db:         db,
 		prices:     prices,
 		tickWriter: tw,
-		leadMin:    leadMin,
-		minPrice:   minPrice,
+		leadMin:    config.Cfg.CloseTimerLeadMin,
+		minPrice:   config.Cfg.CloseTimerMinPrice,
 		log:        log,
 		fired:      make(map[string]bool),
 	}
 }
 
 // Run polls the DB for markets approaching close and fires orders.
-func (ct *CloseTimer) Run(ctx context.Context, pollSecs int) error {
-	interval := time.Duration(pollSecs) * time.Second
+// Poll interval is read from config.Cfg.CloseTimerPollSecs.
+func (ct *CloseTimer) Run(ctx context.Context) error {
+	interval := time.Duration(config.Cfg.CloseTimerPollSecs) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	ct.scan(ctx, pollSecs)
+	ct.scan(ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			ct.scan(ctx, pollSecs)
+			ct.scan(ctx)
 		}
 	}
 }
 
-func (ct *CloseTimer) scan(ctx context.Context, pollSecs int) {
+func (ct *CloseTimer) scan(ctx context.Context) {
 	// look ahead leadMin + buffer for the query, but only fire when within leadMin
+	pollSecs := config.Cfg.CloseTimerPollSecs
 	lookahead := int64(ct.leadMin*60 + max(pollSecs, 60))
 	markets, err := ct.db.GetMarketsClosingWithin(ctx, lookahead)
 	if err != nil {

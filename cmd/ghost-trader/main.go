@@ -93,7 +93,7 @@ func main() {
 	}
 
 	// Load signer
-	signer, err := kalshiAuth.NewSignerFromFile(config.Cfg.APIKeyID, config.Cfg.PrivateKeyPath)
+	signer, err := kalshiAuth.NewSignerFromFile()
 	if err != nil {
 		log.Error("signer init failed", "err", err)
 		os.Exit(1)
@@ -110,15 +110,13 @@ func main() {
 	tickWriter := db.NewTickWriter(config.Cfg.BatchSize, config.Cfg.FlushTimeoutMS, log)
 
 	// REST client — shared by scanner, livedata pollers, tracker.
-	restClient := kalshiclient.NewClient(config.Cfg.RESTBaseURL, signer,
-		time.Duration(config.Cfg.HTTPTimeoutSecs)*time.Second, config.Cfg.RateLimitRPS, log)
+	restClient := kalshiclient.NewClient(signer, log)
 
 	// Dedicated REST client for order submission. Separate rate-limiter
 	// bucket so 171 livedata pollers (~34 RPS demand) can't starve order
 	// submission and cause context deadline exceeded before HTTP fires.
 	// Orders are infrequent — small dedicated bucket is plenty.
-	orderClient := kalshiclient.NewClient(config.Cfg.RESTBaseURL, signer,
-		time.Duration(config.Cfg.HTTPTimeoutSecs)*time.Second, config.Cfg.RateLimitRPS, log)
+	orderClient := kalshiclient.NewClient(signer, log)
 
 	// Order emission pipeline:
 	//   strategies → paperGuard → paperEmitter (TickWriter, ALWAYS)
@@ -130,13 +128,7 @@ func main() {
 		algorithms.NewTickWriterEmitter(tickWriter), db, log)
 
 	// Paper guard — always active. When quota disabled, passes all through.
-	paperGuard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{}, algorithms.QuotaConfig{
-		Enabled:      config.Cfg.OrderQuotaEnabled,
-		CooldownSecs: config.Cfg.OrderQuotaCooldownSecs,
-		MaxPerSec:    config.Cfg.OrderQuotaMaxPerSec,
-		BudgetTotal:  config.Cfg.OrderQuotaBudgetTotal,
-		BudgetFloor:  config.Cfg.OrderQuotaBudgetFloor,
-	}, log)
+	paperGuard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{}, log)
 	defer paperGuard.Close()
 
 	// Real order pipeline — always constructed. Live on/off controlled by
@@ -160,21 +152,9 @@ func main() {
 		}
 	}
 
-	realEmitter := algorithms.NewKalshiOrderEmitter(orderClient, db, algorithms.RealOrderConfig{
-		Enabled:       true,
-		Bankroll:      config.Cfg.RealBankroll,
-		Environment:   config.Cfg.Environment,
-		TimeInForce:   config.Cfg.RealOrderTimeInForce,
-		OrderTimeoutS: config.Cfg.RealOrderTimeoutS,
-	}, log)
+	realEmitter := algorithms.NewKalshiOrderEmitter(orderClient, db, log)
 
-	realGuard := algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter, algorithms.QuotaConfig{
-		Enabled:      config.Cfg.OrderQuotaEnabled,
-		CooldownSecs: config.Cfg.OrderQuotaCooldownSecs,
-		MaxPerSec:    config.Cfg.OrderQuotaMaxPerSec,
-		BudgetTotal:  config.Cfg.OrderQuotaBudgetTotal,
-		BudgetFloor:  config.Cfg.OrderQuotaBudgetFloor,
-	}, log)
+	realGuard := algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter, log)
 	defer realGuard.Close()
 
 	paperGuard.SetInner(&liveToggleEmitter{inner: realGuard, log: log})
@@ -328,19 +308,14 @@ func main() {
 	// Close timer strategy (buy favorite N min before close)
 	var closeTimer *sigpkg.CloseTimer
 	if config.Cfg.CloseTimerEnabled {
-		closeTimer = sigpkg.NewCloseTimer(db, matchPoint, tickWriter,
-			config.Cfg.CloseTimerLeadMin, config.Cfg.CloseTimerMinPrice, log)
+		closeTimer = sigpkg.NewCloseTimer(db, matchPoint, tickWriter, log)
 		log.Info("close timer strategy enabled",
 			"lead_min", config.Cfg.CloseTimerLeadMin,
 			"min_price", config.Cfg.CloseTimerMinPrice)
 	}
 
 	// WebSocket manager
-	wsMgr := wsclient.NewManager(config.Cfg.WSURL, signer, tickWriter, config.Cfg.SeriesTickers,
-		time.Duration(config.Cfg.WSMinBackoffSecs)*time.Second,
-		time.Duration(config.Cfg.WSMaxBackoffSecs)*time.Second,
-		config.Cfg.DisableWSDataSave,
-		log)
+	wsMgr := wsclient.NewManager(signer, tickWriter, log)
 	wsMgr.SetPriceUpdater(multi)
 
 	// API-Tennis scraper (optional — WebSocket real-time push, no polling delay)
@@ -350,16 +325,14 @@ func main() {
 			log.Error("apitennis_enabled but apitennis_api_key is empty")
 			os.Exit(1)
 		}
-		atScraper = apitennis.New(db, multi, tickWriter, config.Cfg.APITennisAPIKey,
-			config.Cfg.APITennisTimezone, log)
+		atScraper = apitennis.New(db, multi, tickWriter, log)
 		log.Info("apitennis scraper enabled", "timezone", config.Cfg.APITennisTimezone)
 	}
 
 	// Kalshi live-data poller (optional — backup score source via REST polling)
 	var kldPoller *kalshilivedata.Poller
 	if config.Cfg.KalshiLiveDataEnabled {
-		kldPoller = kalshilivedata.New(restClient, db, multi, tickWriter,
-			time.Duration(config.Cfg.KalshiLiveDataPollSecs)*time.Second, log)
+		kldPoller = kalshilivedata.New(restClient, db, multi, tickWriter, log)
 		log.Info("kalshi livedata poller enabled", "poll_secs", config.Cfg.KalshiLiveDataPollSecs)
 	}
 
@@ -384,10 +357,10 @@ func main() {
 	tr.SetMarketRegistrar(multi)
 
 	// Scanner
-	sc := scanner.New(restClient, db, config.Cfg.SeriesTickers, log)
+	sc := scanner.New(restClient, db, log)
 
 	// Scheduler
-	sched := scheduler.New(db, tr, config.Cfg.TrackLeadMinutes, log)
+	sched := scheduler.New(db, tr, log)
 
 	// errgroup for top-level goroutines
 	g, ctx := errgroup.WithContext(ctx)
@@ -455,36 +428,31 @@ func main() {
 	})
 
 	// 3. Scanner loop (daily scan for new matches)
-	scanInterval := time.Duration(config.Cfg.ScanIntervalHours) * time.Hour
 	g.Go(func() error {
-		return sc.RunLoop(ctx, scanInterval)
+		return sc.RunLoop(ctx, time.Duration(config.Cfg.ScanIntervalHours)*time.Hour)
 	})
 
 	// 4. Scheduler loop (poll DB, schedule tracking at occurrence_datetime - lead)
-	schedPoll := time.Duration(config.Cfg.SchedulerPollSecs) * time.Second
 	g.Go(func() error {
-		return sched.Run(ctx, schedPoll)
+		return sched.Run(ctx)
 	})
 
 	// 4b. Reconciler loop (fill settlement gaps via REST for unresolved markets)
 	recon := reconciler.New(restClient, db, log)
-	reconInterval := time.Duration(config.Cfg.ReconcilerIntervalSecs) * time.Second
 	g.Go(func() error {
-		return recon.Run(ctx, reconInterval)
+		return recon.Run(ctx)
 	})
 
 	// 4c. Order backfill loop (refresh stale real order status from REST)
 	obf := orderbackfill.New(restClient, db, log)
-	obfInterval := time.Duration(config.Cfg.OrderBackfillIntervalSecs) * time.Second
 	g.Go(func() error {
-		return obf.Run(ctx, obfInterval)
+		return obf.Run(ctx)
 	})
 
 	// 4d. Schedule checker loop (refresh stale occurrence_ts from REST)
 	schedChk := schedulechecker.New(restClient, db, multi, log)
-	schedChkInterval := time.Duration(config.Cfg.ScheduleCheckerIntervalSecs) * time.Second
 	g.Go(func() error {
-		return schedChk.Run(ctx, schedChkInterval)
+		return schedChk.Run(ctx)
 	})
 
 	// 5. API-Tennis scraper goroutine (optional — WS real-time push)
@@ -506,11 +474,11 @@ func main() {
 	// 6. Close timer strategy goroutine (optional — buys favorites near close)
 	if config.Cfg.CloseTimerEnabled {
 		g.Go(func() error {
-			return closeTimer.Run(ctx, config.Cfg.CloseTimerPollSecs)
+			return closeTimer.Run(ctx)
 		})
 	}
 
-	log.Info("ghost trader running", "scan_interval", scanInterval, "lead_minutes", config.Cfg.TrackLeadMinutes)
+	log.Info("ghost trader running", "scan_interval", time.Duration(config.Cfg.ScanIntervalHours)*time.Hour, "lead_minutes", config.Cfg.TrackLeadMinutes)
 
 	// Wait for shutdown signal or critical failure
 	err = g.Wait()

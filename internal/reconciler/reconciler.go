@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
@@ -34,8 +35,10 @@ func New(client *kalshiclient.Client, db *store.DB, log *slog.Logger) *Reconcile
 	return &Reconciler{client: client, db: db, log: log}
 }
 
-// Run polls for unresolved markets at the given interval. Blocks until ctx cancelled.
-func (r *Reconciler) Run(ctx context.Context, interval time.Duration) error {
+// Run polls for unresolved markets. Interval is read from config.Cfg.ReconcilerIntervalSecs.
+// Blocks until ctx cancelled.
+func (r *Reconciler) Run(ctx context.Context) error {
+	interval := time.Duration(config.Cfg.ReconcilerIntervalSecs) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 

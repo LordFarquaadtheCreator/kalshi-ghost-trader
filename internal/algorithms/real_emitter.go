@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/liquiditypool"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
@@ -57,7 +58,14 @@ type KalshiOrderEmitter struct {
 	log    *slog.Logger
 }
 
-func NewKalshiOrderEmitter(client *kalshiclient.Client, db *store.DB, cfg RealOrderConfig, log *slog.Logger) *KalshiOrderEmitter {
+func NewKalshiOrderEmitter(client *kalshiclient.Client, db *store.DB, log *slog.Logger) *KalshiOrderEmitter {
+	cfg := RealOrderConfig{
+		Enabled:       true,
+		Bankroll:      config.Cfg.RealBankroll,
+		Environment:   config.Cfg.Environment,
+		TimeInForce:   config.Cfg.RealOrderTimeInForce,
+		OrderTimeoutS: config.Cfg.RealOrderTimeoutS,
+	}
 	if cfg.Bankroll <= 0 {
 		cfg.Bankroll = 1000
 	}

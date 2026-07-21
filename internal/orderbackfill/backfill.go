@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
@@ -30,8 +31,10 @@ func New(client *kalshiclient.Client, db *store.DB, log *slog.Logger) *Backfill 
 	return &Backfill{client: client, db: db, log: log}
 }
 
-// Run polls for unresolved real orders at the given interval. Blocks until ctx cancelled.
-func (b *Backfill) Run(ctx context.Context, interval time.Duration) error {
+// Run polls for unresolved real orders. Interval is read from config.Cfg.OrderBackfillIntervalSecs.
+// Blocks until ctx cancelled.
+func (b *Backfill) Run(ctx context.Context) error {
+	interval := time.Duration(config.Cfg.OrderBackfillIntervalSecs) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
