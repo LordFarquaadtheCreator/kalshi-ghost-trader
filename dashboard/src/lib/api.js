@@ -186,7 +186,8 @@ export const api = {
     const url = strategy
       ? `${GHOST_TRADER_URL}/api/trigger-ranges?strategy=${encodeURIComponent(strategy)}`
       : `${GHOST_TRADER_URL}/api/trigger-ranges`;
-    return cachedFetch(url, TTL.strategies);
+    // Bypass cache — user-editable config, must reflect PUT changes immediately.
+    return rawFetch(url);
   },
 
   async replaceTriggerRanges(/** @type {string} */ strategy, /** @type {Array<{min_price: number, max_price: number, source?: string, enabled?: boolean}>} */ ranges) {
