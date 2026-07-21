@@ -5,7 +5,7 @@
 environment: demo
 kalshi_api_key_id: "00000000-0000-0000-0000-000000000000"
 kalshi_private_key_path: /path/to/demo_key.pem
-db_path: kalshi_tennis.db
+db_dsn: "host=127.0.0.1 user=kalshi password=kalshi_dev dbname=kalshi_tennis port=5432 sslmode=disable"
 metrics_addr: "127.0.0.1:6060"
 apitennis_api_key: ""
 disable_ws_data_save: false

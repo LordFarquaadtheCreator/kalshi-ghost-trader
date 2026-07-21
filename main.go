@@ -72,7 +72,7 @@ func main() {
 		log.Error("app config load failed", "err", err)
 		os.Exit(1)
 	}
-	db, err := store.New(ctx, appCfg.DBPath, log)
+	db, err := store.New(ctx, appCfg.DBDSN, log)
 	if err != nil {
 		log.Error("store init failed", "err", err)
 		os.Exit(1)
@@ -90,7 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("config loaded", "env", config.Cfg.Environment, "db", config.Cfg.DBPath,
+	log.Info("config loaded", "env", config.Cfg.Environment, "db", config.Cfg.DBDSN,
 		"series_count", len(config.Cfg.SeriesTickers),
 		"paper_bankroll", config.Cfg.PaperBankroll,
 		"real_bankroll", config.Cfg.RealBankroll, "kelly", config.Cfg.KellyFraction)

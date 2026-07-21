@@ -23,29 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_points_fs_match ON points(fs_match_id);
 
 CREATE INDEX IF NOT EXISTS idx_trigger_ranges_strategy ON strategy_trigger_ranges(strategy);
 
-CREATE INDEX IF NOT EXISTS idx_orders_real ON orders(is_real) WHERE is_real = 1;
+CREATE INDEX IF NOT EXISTS idx_orders_real ON orders(is_real) WHERE is_real = true;
 CREATE INDEX IF NOT EXISTS idx_orders_ts_id ON orders(ts DESC, id DESC);
 
--- Flattened cascade triggers. Delete child rows directly instead of relying
--- on recursive trigger chaining (which requires connection-level PRAGMA).
--- Deletes happen from events outward — markets fire their own cleanup first,
--- then events cleans up everything else in one pass.
-CREATE TRIGGER IF NOT EXISTS trg_markets_delete_cascade
-AFTER DELETE ON markets
-BEGIN
-    DELETE FROM ticks WHERE market_ticker = OLD.market_ticker;
-    DELETE FROM orderbook_events WHERE market_ticker = OLD.market_ticker;
-    DELETE FROM lifecycle_events WHERE market_ticker = OLD.market_ticker;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_events_delete_cascade
-AFTER DELETE ON events
-BEGIN
-    -- Delete markets first so trg_markets_delete_cascade fires (non-recursive, single-hop)
-    DELETE FROM markets WHERE event_ticker = OLD.event_ticker;
-    -- Direct child tables not reachable via markets
-    DELETE FROM event_lifecycle_events WHERE event_ticker = OLD.event_ticker;
-    DELETE FROM orders WHERE match_ticker = OLD.event_ticker;
-    DELETE FROM fired_events WHERE event_ticker = OLD.event_ticker;
-    DELETE FROM points WHERE match_ticker = OLD.event_ticker;
-END;
+-- Cascade triggers are created in store.go Migrate() using PL/pgSQL.

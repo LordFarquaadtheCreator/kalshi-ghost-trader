@@ -26,7 +26,7 @@ func (d *DB) ApplyLifecycleEvent(ctx context.Context, le LifecycleEvent) error {
 		return d.db.WithContext(ctx).Exec(`
 UPDATE markets SET status='active',
     open_ts=CASE WHEN ?!=0 THEN ? ELSE open_ts END,
-    is_deactivated=0,
+    is_deactivated=false,
     last_updated_ts=?
 WHERE market_ticker=?`,
 			le.OpenTS, le.OpenTS, now, le.MarketTicker).Error

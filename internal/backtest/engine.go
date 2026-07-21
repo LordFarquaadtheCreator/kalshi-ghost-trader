@@ -16,7 +16,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
-	"github.com/glebarez/sqlite"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -114,11 +114,10 @@ type TickVolume struct {
 	DollarVolume float64
 }
 
-// NewEngine creates a backtest engine from a read-only SQLite DB.
-// Reads DB path from the global config.Cfg.
+// NewEngine creates a backtest engine from a Postgres DB.
+// Reads DSN from the global config.Cfg.
 func NewEngine(log *slog.Logger) (*Engine, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", config.Cfg.DBPath)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(config.Cfg.DBDSN), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}

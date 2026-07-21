@@ -1,8 +1,8 @@
 package store
 
-// allModels is the complete list of table structs managed by AutoMigrate.
+// AllModels is the complete list of table structs managed by AutoMigrate.
 // Add new tables here — Migrate() iterates this slice.
-var allModels = []any{
+var AllModels = []any{
 	&Event{}, &Market{}, &Tick{}, &OrderbookEvent{},
 	&LifecycleEvent{}, &EventLifecycleEvent{}, &Order{},
 	&ScanRun{}, &FiredEvent{}, &Point{}, &KalshiScore{},

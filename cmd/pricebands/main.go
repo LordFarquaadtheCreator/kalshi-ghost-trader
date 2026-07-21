@@ -114,7 +114,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "appconfig load: %v\n", err)
 		os.Exit(1)
 	}
-	db, err := store.New(context.Background(), appCfg.DBPath, log)
+	db, err := store.New(context.Background(), appCfg.DBDSN, log)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "store init: %v\n", err)
 		os.Exit(1)

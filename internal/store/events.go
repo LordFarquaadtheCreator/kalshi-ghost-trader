@@ -68,17 +68,17 @@ func (d *DB) SetCoverage(ctx context.Context, eventTicker string) error {
 UPDATE events SET coverage = (
     SELECT CASE
         WHEN COALESCE((SELECT COUNT(*) FROM ticks t JOIN markets m ON t.market_ticker = m.market_ticker
-             WHERE m.event_ticker = ?1 AND m.result = 'yes'
-             AND t.ts >= (SELECT close_ts - 300000 FROM markets WHERE event_ticker = ?1 AND result = 'yes' LIMIT 1)), 0) >= 100
+             WHERE m.event_ticker = $1 AND m.result = 'yes'
+             AND t.ts >= (SELECT close_ts - 300000 FROM markets WHERE event_ticker = $1 AND result = 'yes' LIMIT 1)), 0) >= 100
          AND COALESCE((SELECT COALESCE(MAX(ts)-MIN(ts), 0) FROM ticks t JOIN markets m ON t.market_ticker = m.market_ticker
-             WHERE m.event_ticker = ?1 AND m.result = 'yes'
-             AND t.ts >= (SELECT close_ts - 300000 FROM markets WHERE event_ticker = ?1 AND result = 'yes' LIMIT 1)), 0) >= 290000
+             WHERE m.event_ticker = $1 AND m.result = 'yes'
+             AND t.ts >= (SELECT close_ts - 300000 FROM markets WHERE event_ticker = $1 AND result = 'yes' LIMIT 1)), 0) >= 290000
             THEN 'full'
-        WHEN EXISTS (SELECT 1 FROM ticks t JOIN markets m ON t.market_ticker = m.market_ticker WHERE m.event_ticker = ?1)
+        WHEN EXISTS (SELECT 1 FROM ticks t JOIN markets m ON t.market_ticker = m.market_ticker WHERE m.event_ticker = $1)
             THEN 'low_freq'
         ELSE 'none'
     END
-) WHERE event_ticker = ?1`, eventTicker).Error
+) WHERE event_ticker = $1`, eventTicker).Error
 }
 
 // DropOrphanPayloads nulls the raw payload column for settled events whose

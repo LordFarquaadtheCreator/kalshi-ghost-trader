@@ -25,7 +25,7 @@ type EnvConfig struct {
 	Environment         string `yaml:"environment"`             // "demo" or "prod"
 	APIKeyID            string `yaml:"kalshi_api_key_id"`       // Kalshi API key ID
 	PrivateKeyPath      string `yaml:"kalshi_private_key_path"` // path to RSA PEM private key
-	DBPath              string `yaml:"db_path"`                 // SQLite database path
+	DBDSN               string `yaml:"db_dsn"`                  // PostgreSQL DSN
 	MetricsAddr         string `yaml:"metrics_addr"`            // metrics/pprof bind address (e.g. "127.0.0.1:6060")
 	APITennisAPIKey     string `yaml:"apitennis_api_key"`       // API-Tennis external API key
 	DisableWSDataSave   bool   `yaml:"disable_ws_data_save"`    // skip persisting Kalshi WS data to DB
@@ -74,8 +74,8 @@ func (c *EnvConfig) validate(path string) error {
 	if c.WSURL == "" {
 		return fmt.Errorf("ws_url is required in %s", path)
 	}
-	if c.DBPath == "" {
-		return fmt.Errorf("db_path is required in %s", path)
+	if c.DBDSN == "" {
+		return fmt.Errorf("db_dsn is required in %s", path)
 	}
 	if c.MetricsAddr == "" {
 		return fmt.Errorf("metrics_addr is required in %s", path)

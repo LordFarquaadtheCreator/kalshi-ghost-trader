@@ -21,9 +21,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
+	"github.com/farquaad/kalshi-ghost-trader/internal/appconfig"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -197,7 +198,6 @@ type order struct {
 }
 
 func main() {
-	dbPath := flag.String("db", "kalshi_tennis.db", "path to SQLite DB")
 	strategyName := flag.String("strategy", "all", "strategy to backtest (use 'all' for all strategies)")
 	minPrice := flag.Float64("min-price", 0.0, "skip signals below this market price (0=disabled)")
 	maxPrice := flag.Float64("max-price", 0.0, "skip signals above this market price (0=disabled)")
@@ -231,8 +231,12 @@ func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 	ctx := context.Background()
 
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", *dbPath)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	appCfg, err := appconfig.Load()
+	if err != nil {
+		log.Error("appconfig load", "err", err)
+		os.Exit(1)
+	}
+	db, err := gorm.Open(postgres.Open(appCfg.DBDSN), &gorm.Config{})
 	if err != nil {
 		log.Error("open db", "err", err)
 		os.Exit(1)

@@ -265,7 +265,7 @@ func refundUnfilled(tx *gorm.DB, o *Order, fillCount float64) (int64, int64, err
 	err := tx.Raw(`
 UPDATE liquidity_pool
 SET balance_cents = balance_cents + ?,
-    total_spent_cents = MAX(total_spent_cents - ?, 0),
+    total_spent_cents = GREATEST(total_spent_cents - ?, 0),
     updated_ts = ?
 WHERE id = 1
 RETURNING balance_cents`,
