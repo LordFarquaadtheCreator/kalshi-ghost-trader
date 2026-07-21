@@ -10,3 +10,4 @@ apitennis_api_key: ""
 disable_ws_data_save: false
 rest_base_url: "https://external-api.kalshi.com/trade-api/v2"
 ws_url: "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
+backtest_cache_ttl_min: 30

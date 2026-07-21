@@ -22,15 +22,16 @@ import (
 // EnvConfig holds technical/environment configuration loaded from YAML.
 // These values are read once at startup and never change at runtime.
 type EnvConfig struct {
-	Environment       string `yaml:"environment"`             // "demo" or "prod"
-	APIKeyID          string `yaml:"kalshi_api_key_id"`       // Kalshi API key ID
-	PrivateKeyPath    string `yaml:"kalshi_private_key_path"` // path to RSA PEM private key
-	DBPath            string `yaml:"db_path"`                 // SQLite database path
-	MetricsAddr       string `yaml:"metrics_addr"`            // metrics/pprof bind address (e.g. "127.0.0.1:6060")
-	APITennisAPIKey   string `yaml:"apitennis_api_key"`       // API-Tennis external API key
-	DisableWSDataSave bool   `yaml:"disable_ws_data_save"`    // skip persisting Kalshi WS data to DB
-	RESTBaseURL       string `yaml:"rest_base_url"`           // Kalshi REST API base URL
-	WSURL             string `yaml:"ws_url"`                  // Kalshi WebSocket URL
+	Environment         string `yaml:"environment"`             // "demo" or "prod"
+	APIKeyID            string `yaml:"kalshi_api_key_id"`       // Kalshi API key ID
+	PrivateKeyPath      string `yaml:"kalshi_private_key_path"` // path to RSA PEM private key
+	DBPath              string `yaml:"db_path"`                 // SQLite database path
+	MetricsAddr         string `yaml:"metrics_addr"`            // metrics/pprof bind address (e.g. "127.0.0.1:6060")
+	APITennisAPIKey     string `yaml:"apitennis_api_key"`       // API-Tennis external API key
+	DisableWSDataSave   bool   `yaml:"disable_ws_data_save"`    // skip persisting Kalshi WS data to DB
+	RESTBaseURL         string `yaml:"rest_base_url"`           // Kalshi REST API base URL
+	WSURL               string `yaml:"ws_url"`                  // Kalshi WebSocket URL
+	BacktestCacheTTLMin int    `yaml:"backtest_cache_ttl_min"`  // backtest cache TTL in minutes (default 30)
 }
 
 // Load reads the appropriate YAML config file based on APP_ENV.
@@ -74,10 +75,13 @@ func (c *EnvConfig) validate(path string) error {
 		return fmt.Errorf("ws_url is required in %s", path)
 	}
 	if c.DBPath == "" {
-		c.DBPath = "kalshi_tennis.db"
+		return fmt.Errorf("db_path is required in %s", path)
 	}
 	if c.MetricsAddr == "" {
-		c.MetricsAddr = "127.0.0.1:6060"
+		return fmt.Errorf("metrics_addr is required in %s", path)
+	}
+	if c.BacktestCacheTTLMin == 0 {
+		return fmt.Errorf("backtest_cache_ttl_min is required in %s (suggested: 30)", path)
 	}
 	return nil
 }

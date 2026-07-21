@@ -347,3 +347,18 @@ func (e *liveToggleEmitter) EmitOrder(o store.Order) bool {
 	}
 	return e.inner.EmitOrder(o)
 }
+
+// prewarmBacktestCache runs all strategies at minPrice=0 and populates the cache
+// so dashboard requests hit warm entries instead of computing on-demand.
+func prewarmBacktestCache(e *backtest.Engine, cache *backtest.Cache, log *slog.Logger) {
+	start := time.Now()
+	results, err := e.RunAll(0.0)
+	if err != nil {
+		log.Error("cache prewarm failed", "err", err)
+		return
+	}
+	for _, res := range results {
+		cache.Put(res.Name, 0.0, res)
+	}
+	log.Info("cache prewarm complete", "strategies", len(results), "elapsed", time.Since(start).Round(time.Millisecond))
+}
