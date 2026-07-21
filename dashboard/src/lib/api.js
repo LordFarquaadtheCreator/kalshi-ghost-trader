@@ -156,6 +156,10 @@ export const api = {
     return cachedFetch(`${STRATEGY_API_URL}/api/price-bands?${params}`, TTL.priceBands);
   },
 
+  async getPriceBandsSnapshot() {
+    return cachedFetch(`${GHOST_TRADER_URL}/api/price-bands-snapshot`, 300_000);
+  },
+
   async getRealOrders() {
     return cachedFetch(`${GHOST_TRADER_URL}/api/real-orders`, TTL.orders);
   },
