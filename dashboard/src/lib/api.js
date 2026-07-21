@@ -141,9 +141,14 @@ export const api = {
     return cachedFetch(`${STRATEGY_API_URL}/api/strategies`, TTL.strategies);
   },
 
-  async runBacktest(/** @type {string[]} */ strategies, /** @type {number} */ minPrice) {
+  async runBacktest(/** @type {string[]} */ strategies, /** @type {number} */ minPrice, /** @type {boolean} */ force = false) {
     const params = new URLSearchParams({ strategies: strategies.join(',') });
     if (minPrice > 0) params.set('min_price', String(minPrice));
+    if (force) {
+      params.set('force', '1');
+      // bypass client cache on force
+      return fetch(`${STRATEGY_API_URL}/api/backtest?${params}`).then((r) => r.json());
+    }
     return cachedFetch(`${STRATEGY_API_URL}/api/backtest?${params}`, TTL.backtest);
   },
 
