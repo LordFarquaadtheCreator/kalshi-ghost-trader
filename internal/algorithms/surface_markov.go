@@ -313,3 +313,5 @@ func (s *SurfaceMarkovStrategy) String() string {
 }
 
 func (s *SurfaceMarkovStrategy) PreMatchGated() {}
+
+func (s *SurfaceMarkovStrategy) OnTick(ctx context.Context) {}

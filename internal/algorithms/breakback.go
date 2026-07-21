@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -305,3 +306,5 @@ func (s *BreakBackStrategy) String() string {
 // PreMatchGated prevents pre-match price movements from triggering
 // the price-based break-back path before real score data arrives.
 func (s *BreakBackStrategy) PreMatchGated() {}
+
+func (s *BreakBackStrategy) OnTick(ctx context.Context) {}

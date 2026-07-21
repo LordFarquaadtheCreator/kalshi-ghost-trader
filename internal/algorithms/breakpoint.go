@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -280,3 +281,5 @@ func sideName(player int) string {
 	}
 	return "away"
 }
+
+func (s *BreakPointStrategy) OnTick(ctx context.Context) {}

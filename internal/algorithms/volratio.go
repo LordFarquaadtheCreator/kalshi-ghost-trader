@@ -378,3 +378,5 @@ func (s *VolumeRatioStrategy) String() string {
 	return fmt.Sprintf("VolumeRatioStrategy{%s: markets=%d, fired=%d}",
 		s.cfg.Label, len(s.markets), len(s.fired))
 }
+
+func (s *VolumeRatioStrategy) OnTick(ctx context.Context) {}

@@ -521,3 +521,5 @@ func (s *FadeLongshotStrategy) String() string {
 	return fmt.Sprintf("FadeLongshotStrategy{%s: markets=%d, fired=%d}",
 		s.cfg.Label, len(s.markets), len(s.fired))
 }
+
+func (s *FadeLongshotStrategy) OnTick(ctx context.Context) {}

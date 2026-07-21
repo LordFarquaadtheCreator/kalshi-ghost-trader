@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -250,3 +251,5 @@ func (s *ConvexPoolStrategy) getSetsAway(eventTicker string) int {
 func (s *ConvexPoolStrategy) String() string {
 	return fmt.Sprintf("ConvexPoolStrategy{markets=%d}", len(s.markets))
 }
+
+func (s *ConvexPoolStrategy) OnTick(ctx context.Context) {}

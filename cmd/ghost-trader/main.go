@@ -42,8 +42,8 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
 	"github.com/farquaad/kalshi-ghost-trader/internal/schedulechecker"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scheduler"
-	sigpkg "github.com/farquaad/kalshi-ghost-trader/internal/signal"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
+	"github.com/farquaad/kalshi-ghost-trader/internal/strategies"
 	"github.com/farquaad/kalshi-ghost-trader/internal/tracker"
 	wsclient "github.com/farquaad/kalshi-ghost-trader/internal/ws"
 )
@@ -119,17 +119,17 @@ func main() {
 	orderClient := kalshiclient.NewClient(signer, log)
 
 	// Order emission pipeline:
-	//   strategies → paperGuard → paperEmitter (TickWriter, ALWAYS)
+	//   strategies → paperQuotaGuard → paperEmitter (TickWriter, ALWAYS)
 	//                    ↓ (inner, if paper quota approved)
-	//                 realGuard → KalshiOrderEmitter (if real_trading_enabled)
+	//                 realQuotaGuard → KalshiOrderEmitter (if real_trading_enabled)
 	//                    ↓ (if real quota approved)
 	//                 NoopEmitter (if real trading disabled)
 	paperEmitter := algorithms.NewEnrichEmitter(
 		algorithms.NewTickWriterEmitter(tickWriter), db, log)
 
-	// Paper guard — always active. When quota disabled, passes all through.
-	paperGuard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{}, log)
-	defer paperGuard.Close()
+	// Paper quota guard — always active. When quota disabled, passes all through.
+	paperQuotaGuard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{}, log)
+	defer paperQuotaGuard.Close()
 
 	// Real order pipeline — always constructed. Live on/off controlled by
 	// real_trading_enabled, checked per EmitOrder via liveToggleEmitter.
@@ -141,165 +141,13 @@ func main() {
 
 	realEmitter := algorithms.NewKalshiOrderEmitter(orderClient, db, log)
 
-	realGuard := algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter, log)
-	defer realGuard.Close()
+	realQuotaGuard := algorithms.NewQuotaGuard(algorithms.NoopEmitter{}, realEmitter, log)
+	defer realQuotaGuard.Close()
 
-	paperGuard.SetInner(&liveToggleEmitter{inner: realGuard, log: log})
+	paperQuotaGuard.SetInner(&liveToggleEmitter{inner: realQuotaGuard, log: log})
 
-	// matchPoint is the primary strategy and also serves as PriceLookup for CloseTimer
-	matchPoint := algorithms.NewMatchPointStrategy(paperGuard, log)
-
-	// FadeLongshot: buy favorite at T-10min before close. Highest Sharpe (1.01).
-	// Created outside factory because it needs DB for live close_ts loading.
-	// All orders are paper trades — TickWriterEmitter writes to orders table, no real execution.
-	fadeLongshot := algorithms.NewFadeLongshotStrategyWithDB(paperGuard, db, log,
-		algorithms.DefaultFadeLongshotConfig())
-
-	noFade := algorithms.NewNoFadeStrategyWithDB(paperGuard, db, log,
-		algorithms.DefaultNoFadeConfig())
-
-	// Multi-strategy runtime: all point-based strategies run simultaneously.
-	// Each strategy's orders are tagged with its name in the orders table.
-	multi := algorithms.NewMultiStrategyFromFactories(paperGuard, log, map[string]algorithms.StrategyFactoryFn{
-		"matchpoint": func(e algorithms.OrderEmitter) algorithms.Strategy { return matchPoint },
-		"matchpoint-aggro": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
-				IncludeSetPoints: false,
-				IncludeReturning: true,
-				ServeConvProb:    0.97,
-				ReturnConvProb:   0.89,
-				MinMarketPrice:   0.05,
-				MinEdgeCents:     1,
-				Label:            "matchpoint-aggro",
-			})
-		},
-		"setpoint": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
-				IncludeSetPoints: true,
-				IncludeReturning: true,
-				ServeConvProb:    0.93,
-				ReturnConvProb:   0.89,
-				MinMarketPrice:   0.05,
-				MinEdgeCents:     1,
-				Label:            "setpoint",
-			})
-		},
-		"setpoint-serve": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
-				IncludeSetPoints: true,
-				IncludeReturning: false,
-				ServeConvProb:    0.93,
-				ReturnConvProb:   0.89,
-				MinMarketPrice:   0.05,
-				MinEdgeCents:     1,
-				Label:            "setpoint-serve",
-			})
-		},
-		"setpoint-cheap": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
-				IncludeSetPoints: true,
-				IncludeReturning: true,
-				ServeConvProb:    0.93,
-				ReturnConvProb:   0.89,
-				MaxMarketPrice:   0.50,
-				MinMarketPrice:   0.05,
-				MinEdgeCents:     1,
-				Label:            "setpoint-cheap",
-			})
-		},
-		"fadelongshot": func(e algorithms.OrderEmitter) algorithms.Strategy { return fadeLongshot },
-		"nofade":       func(e algorithms.OrderEmitter) algorithms.Strategy { return noFade },
-		"breakback": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewBreakBackStrategy(e, log, algorithms.DefaultBreakBackConfig())
-		},
-		"setdown": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSetDownStrategy(e, log, algorithms.DefaultSetDownConfig())
-		},
-		"server1530": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewServer1530Strategy(e, log, algorithms.DefaultServer1530Config())
-		},
-		"tiebreak": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewTiebreakStrategy(e, log, algorithms.DefaultTiebreakConfig())
-		},
-		"breakpoint": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewBreakPointStrategy(e, log, algorithms.DefaultBreakPointConfig())
-		},
-		"convexpool": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewConvexPoolStrategy(e, log, algorithms.DefaultConvexPoolConfig())
-		},
-		"comeback040": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewComeback040Strategy(e, log, algorithms.DefaultComeback040Config())
-		},
-		"calibrated-markov": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewCalibratedMarkovStrategyWithDB(e, db, log, algorithms.DefaultCalibratedMarkovConfig())
-		},
-		"cross-arb": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewCrossArbStrategy(e, log, algorithms.DefaultCrossArbConfig())
-		},
-		"tiebreak-server": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewTiebreakServerStrategy(e, log, algorithms.DefaultTiebreakServerConfig())
-		},
-		"set1winner": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSet1WinnerStrategy(e, log, algorithms.DefaultSet1WinnerConfig())
-		},
-		"volratio": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewVolumeRatioStrategyWithDB(e, db, log, algorithms.DefaultVolumeRatioConfig())
-		},
-		"surface-markov": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSurfaceMarkovStrategyWithDB(e, db, log, algorithms.DefaultSurfaceMarkovConfig())
-		},
-		"spike-fade": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSpikeFadeStrategy(e, log, algorithms.DefaultSpikeFadeConfig())
-		},
-		"fadelongshot-itf": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			cfg := algorithms.DefaultFadeLongshotConfig()
-			cfg.Label = "fadelongshot-itf"
-			cfg.SeriesFilter = []string{"KXITFMATCH", "KXITFWMATCH", "KXITFDOUBLES", "KXITFWDOUBLES"}
-			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
-		},
-		"fadelongshot-challenger": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			cfg := algorithms.DefaultFadeLongshotConfig()
-			cfg.Label = "fadelongshot-challenger"
-			cfg.SeriesFilter = []string{"KXATPCHALLENGERMATCH", "KXWTACHALLENGERMATCH"}
-			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
-		},
-		"fadelongshot-atp": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			cfg := algorithms.DefaultFadeLongshotConfig()
-			cfg.Label = "fadelongshot-atp"
-			cfg.SeriesFilter = []string{"KXATPMATCH", "KXATPDOUBLES"}
-			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
-		},
-		"fadelongshot-wta": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			cfg := algorithms.DefaultFadeLongshotConfig()
-			cfg.Label = "fadelongshot-wta"
-			cfg.SeriesFilter = []string{"KXWTAMATCH", "KXWTADOUBLES"}
-			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
-		},
-		"fadelongshot-doubles": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			cfg := algorithms.DefaultFadeLongshotConfig()
-			cfg.Label = "fadelongshot-doubles"
-			cfg.SeriesFilter = []string{"KXATPDOUBLES", "KXWTADOUBLES", "KXITFDOUBLES", "KXITFWDOUBLES"}
-			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
-		},
-		"fadelongshot-evening": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			cfg := algorithms.DefaultFadeLongshotConfig()
-			cfg.Label = "fadelongshot-evening"
-			cfg.UTCHourStart = 18
-			cfg.UTCHourEnd = 4
-			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
-		},
-	})
-	multi.SetDB(db)
+	multi := strategies.Build(paperQuotaGuard, db, log)
 	log.Info("multi-strategy runtime initialized", "strategies", multi.String())
-
-	// Close timer strategy (buy favorite N min before close)
-	var closeTimer *sigpkg.CloseTimer
-	if config.Cfg.CloseTimerEnabled {
-		closeTimer = sigpkg.NewCloseTimer(db, matchPoint, tickWriter, log)
-		log.Info("close timer strategy enabled",
-			"lead_min", config.Cfg.CloseTimerLeadMin,
-			"min_price", config.Cfg.CloseTimerMinPrice)
-	}
 
 	// WebSocket manager
 	wsMgr := wsclient.NewManager(signer, tickWriter, log)
@@ -458,12 +306,10 @@ func main() {
 		})
 	}
 
-	// 6. Close timer strategy goroutine (optional — buys favorites near close)
-	if config.Cfg.CloseTimerEnabled {
-		g.Go(func() error {
-			return closeTimer.Run(ctx)
-		})
-	}
+	// 6. Strategy timer goroutine — drives periodic OnTick calls (close_timer etc)
+	g.Go(func() error {
+		return multi.RunTimer(ctx)
+	})
 
 	log.Info("ghost trader running", "scan_interval", time.Duration(config.Cfg.ScanIntervalHours)*time.Hour, "lead_minutes", config.Cfg.TrackLeadMinutes)
 
@@ -480,7 +326,7 @@ func main() {
 
 // liveToggleEmitter gates the real order pipeline on real_trading_enabled.
 // Checks config.Cfg per EmitOrder call so dashboard flips take effect without restart.
-// Returns false before delegating to inner when flag is off — prevents realGuard
+// Returns false before delegating to inner when flag is off — prevents realQuotaGuard
 // from tracking budget spend on orders that will never submit.
 // Logs each on/off transition for audit.
 type liveToggleEmitter struct {

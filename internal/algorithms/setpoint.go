@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -362,3 +363,5 @@ func (s *SetPointStrategy) String() string {
 	return fmt.Sprintf("SetPointStrategy{%s: markets=%d, prices=%d, states=%d}",
 		s.cfg.Label, len(s.markets), len(s.prices), len(s.matchStates))
 }
+
+func (s *SetPointStrategy) OnTick(ctx context.Context) {}

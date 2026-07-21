@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -190,3 +191,5 @@ func (s *TiebreakServerStrategy) String() string {
 }
 
 func (s *TiebreakServerStrategy) PreMatchGated() {}
+
+func (s *TiebreakServerStrategy) OnTick(ctx context.Context) {}

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -131,6 +133,30 @@ func (m *MultiStrategyRuntime) DeletePrice(marketTicker string) {
 
 	for _, ns := range m.strategies {
 		ns.Strat.DeletePrice(marketTicker)
+	}
+}
+
+func (m *MultiStrategyRuntime) OnTick(ctx context.Context) {
+	for _, ns := range m.strategies {
+		ns.Strat.OnTick(ctx)
+	}
+}
+
+// RunTimer drives periodic OnTick calls to all strategies.
+// Poll interval is read from config.Cfg.CloseTimerPollSecs.
+func (m *MultiStrategyRuntime) RunTimer(ctx context.Context) error {
+	interval := time.Duration(config.Cfg.CloseTimerPollSecs) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	m.OnTick(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			m.OnTick(ctx)
+		}
 	}
 }
 

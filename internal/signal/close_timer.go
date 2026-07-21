@@ -39,13 +39,14 @@ type PriceLookup = algorithms.PriceLookup
 
 // CloseTimer watches for markets approaching close and fires buy orders
 // on the favorite when its price exceeds the threshold.
+// Implements algorithms.Strategy — OnTick does the periodic scan.
 type CloseTimer struct {
-	db         *store.DB
-	prices     PriceLookup
-	tickWriter *store.TickWriter
-	leadMin    int
-	minPrice   float64
-	log        *slog.Logger
+	db       *store.DB
+	prices   PriceLookup
+	emitter  algorithms.OrderEmitter
+	leadMin  int
+	minPrice float64
+	log      *slog.Logger
 
 	mu    sync.Mutex
 	fired map[string]bool // event_ticker -> order already emitted
@@ -53,38 +54,21 @@ type CloseTimer struct {
 
 // NewCloseTimer creates a close-timer strategy instance.
 // leadMin and minPrice are read from config.Cfg.
-func NewCloseTimer(db *store.DB, prices PriceLookup, tw *store.TickWriter, log *slog.Logger) *CloseTimer {
+func NewCloseTimer(db *store.DB, prices PriceLookup, emitter algorithms.OrderEmitter, log *slog.Logger) *CloseTimer {
 	return &CloseTimer{
-		db:         db,
-		prices:     prices,
-		tickWriter: tw,
-		leadMin:    config.Cfg.CloseTimerLeadMin,
-		minPrice:   config.Cfg.CloseTimerMinPrice,
-		log:        log,
-		fired:      make(map[string]bool),
+		db:       db,
+		prices:   prices,
+		emitter:  emitter,
+		leadMin:  config.Cfg.CloseTimerLeadMin,
+		minPrice: config.Cfg.CloseTimerMinPrice,
+		log:      log,
+		fired:    make(map[string]bool),
 	}
 }
 
-// Run polls the DB for markets approaching close and fires orders.
-// Poll interval is read from config.Cfg.CloseTimerPollSecs.
-func (ct *CloseTimer) Run(ctx context.Context) error {
-	interval := time.Duration(config.Cfg.CloseTimerPollSecs) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	ct.scan(ctx)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			ct.scan(ctx)
-		}
-	}
-}
-
-func (ct *CloseTimer) scan(ctx context.Context) {
+// OnTick is called periodically by MultiStrategyRuntime.
+// Scans DB for markets approaching close and fires orders.
+func (ct *CloseTimer) OnTick(ctx context.Context) {
 	// look ahead leadMin + buffer for the query, but only fire when within leadMin
 	pollSecs := config.Cfg.CloseTimerPollSecs
 	lookahead := int64(ct.leadMin*60 + max(pollSecs, 60))
@@ -205,7 +189,7 @@ func (ct *CloseTimer) scan(ctx context.Context) {
 			Payload:       string(payload),
 		}
 
-		if !ct.tickWriter.IngestOrder(o) {
+		if !ct.emitter.EmitOrder(o) {
 			ct.log.Warn("close timer: order dropped, not marking fired", "event", eventTicker)
 			continue
 		}
@@ -230,6 +214,12 @@ func (ct *CloseTimer) scan(ctx context.Context) {
 			"events_closing", len(byEvent))
 	}
 }
+
+// No-op Strategy methods — CloseTimer is timer-driven, not event-driven.
+func (ct *CloseTimer) OnPrice(string, float64)          {}
+func (ct *CloseTimer) RegisterMarkets(string, []string) {}
+func (ct *CloseTimer) UnregisterMarkets(string)         {}
+func (ct *CloseTimer) DeletePrice(string)               {}
 
 // cleanupFired removes entries for events that are no longer active
 // (not in the current closing set — they've settled or closed).

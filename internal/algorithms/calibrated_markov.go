@@ -351,3 +351,5 @@ func (s *CalibratedMarkovStrategy) String() string {
 }
 
 func (s *CalibratedMarkovStrategy) PreMatchGated() {}
+
+func (s *CalibratedMarkovStrategy) OnTick(ctx context.Context) {}

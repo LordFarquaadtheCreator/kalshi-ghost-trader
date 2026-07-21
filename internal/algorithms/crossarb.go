@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -256,3 +257,5 @@ func (s *CrossArbStrategy) String() string {
 	return fmt.Sprintf("CrossArbStrategy{%s: markets=%d, fired=%d}",
 		s.cfg.Label, len(s.markets), len(s.fired))
 }
+
+func (s *CrossArbStrategy) OnTick(ctx context.Context) {}

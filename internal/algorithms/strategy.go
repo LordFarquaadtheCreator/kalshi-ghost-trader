@@ -39,6 +39,7 @@ type Strategy interface {
 	RegisterMarkets(eventTicker string, marketTickers []string)
 	UnregisterMarkets(eventTicker string)
 	DeletePrice(marketTicker string)
+	OnTick(ctx context.Context)
 }
 
 // ScoreObserver is implemented by strategies that want point-by-point
@@ -107,6 +108,7 @@ func (NoopStrategy) OnPrice(string, float64)          {}
 func (NoopStrategy) RegisterMarkets(string, []string) {}
 func (NoopStrategy) UnregisterMarkets(string)         {}
 func (NoopStrategy) DeletePrice(string)               {}
+func (NoopStrategy) OnTick(context.Context)           {}
 
 // Ensure NoopStrategy satisfies Strategy.
 var _ Strategy = NoopStrategy{}

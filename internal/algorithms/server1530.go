@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -331,3 +332,5 @@ func (s *Server1530Strategy) String() string {
 // PreMatchGated prevents pre-match price movements from triggering
 // the price-based 15-30 path before real score data arrives.
 func (s *Server1530Strategy) PreMatchGated() {}
+
+func (s *Server1530Strategy) OnTick(ctx context.Context) {}
