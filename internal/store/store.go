@@ -56,7 +56,7 @@ func New(ctx context.Context, path string, log *slog.Logger) (*DB, error) {
 		path,
 	)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
+		Logger: logger.Default.LogMode(logger.Info),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -91,9 +91,32 @@ func (d *DB) GormDB() *gorm.DB {
 // Migrate runs schema migration (AutoMigrate + SQL migrations).
 // Must be called once at app startup after New.
 func (d *DB) Migrate() error {
+	// Drop cascade triggers before AutoMigrate — GORM rebuilds tables with
+	// _temp copies, and the triggers reference the original table name,
+	// causing "no such table" errors during the swap.
+	d.db.Exec("DROP TRIGGER IF EXISTS trg_markets_delete_cascade")
+	d.db.Exec("DROP TRIGGER IF EXISTS trg_events_delete_cascade")
+
 	if err := d.db.AutoMigrate(allModels...); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}
+
+	// Recreate cascade triggers after AutoMigrate.
+	d.db.Exec(`CREATE TRIGGER IF NOT EXISTS trg_markets_delete_cascade
+AFTER DELETE ON markets BEGIN
+  DELETE FROM ticks WHERE market_ticker = OLD.market_ticker;
+  DELETE FROM orderbook_events WHERE market_ticker = OLD.market_ticker;
+  DELETE FROM lifecycle_events WHERE market_ticker = OLD.market_ticker;
+END`)
+	d.db.Exec(`CREATE TRIGGER IF NOT EXISTS trg_events_delete_cascade
+AFTER DELETE ON events BEGIN
+  DELETE FROM markets WHERE event_ticker = OLD.event_ticker;
+  DELETE FROM event_lifecycle_events WHERE event_ticker = OLD.event_ticker;
+  DELETE FROM orders WHERE match_ticker = OLD.event_ticker;
+  DELETE FROM fired_events WHERE event_ticker = OLD.event_ticker;
+  DELETE FROM points WHERE match_ticker = OLD.event_ticker;
+END`)
+
 	if err := d.RunAllMigrations(); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
