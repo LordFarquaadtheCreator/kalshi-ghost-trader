@@ -682,21 +682,6 @@ func (e *Engine) RunStrategy(name string, minPrice float64) (*StrategyResult, er
 	}, nil
 }
 
-// PrewarmCache runs all strategies at minPrice=0 and populates the cache
-// so dashboard requests hit warm entries instead of computing on-demand.
-func (e *Engine) PrewarmCache(cache *Cache, log *slog.Logger) {
-	start := time.Now()
-	results, err := e.RunAll(0.0)
-	if err != nil {
-		log.Error("cache prewarm failed", "err", err)
-		return
-	}
-	for _, res := range results {
-		cache.Put(res.Name, 0.0, res)
-	}
-	log.Info("cache prewarm complete", "strategies", len(results), "elapsed", time.Since(start).Round(time.Millisecond))
-}
-
 // RunAll runs all registered strategies and returns their results.
 func (e *Engine) RunAll(minPrice float64) ([]*StrategyResult, error) {
 	names := e.AvailableStrategies()
