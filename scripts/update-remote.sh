@@ -18,7 +18,7 @@ echo "==> Popping stash..."
 ssh "$HOST" "cd $REMOTE_DIR && git stash pop"
 
 echo "==> Building binary..."
-ssh "$HOST" "cd $REMOTE_DIR && go build -o ghost-trader ./cmd/ghost-trader"
+ssh "$HOST" "cd $REMOTE_DIR && mkdir -p bin && go build -o bin/ghost-trader ."
 
 echo "==> Restarting ghost-trader..."
 ssh "$HOST" "sudo -n systemctl restart kalshi-ghost-trader"

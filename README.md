@@ -48,7 +48,7 @@ testing.
 ## Run
 
 ```bash
-go run ./cmd/ghost-trader
+go run .
 ```
 
 Logs go to stdout. Ctrl+C stops cleanly (flushes SQLite, unsubscribes WS).
@@ -172,8 +172,7 @@ Override with `series_tickers` in `config.yaml`.
 ## Architecture
 
 ```
-cmd/ghost-trader/        entrypoint, signal handling, errgroup wiring
-cmd/ghost-trader/metrics.go  runtime metrics + pprof HTTP handlers
+main.go                 entrypoint, signal handling, errgroup wiring
 cmd/backtest/           replay historical data through trading strategies
 internal/config/         YAML config loading
 internal/kalshiAuth/     RSA-PSS-SHA256 request signing

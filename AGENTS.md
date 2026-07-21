@@ -54,6 +54,8 @@ go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
 
 Each package has its own `AGENTS.md` with package-specific gotchas.
 
+`cmd/` contains commands ONLY — executable entrypoints, no library code. Shared logic belongs in `internal/`.
+
 - `main.go` — entrypoint, signal handling, errgroup wiring
 - `cmd/backtest/` — replay historical data through trading strategies
 - `cmd/pricebands/` — price band analysis across all strategies (per-day + aggregate)
