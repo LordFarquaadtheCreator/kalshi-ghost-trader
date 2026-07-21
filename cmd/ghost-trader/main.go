@@ -34,7 +34,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/appconfig"
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
-	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
+	kalshiAuth "github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
 	"github.com/farquaad/kalshi-ghost-trader/internal/liquiditypool"
@@ -68,7 +68,7 @@ func main() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Open SQLite store (need DB path from env config first)
+	// Open store
 	appCfg, err := appconfig.Load()
 	if err != nil {
 		log.Error("app config load failed", "err", err)
@@ -91,19 +91,20 @@ func main() {
 		log.Error("config load failed", "err", err)
 		os.Exit(1)
 	}
+
+	// Load signer
+	signer, err := kalshiAuth.NewSignerFromFile(config.Cfg.APIKeyID, config.Cfg.PrivateKeyPath)
+	if err != nil {
+		log.Error("signer init failed", "err", err)
+		os.Exit(1)
+	}
+
 	algorithms.SetSizingParams(config.Cfg.PaperBankroll, config.Cfg.KellyFraction)
 	algorithms.SetRealBankroll(config.Cfg.RealBankroll)
 	log.Info("config loaded", "env", config.Cfg.Environment, "db", config.Cfg.DBPath,
 		"series_count", len(config.Cfg.SeriesTickers),
 		"paper_bankroll", config.Cfg.PaperBankroll,
 		"real_bankroll", config.Cfg.RealBankroll, "kelly", config.Cfg.KellyFraction)
-
-	// Load signer
-	signer, err := kalshiauth.NewSignerFromFile(config.Cfg.APIKeyID, config.Cfg.PrivateKeyPath)
-	if err != nil {
-		log.Error("signer init failed", "err", err)
-		os.Exit(1)
-	}
 
 	// Tick writer (single writer goroutine for batch inserts)
 	tickWriter := db.NewTickWriter(config.Cfg.BatchSize, config.Cfg.FlushTimeoutMS, log)

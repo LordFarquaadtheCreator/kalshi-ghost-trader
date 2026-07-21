@@ -1,6 +1,6 @@
 // Package kalshiclient implements a REST API client for Kalshi market data endpoints.
 //
-// The Client signs all requests with RSA-PSS-SHA256 via [kalshiauth.Signer],
+// The Client signs all requests with RSA-PSS-SHA256 via [kalshiAuth.Signer],
 // enforces a token-bucket rate limit, and retries on 429 responses with
 // exponential backoff. Market data endpoints are public (no auth required),
 // but all requests are signed for uniformity.
@@ -30,7 +30,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
+	kalshiAuth "github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 )
 
 const (
@@ -58,7 +58,7 @@ const (
 // Includes a token-bucket rate limiter to avoid 429s.
 type Client struct {
 	baseURL     string
-	signer      *kalshiauth.Signer
+	signer      *kalshiAuth.Signer
 	http        *http.Client
 	log         *slog.Logger
 	rateLimiter *rateLimiter
@@ -67,7 +67,7 @@ type Client struct {
 // NewClient creates a REST client. signer may be nil for public endpoints.
 // httpTimeout of 0 uses defaultHTTPTimeout. rps sets the max requests/sec
 // (0 uses defaultRateLimitRPS).
-func NewClient(baseURL string, signer *kalshiauth.Signer, httpTimeout time.Duration, rps int, log *slog.Logger) *Client {
+func NewClient(baseURL string, signer *kalshiAuth.Signer, httpTimeout time.Duration, rps int, log *slog.Logger) *Client {
 	if log == nil {
 		log = slog.Default()
 	}

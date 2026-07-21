@@ -33,7 +33,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
+	kalshiAuth "github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -55,7 +55,7 @@ type PriceUpdater interface {
 // Auto-reconnects with exponential backoff and replays subscriptions.
 type Manager struct {
 	wsURL  string
-	signer *kalshiauth.Signer
+	signer *kalshiAuth.Signer
 	log    *slog.Logger
 
 	minBackoff time.Duration
@@ -91,7 +91,7 @@ type Manager struct {
 // NewManager creates a WebSocket manager. series filters which event_lifecycle
 // messages get stored (lifecycle channel is unfiltered server-side).
 // disableSave skips all WS data persistence to DB.
-func NewManager(wsURL string, signer *kalshiauth.Signer, tw *store.TickWriter, series []string, minBackoff, maxBackoff time.Duration, disableSave bool, log *slog.Logger) *Manager {
+func NewManager(wsURL string, signer *kalshiAuth.Signer, tw *store.TickWriter, series []string, minBackoff, maxBackoff time.Duration, disableSave bool, log *slog.Logger) *Manager {
 	sf := make(map[string]bool, len(series))
 	for _, s := range series {
 		sf[s] = true

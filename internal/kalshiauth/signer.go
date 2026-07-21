@@ -1,4 +1,4 @@
-// Package kalshiauth implements RSA-PSS-SHA256 request signing for the Kalshi API.
+// Package kalshiAuth implements RSA-PSS-SHA256 request signing for the Kalshi API.
 //
 // Kalshi requires three headers on every authenticated request:
 //   - KALSHI-ACCESS-KEY: the key ID from the Kalshi dashboard
@@ -12,7 +12,7 @@
 //
 // Private keys in both PKCS#8 ("PRIVATE KEY") and PKCS#1 ("RSA PRIVATE KEY")
 // PEM formats are supported. Kalshi dashboard exports PKCS#8 by default.
-package kalshiauth
+package kalshiAuth
 
 import (
 	"crypto"

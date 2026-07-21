@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
+	kalshiAuth "github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 )
 
@@ -65,7 +65,7 @@ func main() {
 		baseURL = "https://external-api.kalshi.com/trade-api/v2"
 	}
 
-	signer, err := kalshiauth.NewSignerFromFile(*keyID, *keyPath)
+	signer, err := kalshiAuth.NewSignerFromFile(*keyID, *keyPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load signer: %v\n", err)
 		os.Exit(1)
