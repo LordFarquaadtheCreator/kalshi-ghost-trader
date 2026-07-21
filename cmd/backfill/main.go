@@ -35,6 +35,11 @@ func main() {
 	}
 	defer db.Close()
 
+	if err := db.Migrate(); err != nil {
+		log.Error("schema migration failed", "err", err)
+		os.Exit(1)
+	}
+
 	points, err := db.GetAllPoints(ctx)
 	if err != nil {
 		log.Error("load points", "err", err)

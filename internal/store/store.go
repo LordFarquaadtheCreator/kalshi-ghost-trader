@@ -62,7 +62,7 @@ func New(ctx context.Context, path string, log *slog.Logger) (*DB, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	// Single writer — SQLite serializes writes regardless
+	// Single writer
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, fmt.Errorf("get underlying sql.DB: %w", err)
@@ -70,11 +70,6 @@ func New(ctx context.Context, path string, log *slog.Logger) (*DB, error) {
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
 	sqlDB.SetConnMaxIdleTime(0)
-
-	if err := migrate(ctx, db); err != nil {
-		sqlDB.Close()
-		return nil, err
-	}
 
 	return &DB{db: db, log: log}, nil
 }
@@ -93,94 +88,16 @@ func (d *DB) GormDB() *gorm.DB {
 	return d.db
 }
 
-func migrate(ctx context.Context, db *gorm.DB) error {
-	// AutoMigrate creates tables from struct definitions. Idempotent.
-	if err := db.AutoMigrate(
-		&Event{}, &Market{}, &Tick{}, &OrderbookEvent{},
-		&LifecycleEvent{}, &EventLifecycleEvent{}, &Order{},
-		&ScanRun{}, &FiredEvent{}, &Point{}, &KalshiScore{},
-		&AppConfigKV{}, &LiquidityPool{}, &StrategyConfigEntry{},
-		&TriggerRange{}, &FlashscoreMatch{},
-	); err != nil {
+// Migrate runs schema migration (AutoMigrate + SQL migrations).
+// Must be called once at app startup after New.
+func (d *DB) Migrate() error {
+	if err := d.db.AutoMigrate(allModels...); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}
-
-	// Triggers and custom indexes can't be done via AutoMigrate.
-	// Run the DDL for triggers and indexes only (tables already created above).
-	if err := db.Exec(triggerDDL).Error; err != nil {
-		return fmt.Errorf("migrate triggers: %w", err)
+	if err := d.RunAllMigrations(); err != nil {
+		return fmt.Errorf("run migrations: %w", err)
 	}
-
-	// Add columns to lifecycle_events for pre-existing DBs.
-	if err := addColumnIfMissing(ctx, db, "lifecycle_events", "open_ts", "INTEGER"); err != nil {
-		return fmt.Errorf("migrate open_ts: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "lifecycle_events", "settlement_value", "TEXT"); err != nil {
-		return fmt.Errorf("migrate settlement_value: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "strategy", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return fmt.Errorf("migrate orders.strategy: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "bankroll", "REAL NOT NULL DEFAULT 0"); err != nil {
-		return fmt.Errorf("migrate orders.bankroll: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "kelly_fraction", "REAL NOT NULL DEFAULT 0"); err != nil {
-		return fmt.Errorf("migrate orders.kelly_fraction: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "is_real", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return fmt.Errorf("migrate orders.is_real: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "kalshi_order_id", "TEXT"); err != nil {
-		return fmt.Errorf("migrate orders.kalshi_order_id: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "fill_count", "REAL"); err != nil {
-		return fmt.Errorf("migrate orders.fill_count: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "order_status", "TEXT"); err != nil {
-		return fmt.Errorf("migrate orders.order_status: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "resolved_pnl_cents", "INTEGER"); err != nil {
-		return fmt.Errorf("migrate orders.resolved_pnl_cents: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "pool_balance_before_cents", "INTEGER"); err != nil {
-		return fmt.Errorf("migrate orders.pool_balance_before_cents: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "pool_balance_after_cents", "INTEGER"); err != nil {
-		return fmt.Errorf("migrate orders.pool_balance_after_cents: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "match_title", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return fmt.Errorf("migrate orders.match_title: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "player_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return fmt.Errorf("migrate orders.player_name: %w", err)
-	}
-	if err := addColumnIfMissing(ctx, db, "orders", "unfilled_refunded_cents", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return fmt.Errorf("migrate orders.unfilled_refunded_cents: %w", err)
-	}
-
-	// Create idx_orders_real after is_real column is guaranteed present.
-	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_orders_real ON orders(is_real) WHERE is_real = 1").Error; err != nil {
-		return fmt.Errorf("migrate idx_orders_real: %w", err)
-	}
-	// Keyset pagination index for /api/orders. Idempotent.
-	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_orders_ts_id ON orders(ts DESC, id DESC)").Error; err != nil {
-		return fmt.Errorf("migrate idx_orders_ts_id: %w", err)
-	}
-
 	return nil
-}
-
-// addColumnIfMissing adds a column to a table if it does not already exist.
-// Uses PRAGMA table_info so it does not depend on driver error message format.
-func addColumnIfMissing(ctx context.Context, db *gorm.DB, table, column, decl string) error {
-	var count int64
-	if err := db.Raw(fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = ?", table), column).Scan(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-	return db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl)).Error
 }
 
 // nowMillis returns current time in milliseconds. Centralized for consistency.

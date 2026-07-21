@@ -108,19 +108,19 @@ type OrderbookEvent struct {
 // Point maps a single point-by-point score entry from the points table.
 type Point struct {
 	ID           int64  `gorm:"primaryKey;autoIncrement;column:id"`
-	MatchTicker  string `gorm:"column:match_ticker"`  // Kalshi event_ticker
-	FSMatchID    string `gorm:"column:fs_match_id"`   // FlashScore/API-Tennis match ID
-	TS           int64  `gorm:"column:ts_ms"`         // unix ms (may be 0 if historical)
-	RecvTS       int64  `gorm:"column:recv_ts"`       // when we stored it
-	SetNumber    int    `gorm:"column:set_number"`    // 1-based
-	GameNumber   int    `gorm:"column:game_number"`   // 1-based within set
-	PointNumber  int    `gorm:"column:point_number"`  // 1-based within game
-	Server       int    `gorm:"column:server"`        // 1 = home, 2 = away
-	Scorer       int    `gorm:"column:scorer"`        // 1 = home won point, 2 = away won point
-	HomePoints   string `gorm:"column:home_points"`   // "0", "15", "30", "40", "A"
+	MatchTicker  string `gorm:"column:match_ticker"` // Kalshi event_ticker
+	FSMatchID    string `gorm:"column:fs_match_id"`  // FlashScore/API-Tennis match ID
+	TS           int64  `gorm:"column:ts_ms"`        // unix ms (may be 0 if historical)
+	RecvTS       int64  `gorm:"column:recv_ts"`      // when we stored it
+	SetNumber    int    `gorm:"column:set_number"`   // 1-based
+	GameNumber   int    `gorm:"column:game_number"`  // 1-based within set
+	PointNumber  int    `gorm:"column:point_number"` // 1-based within game
+	Server       int    `gorm:"column:server"`       // 1 = home, 2 = away
+	Scorer       int    `gorm:"column:scorer"`       // 1 = home won point, 2 = away won point
+	HomePoints   string `gorm:"column:home_points"`  // "0", "15", "30", "40", "A"
 	AwayPoints   string `gorm:"column:away_points"`
-	HomeGames    int    `gorm:"column:home_games"`    // games won by home in this set at this point
-	AwayGames    int    `gorm:"column:away_games"`    // games won by away in this set at this point
+	HomeGames    int    `gorm:"column:home_games"`     // games won by home in this set at this point
+	AwayGames    int    `gorm:"column:away_games"`     // games won by away in this set at this point
 	HomeSetGames int    `gorm:"column:home_set_games"` // final games in completed sets before this one
 	AwaySetGames int    `gorm:"column:away_set_games"`
 	IsTiebreak   bool   `gorm:"column:is_tiebreak"`
@@ -206,3 +206,10 @@ type FlashscoreMatch struct {
 
 func (FlashscoreMatch) TableName() string { return "flashscore_matches" }
 
+// SchemaMigration tracks applied SQL migrations.
+type SchemaMigration struct {
+	Name      string `gorm:"primaryKey;column:name"`
+	AppliedAt int64  `gorm:"column:applied_at"`
+}
+
+func (SchemaMigration) TableName() string { return "schema_migrations" }

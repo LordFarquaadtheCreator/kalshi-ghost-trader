@@ -26,6 +26,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatalf("store.New: %v", err)
 	}
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("db.Migrate: %v", err)
+	}
 	tw := db.NewTickWriter(100, 50, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup

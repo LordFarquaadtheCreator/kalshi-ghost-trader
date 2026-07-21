@@ -13,7 +13,9 @@ import (
 
 func main() {
 	gdb, err := gorm.Open(sqlite.Open("/tmp/test_migrate3.db"), &gorm.Config{})
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	gdb.Exec("CREATE TABLE IF NOT EXISTS events (event_ticker TEXT PRIMARY KEY, series_ticker TEXT, title TEXT, sub_title TEXT, competition TEXT, competition_scope TEXT, mutually_exclusive INTEGER, first_seen_ts INTEGER, last_updated_ts INTEGER, coverage TEXT)")
 	gdb.Exec(`CREATE TABLE IF NOT EXISTS markets (
 		market_ticker TEXT PRIMARY KEY,
@@ -34,9 +36,16 @@ func main() {
 	)`)
 	gdb.Exec("INSERT OR IGNORE INTO events VALUES ('E1','S','T','','','',0,0,0,'')")
 	gdb.Exec("INSERT OR IGNORE INTO markets VALUES ('M1','E1','S','P','','active',0,0,0,'',0,'',0,0)")
-	
+
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	_, err = store.New(context.Background(), "/tmp/test_migrate3.db", log)
-	if err != nil { fmt.Println("store.New err:", err); return }
+	db, err := store.New(context.Background(), "/tmp/test_migrate3.db", log)
+	if err != nil {
+		fmt.Println("store.New err:", err)
+		return
+	}
+	if err := db.Migrate(); err != nil {
+		fmt.Println("db.Migrate err:", err)
+		return
+	}
 	fmt.Println("MIGRATE OK (FK in DB + FK tag in struct)")
 }
