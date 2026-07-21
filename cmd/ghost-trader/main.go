@@ -34,7 +34,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/appconfig"
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
-	kalshiAuth "github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
+	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiAuth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
 	"github.com/farquaad/kalshi-ghost-trader/internal/liquiditypool"

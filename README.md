@@ -180,7 +180,7 @@ cmd/validate/            config + connectivity validation tool
 cmd/ws-debug/            WS + REST debug tool
 cmd/backtest/           replay historical data through trading strategies
 internal/config/         YAML config loading
-internal/kalshiauth/     RSA-PSS-SHA256 request signing
+internal/kalshiAuth/     RSA-PSS-SHA256 request signing
 internal/kalshiclient/   REST client (events, markets, pagination, rate limit)
 internal/store/          SQLite (WAL, single writer, batched inserts)
 internal/ws/             WebSocket manager (auto-reconnect, re-subscribe)

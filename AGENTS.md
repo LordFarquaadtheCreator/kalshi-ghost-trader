@@ -57,7 +57,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `cmd/backfill/` — backfill historical data
 - `cmd/test-order/` — manual test order CLI tool (single IOC bid to Kalshi)
 - `internal/config/` — YAML config loading (legacy, superseded by app_config table)
-- `internal/kalshiauth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
+- `internal/kalshiAuth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
 - `internal/kalshiclient/` — REST client (events, markets, pagination, rate limit)
 - `internal/store/` — SQLite (WAL, single writer, batched tick inserts, app_config, orders, liquidity_pool)
 - `internal/ws/` — WebSocket manager (auto-reconnect, re-subscribe, dispatch)

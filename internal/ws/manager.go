@@ -33,7 +33,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	kalshiAuth "github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
+	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiAuth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 

@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	kalshiAuth "github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
+	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiAuth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 )
 
