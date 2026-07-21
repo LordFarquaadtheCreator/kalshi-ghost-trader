@@ -1,7 +1,7 @@
 openapi: 3.0.0
 info:
   title: Kalshi Trade API Manual Endpoints
-  version: 3.24.0
+  version: 3.25.0
   description: >-
     Manually defined OpenAPI spec for endpoints being migrated to spec-first
     approach
@@ -1626,6 +1626,40 @@ paths:
                 $ref: '#/components/schemas/GetBalanceResponse'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /portfolio/intra_exchange_instance_transfer:
+    post:
+      operationId: IntraExchangeInstanceTransfer
+      summary: Intra Account Transfer
+      description: >-
+        Endpoint for transferring funds within the same account. This endpoint
+        is currently not available.
+      tags:
+        - portfolio
+      security:
+        - kalshiAccessKey: []
+          kalshiAccessSignature: []
+          kalshiAccessTimestamp: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntraExchangeInstanceTransferRequest'
+      responses:
+        '200':
+          description: Transfer request accepted. The transfer is processed asynchronously.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntraExchangeInstanceTransferResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
         '500':
           $ref: '#/components/responses/InternalServerError'
   /portfolio/subaccounts:
@@ -6083,6 +6117,7 @@ components:
           allOf:
             - $ref: '#/components/schemas/ExchangeIndex'
           x-go-type-skip-optional-pointer: true
+          x-omitempty: false
     Milestone:
       type: object
       required:
@@ -6729,6 +6764,7 @@ components:
           allOf:
             - $ref: '#/components/schemas/ExchangeIndex'
           x-go-type-skip-optional-pointer: true
+          x-omitempty: false
     GetOrderGroupsResponse:
       type: object
       properties:
@@ -6762,6 +6798,7 @@ components:
           allOf:
             - $ref: '#/components/schemas/ExchangeIndex'
           x-go-type-skip-optional-pointer: true
+          x-omitempty: false
     CreateOrderGroupRequest:
       type: object
       properties:
@@ -6841,6 +6878,7 @@ components:
           allOf:
             - $ref: '#/components/schemas/ExchangeIndex'
           x-go-type-skip-optional-pointer: true
+          x-omitempty: false
     GetCommunicationsIDResponse:
       type: object
       required:
@@ -8910,6 +8948,7 @@ components:
           allOf:
             - $ref: '#/components/schemas/ExchangeIndex'
           x-go-type-skip-optional-pointer: true
+          x-omitempty: false
     Series:
       type: object
       required:
@@ -9418,6 +9457,7 @@ components:
           allOf:
             - $ref: '#/components/schemas/ExchangeIndex'
           x-go-type-skip-optional-pointer: true
+          x-omitempty: false
 tags:
   - name: api-keys
     description: API key management endpoints
