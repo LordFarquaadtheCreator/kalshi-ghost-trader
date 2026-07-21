@@ -11,7 +11,6 @@ Compiled binaries go in `bin/` (gitignored). Never leave binaries in repo root.
 mkdir -p bin
 go build -o bin/ghost-trader .
 go build -o bin/backtest ./cmd/backtest
-go build -o bin/pricebands ./cmd/pricebands
 go vet ./...
 ```
 
@@ -58,7 +57,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 
 - `main.go` — entrypoint, signal handling, errgroup wiring
 - `cmd/backtest/` — replay historical data through trading strategies
-- `cmd/pricebands/` — price band analysis across all strategies (per-day + aggregate)
+- `internal/pricebands/` — fixed-band price analysis cron (computes missing days, persists to DB)
 - `internal/config/` — YAML config loading (legacy, superseded by app_config table)
 - `internal/kalshiAuth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
 - `internal/kalshiclient/` — REST client (events, markets, pagination, rate limit)
@@ -85,6 +84,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - One API-Tennis goroutine (if enabled): WS read loop, per-match dispatch
 - One goroutine per active match (if Kalshi live-data enabled): REST poll loop
 - One goroutine per scheduled match: waits until start time, then subscribes
+- One pricebands cron goroutine: computes missing days hourly, persists to price_band_results
 
 ## SQLite Schema
 
@@ -238,20 +238,11 @@ Must implement `replayStrategy` (Strategy + `SetReplayTime` + `OnPriceAt`).
 
 ## Price Band Analysis
 
-Run all strategies, bucket orders into fixed price bands, output per-day +
-aggregate tables to `pricebands_output.txt`.
+Cron goroutine in `internal/pricebands/` runs hourly, computes days not
+yet in `price_band_results` table, persists per-day per-strategy per-band
+aggregates. Dashboard `/price-bands` page displays results with charts + filters.
 
-```bash
-go run ./cmd/pricebands
-# Filter to single day:
-go run ./cmd/pricebands -day 2026-07-17
-# Custom output path:
-go run ./cmd/pricebands -out /tmp/bands.txt
-```
-
-Outputs 4 sections per day: per-strategy-per-band, cross-strategy band totals,
-best bands (N≥5, WR≥55%), and a cross-day tier-1 summary excluding
-fadelongshot*/nofade. Run on mint when DB is large.
+Only missing days are computed — most runs find 0-1 new days.
 
 ## Verification
 

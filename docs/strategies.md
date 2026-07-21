@@ -185,11 +185,9 @@ Result cache: 5min TTL.
 
 ## Price Band Analysis
 
-```bash
-go run ./cmd/pricebands
-go run ./cmd/pricebands -day 2026-07-17
-```
+Cron goroutine in `internal/pricebands/` runs hourly, computes days not
+yet in `price_band_results` table. Dashboard `/price-bands` page displays
+results with charts + filters.
 
-Buckets orders into fixed price bands. Outputs 4 sections per day:
-per-strategy-per-band, cross-strategy band totals, best bands (N≥5, WR≥55%),
-and cross-day tier-1 summary excluding fadelongshot*/nofade.
+Buckets orders into 12 fixed price bands. Per-day per-strategy per-band
+aggregates: N, wins, win rate, net P&L, ROI, avg edge.
