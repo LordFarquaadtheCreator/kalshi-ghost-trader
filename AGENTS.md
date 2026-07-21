@@ -143,7 +143,7 @@ ssh mint 'sudo -n systemctl restart kalshi-ghost-trader kalshi-dashboard'
 
 ```bash
 # Build locally, scp artifacts, sync service file, restart
-./deploy/update-remote.sh mint main
+./deploy/deploy.sh mint main
 ```
 
 If schema changed, run migration first.
