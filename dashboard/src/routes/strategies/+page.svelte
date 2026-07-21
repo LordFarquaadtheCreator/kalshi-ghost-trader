@@ -96,12 +96,12 @@
     }
   }
 
-  async function runBacktest() {
+  async function runBacktest(/** @type {boolean} */ force = false) {
     if (selected.size === 0) return;
     loading = true;
     error = null;
     try {
-      const data = await api.runBacktest([...selected], 0);
+      const data = await api.runBacktest([...selected], 0, force);
       results = {};
       for (const r of data.results || []) {
         results[r.name] = r;
@@ -550,7 +550,7 @@
 
       <div class="filter-group">
         <h3>Backtest</h3>
-        <button class="run-btn" onclick={runBacktest} disabled={loading || selected.size === 0}>
+        <button class="run-btn" onclick={() => runBacktest(true)} disabled={loading || selected.size === 0}>
           {loading ? 'Running...' : 'Recompute'}
         </button>
       </div>

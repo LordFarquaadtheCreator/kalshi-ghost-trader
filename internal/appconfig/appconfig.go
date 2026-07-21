@@ -31,7 +31,7 @@ type EnvConfig struct {
 	DisableWSDataSave   bool   `yaml:"disable_ws_data_save"`    // skip persisting Kalshi WS data to DB
 	RESTBaseURL         string `yaml:"rest_base_url"`           // Kalshi REST API base URL
 	WSURL               string `yaml:"ws_url"`                  // Kalshi WebSocket URL
-	BacktestCacheTTLMin int    `yaml:"backtest_cache_ttl_min"`  // backtest cache TTL in minutes (default 30)
+	BacktestCacheTTLMin int    `yaml:"backtest_cache_ttl_min"`  // deprecated — backtest now persisted to DB
 }
 
 // Load reads the appropriate YAML config file based on APP_ENV.
@@ -79,9 +79,6 @@ func (c *EnvConfig) validate(path string) error {
 	}
 	if c.MetricsAddr == "" {
 		return fmt.Errorf("metrics_addr is required in %s", path)
-	}
-	if c.BacktestCacheTTLMin == 0 {
-		return fmt.Errorf("backtest_cache_ttl_min is required in %s (suggested: 30)", path)
 	}
 	return nil
 }

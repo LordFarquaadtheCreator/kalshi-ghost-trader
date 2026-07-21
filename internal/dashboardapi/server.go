@@ -23,7 +23,6 @@ import (
 type Deps struct {
 	Tracker *tracker.Tracker
 	Engine  *backtest.Engine
-	Cache   *backtest.Cache
 	DB      *store.DB
 	Log     *slog.Logger
 }
@@ -44,6 +43,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/strategies", corsHandler(s.strategyListHandler))
 	mux.HandleFunc("/api/backtest", corsHandler(s.backtestHandler))
 	mux.HandleFunc("/api/price-bands", corsHandler(s.priceBandsHandler))
+	mux.HandleFunc("/api/price-bands-snapshot", corsHandler(s.priceBandsSnapshotHandler))
 	mux.HandleFunc("/api/ticks", corsHandler(s.ticksHandler))
 	mux.HandleFunc("/api/orders", corsHandler(s.ordersHandler))
 	mux.HandleFunc("/api/order-counts", corsHandler(s.orderCountsHandler))
@@ -142,10 +142,7 @@ func (s *Server) backtestHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	strategiesParam := r.URL.Query().Get("strategies")
-	minPrice := 0.0
-	if v := r.URL.Query().Get("min_price"); v != "" {
-		fmt.Sscanf(v, "%f", &minPrice)
-	}
+	force := r.URL.Query().Get("force") == "1"
 
 	var selected []string
 	if strategiesParam == "" || strategiesParam == "all" {
@@ -157,19 +154,50 @@ func (s *Server) backtestHandler(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Force recompute: run all strategies, persist to DB, return fresh results
+	if force {
+		if err := backtest.ForceRecompute(s.deps.Engine, s.deps.DB, s.deps.Log); err != nil {
+			s.deps.Log.Error("force recompute", "err", err)
+		}
+	}
+
+	// Read from DB
+	rows, err := s.deps.DB.GetAllBacktestResults()
+	if err != nil {
+		s.deps.Log.Error("get backtest results", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	// Build lookup by strategy name
+	rowMap := make(map[string]*store.BacktestResultRow, len(rows))
+	for i := range rows {
+		rowMap[rows[i].Strategy] = &rows[i]
+	}
+
 	results := make([]*backtest.StrategyResult, 0, len(selected))
 	for _, name := range selected {
-		if cached := s.deps.Cache.Get(name, minPrice); cached != nil {
-			results = append(results, cached)
+		row, ok := rowMap[name]
+		if !ok {
 			continue
 		}
-		res, err := s.deps.Engine.RunStrategy(name, minPrice)
-		if err != nil {
-			s.deps.Log.Error("run strategy", "name", name, "err", err)
+		var summary backtest.Summary
+		if err := json.Unmarshal([]byte(row.SummaryJSON), &summary); err != nil {
+			s.deps.Log.Error("unmarshal summary", "strategy", name, "err", err)
 			continue
 		}
-		s.deps.Cache.Put(name, minPrice, res)
-		results = append(results, res)
+		var orders []backtest.Order
+		if err := json.Unmarshal([]byte(row.OrdersJSON), &orders); err != nil {
+			s.deps.Log.Error("unmarshal orders", "strategy", name, "err", err)
+			continue
+		}
+		results = append(results, &backtest.StrategyResult{
+			Name:       name,
+			Orders:     orders,
+			MatchCount: row.MatchCount,
+			Summary:    summary,
+		})
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{
@@ -338,6 +366,26 @@ func (s *Server) priceBandsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"metric":  metricName,
 		"results": results,
+	})
+}
+
+func (s *Server) priceBandsSnapshotHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+
+	rows, err := s.deps.DB.GetAllPriceBandResults()
+	if err != nil {
+		s.deps.Log.Error("get price band results", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	runTS, _ := s.deps.DB.GetPriceBandRunTS()
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"run_ts":  runTS,
+		"results": rows,
 	})
 }
 
