@@ -5,6 +5,7 @@
 package algorithms
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -127,4 +128,39 @@ func (e *logEmitter) EmitOrder(o store.Order) bool {
 		e.log.Warn("algorithms: order dropped", "match", o.MatchTicker, "market", o.MarketTicker)
 	}
 	return ok
+}
+
+// enrichEmitter wraps an OrderEmitter and populates PlayerName + MatchTitle
+// on paper orders via DB lookup. Real emitter already does this; paper path
+// bypasses it, leaving fields empty.
+type enrichEmitter struct {
+	inner OrderEmitter
+	db    *store.DB
+	log   *slog.Logger
+}
+
+// NewEnrichEmitter wraps inner with DB-backed player/title enrichment.
+func NewEnrichEmitter(inner OrderEmitter, db *store.DB, log *slog.Logger) OrderEmitter {
+	return &enrichEmitter{inner: inner, db: db, log: log}
+}
+
+func (e *enrichEmitter) EmitOrder(o store.Order) bool {
+	if o.PlayerName == "" || o.MatchTitle == "" {
+		ctx := context.Background()
+		mkt, err := e.db.GetMarket(ctx, o.MarketTicker)
+		if err != nil {
+			e.log.Debug("enrich: market lookup failed",
+				"market", o.MarketTicker, "error", err)
+		} else {
+			if o.PlayerName == "" {
+				o.PlayerName = mkt.PlayerName
+			}
+			if o.MatchTitle == "" {
+				if title, err := e.db.GetEventTitle(ctx, mkt.EventTicker); err == nil {
+					o.MatchTitle = title
+				}
+			}
+		}
+	}
+	return e.inner.EmitOrder(o)
 }
