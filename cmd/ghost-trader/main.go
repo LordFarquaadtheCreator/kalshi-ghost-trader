@@ -102,8 +102,15 @@ func main() {
 	// Tick writer (single writer goroutine for batch inserts)
 	tickWriter := db.NewTickWriter(cfg.BatchSize, cfg.FlushTimeoutMS, log)
 
-	// REST client
+	// REST client — shared by scanner, livedata pollers, tracker.
 	restClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
+		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
+
+	// Dedicated REST client for order submission. Separate rate-limiter
+	// bucket so 171 livedata pollers (~34 RPS demand) can't starve order
+	// submission and cause context deadline exceeded before HTTP fires.
+	// Orders are infrequent — small dedicated bucket is plenty.
+	orderClient := kalshiclient.NewClient(cfg.RESTBaseURL, signer,
 		time.Duration(cfg.HTTPTimeoutSecs)*time.Second, cfg.RateLimitRPS, log)
 
 	// Order emission pipeline:
@@ -145,7 +152,7 @@ func main() {
 		}
 	}
 
-	realEmitter := algorithms.NewKalshiOrderEmitter(restClient, db, algorithms.RealOrderConfig{
+	realEmitter := algorithms.NewKalshiOrderEmitter(orderClient, db, algorithms.RealOrderConfig{
 		Enabled:       true,
 		Bankroll:      cfg.RealBankroll,
 		Environment:   cfg.Environment,
