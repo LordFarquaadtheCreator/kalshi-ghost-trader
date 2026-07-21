@@ -92,6 +92,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	log.Info("config loaded", "env", config.Cfg.Environment, "db", config.Cfg.DBPath,
+		"series_count", len(config.Cfg.SeriesTickers),
+		"paper_bankroll", config.Cfg.PaperBankroll,
+		"real_bankroll", config.Cfg.RealBankroll, "kelly", config.Cfg.KellyFraction)
+
 	// Load signer
 	signer, err := kalshiAuth.NewSignerFromFile()
 	if err != nil {
@@ -99,12 +104,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	algorithms.SetSizingParams(config.Cfg.PaperBankroll, config.Cfg.KellyFraction)
-	algorithms.SetRealBankroll(config.Cfg.RealBankroll)
-	log.Info("config loaded", "env", config.Cfg.Environment, "db", config.Cfg.DBPath,
-		"series_count", len(config.Cfg.SeriesTickers),
-		"paper_bankroll", config.Cfg.PaperBankroll,
-		"real_bankroll", config.Cfg.RealBankroll, "kelly", config.Cfg.KellyFraction)
+	algorithms.SetSizingParams()
+	algorithms.SetRealBankroll()
 
 	// Tick writer (single writer goroutine for batch inserts)
 	tickWriter := db.NewTickWriter(config.Cfg.BatchSize, config.Cfg.FlushTimeoutMS, log)
