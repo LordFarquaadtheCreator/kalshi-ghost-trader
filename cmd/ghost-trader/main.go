@@ -125,7 +125,8 @@ func main() {
 	//                 realGuard → KalshiOrderEmitter (if real_trading_enabled)
 	//                    ↓ (if real quota approved)
 	//                 NoopEmitter (if real trading disabled)
-	paperEmitter := algorithms.NewTickWriterEmitter(tickWriter)
+	paperEmitter := algorithms.NewEnrichEmitter(
+		algorithms.NewTickWriterEmitter(tickWriter), db, log)
 
 	// Paper guard — always active. When quota disabled, passes all through.
 	paperGuard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{}, algorithms.QuotaConfig{
