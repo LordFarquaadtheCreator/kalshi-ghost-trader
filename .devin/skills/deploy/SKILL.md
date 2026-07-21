@@ -1,6 +1,9 @@
-# deploy
+---
+name: deploy
+description: Deploy the app to production. Use when the user asks to deploy, push to remote, update remote, or ship to mint.
+---
 
-## Deployment
+# Deploy to Mint
 
 **Always use `deploy/deploy.sh` to deploy. Never run individual SSH commands to build, upload, or restart services on mint.**
 
