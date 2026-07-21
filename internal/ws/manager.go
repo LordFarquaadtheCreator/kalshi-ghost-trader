@@ -83,13 +83,15 @@ type Manager struct {
 	latencyCount int64
 	latencyMax   int64 // ms
 
-	tickWriter *store.TickWriter
-	priceUpd   PriceUpdater // nil if no signal generator
+	tickWriter  *store.TickWriter
+	priceUpd    PriceUpdater // nil if no signal generator
+	disableSave bool         // skip persisting WS data to DB
 }
 
 // NewManager creates a WebSocket manager. series filters which event_lifecycle
 // messages get stored (lifecycle channel is unfiltered server-side).
-func NewManager(wsURL string, signer *kalshiauth.Signer, tw *store.TickWriter, series []string, minBackoff, maxBackoff time.Duration, log *slog.Logger) *Manager {
+// disableSave skips all WS data persistence to DB.
+func NewManager(wsURL string, signer *kalshiauth.Signer, tw *store.TickWriter, series []string, minBackoff, maxBackoff time.Duration, disableSave bool, log *slog.Logger) *Manager {
 	sf := make(map[string]bool, len(series))
 	for _, s := range series {
 		sf[s] = true
@@ -105,6 +107,7 @@ func NewManager(wsURL string, signer *kalshiauth.Signer, tw *store.TickWriter, s
 		cmdToMarket:  make(map[int64]string),
 		lastSeq:      make(map[int64]int64),
 		tickWriter:   tw,
+		disableSave:  disableSave,
 	}
 }
 
