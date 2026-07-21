@@ -229,6 +229,20 @@ type PriceBandResultRow struct {
 
 func (PriceBandResultRow) TableName() string { return "price_band_results" }
 
+// BacktestResultRow persists a single strategy's backtest result.
+// One row per strategy — summary + orders stored as JSON.
+type BacktestResultRow struct {
+	ID          int64  `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Strategy    string `gorm:"uniqueIndex;column:strategy" json:"strategy"`
+	RunTS       int64  `gorm:"column:run_ts" json:"run_ts"`
+	MatchCount  int    `gorm:"column:match_count" json:"match_count"`
+	SummaryJSON string `gorm:"column:summary_json" json:"summary_json"`
+	OrdersJSON  string `gorm:"column:orders_json" json:"orders_json"`
+	UpdatedAt   int64  `gorm:"column:updated_at" json:"updated_at"`
+}
+
+func (BacktestResultRow) TableName() string { return "backtest_results" }
+
 // SchemaMigration tracks applied SQL migrations.
 type SchemaMigration struct {
 	Name      string `gorm:"primaryKey;column:name"`

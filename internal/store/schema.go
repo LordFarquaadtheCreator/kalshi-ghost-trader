@@ -8,5 +8,6 @@ var AllModels = []any{
 	&ScanRun{}, &FiredEvent{}, &Point{}, &KalshiScore{},
 	&RuntimeConfig{}, &RuntimeConfigHistory{}, &LiquidityPool{}, &StrategyConfigEntry{},
 	&TriggerRange{}, &FlashscoreMatch{}, &PriceBandResultRow{},
+	&BacktestResultRow{},
 	&SchemaMigration{},
 }
