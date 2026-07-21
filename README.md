@@ -75,8 +75,6 @@ Full reference in `config.yaml.example`.
 | `ws_min_backoff_secs` | `1` | WS reconnect min backoff |
 | `ws_max_backoff_secs` | `30` | WS reconnect max backoff |
 | `metrics_port` | `6060` | `0` disables metrics server |
-| `apitennis_enabled` | `false` | Enable API-Tennis WebSocket scraper |
-| `apitennis_api_key` | — | API-Tennis API key (required if enabled) |
 | `apitennis_timezone` | `+00:00` | Timezone for API-Tennis requests |
 
 ## Dashboard

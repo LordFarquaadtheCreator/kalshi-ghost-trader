@@ -45,7 +45,6 @@ type RuntimeConfig struct {
 	OrderBackfillIntervalSecs   int
 	ScheduleCheckerIntervalSecs int
 
-	APITennisEnabled  bool
 	APITennisTimezone string
 
 	KalshiLiveDataEnabled  bool
@@ -148,7 +147,6 @@ func (rc *RuntimeConfig) GetAll() []store.RuntimeConfig {
 		{Key: "http_timeout_secs", Value: strconv.Itoa(rc.HTTPTimeoutSecs)},
 		{Key: "rate_limit_rps", Value: strconv.Itoa(rc.RateLimitRPS)},
 		{Key: "scheduler_poll_secs", Value: strconv.Itoa(rc.SchedulerPollSecs)},
-		{Key: "apitennis_enabled", Value: strconv.FormatBool(rc.APITennisEnabled)},
 		{Key: "apitennis_timezone", Value: rc.APITennisTimezone},
 		{Key: "kalshi_livedata_enabled", Value: strconv.FormatBool(rc.KalshiLiveDataEnabled)},
 		{Key: "kalshi_livedata_poll_secs", Value: strconv.Itoa(rc.KalshiLiveDataPollSecs)},
@@ -289,7 +287,6 @@ func (rc *RuntimeConfig) applyFromMap(m map[string]string) {
 	rc.RateLimitRPS = atoi(m["rate_limit_rps"])
 	rc.SchedulerPollSecs = atoi(m["scheduler_poll_secs"])
 
-	rc.APITennisEnabled = atob(m["apitennis_enabled"])
 	rc.APITennisTimezone = m["apitennis_timezone"]
 
 	rc.KalshiLiveDataEnabled = atob(m["kalshi_livedata_enabled"])

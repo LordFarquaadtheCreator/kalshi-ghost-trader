@@ -153,16 +153,9 @@ func main() {
 	wsMgr := wsclient.NewManager(signer, tickWriter, log)
 	wsMgr.SetPriceUpdater(multi)
 
-	// API-Tennis scraper (optional — WebSocket real-time push, no polling delay)
-	var atScraper *apitennis.Scraper
-	if config.Cfg.APITennisEnabled {
-		if config.Cfg.APITennisAPIKey == "" {
-			log.Error("apitennis_enabled but apitennis_api_key is empty")
-			os.Exit(1)
-		}
-		atScraper = apitennis.New(db, multi, tickWriter, log)
-		log.Info("apitennis scraper enabled", "timezone", config.Cfg.APITennisTimezone)
-	}
+	// API-Tennis scraper (mandatory — WebSocket real-time push, primary score source)
+	atScraper := apitennis.New(db, multi, tickWriter, log)
+	log.Info("apitennis scraper initialized", "timezone", config.Cfg.APITennisTimezone)
 
 	// Kalshi live-data poller (optional — backup score source via REST polling)
 	var kldPoller *kalshilivedata.Poller
@@ -173,18 +166,15 @@ func main() {
 
 	// Tracker (market subscription lifecycle)
 	// Score poller coupling: tracker drives polling on subscribe/unsubscribe.
-	// Both API-Tennis (primary) and Kalshi live-data (backup) are wired.
+	// API-Tennis (primary) always wired; Kalshi live-data (backup) optional.
 	var scorePoller tracker.ScorePoller
-	var pollers []tracker.ScorePoller
-	if atScraper != nil {
-		pollers = append(pollers, atScraper)
-	}
+	pollers := []tracker.ScorePoller{atScraper}
 	if kldPoller != nil {
 		pollers = append(pollers, kldPoller)
 	}
 	if len(pollers) == 1 {
 		scorePoller = pollers[0]
-	} else if len(pollers) > 1 {
+	} else {
 		scorePoller = tracker.NewMultiScorePoller(pollers...)
 	}
 	tr := tracker.New(wsMgr, scorePoller, log)
@@ -201,7 +191,7 @@ func main() {
 	g, ctx := errgroup.WithContext(ctx)
 
 	// Backtest engine for dashboard strategy API
-	btEngine, err := backtest.NewEngine(config.Cfg.DBPath, log)
+	btEngine, err := backtest.NewEngine(log)
 	if err != nil {
 		log.Error("backtest engine init failed", "err", err)
 		os.Exit(1)

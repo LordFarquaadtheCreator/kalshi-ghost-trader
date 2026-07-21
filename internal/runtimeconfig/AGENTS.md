@@ -31,7 +31,7 @@ Runtime configuration from `app_config` DB table. Owns CRUD methods using `store
 - `batch_size`, `flush_timeout_ms`
 - `http_timeout_secs`, `rate_limit_rps`
 - `scheduler_poll_secs`
-- `apitennis_enabled`, `apitennis_timezone`
+- `apitennis_timezone`
 - `kalshi_livedata_enabled`, `kalshi_livedata_poll_secs`
 - `close_timer_enabled`, `close_timer_lead_min`, `close_timer_min_price`, `close_timer_poll_secs`, `close_timer_size`
 - `reconciler_interval_secs`, `schedule_checker_interval_secs`
