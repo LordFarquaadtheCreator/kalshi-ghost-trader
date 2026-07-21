@@ -9,6 +9,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -52,10 +53,10 @@ type matchWorker struct {
 	seenPoints map[string]bool
 }
 
-// New creates an API-Tennis scraper.
-func New(db *store.DB, strat algorithms.Strategy, tickWriter *store.TickWriter, apiKey, timezone string, log *slog.Logger) *Scraper {
+// New creates an API-Tennis scraper. apiKey and timezone are read from config.Cfg.
+func New(db *store.DB, strat algorithms.Strategy, tickWriter *store.TickWriter, log *slog.Logger) *Scraper {
 	return &Scraper{
-		ws:          NewWSClient(apiKey, timezone, log),
+		ws:          NewWSClient(config.Cfg.APITennisAPIKey, config.Cfg.APITennisTimezone, log),
 		db:          db,
 		strategy:    strat,
 		tickWriter:  tickWriter,

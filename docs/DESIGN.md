@@ -89,7 +89,7 @@ open_interest   REAL       — outstanding contracts
 
 **Why API-Tennis**: WebSocket push model — no polling delay. Covers ATP/WTA/ITF/Challenger. Provides real-time match updates on every state change (point won, game/set completed).
 
-**Implementation**: Go package `internal/apitennis` connects to `wss://wss.api-tennis.com/live?APIkey=<key>&timezone=<tz>`. Auto-reconnects with exponential backoff. Disabled by default; enable via `apitennis_enabled: true` in config.yaml.
+**Implementation**: Go package `internal/apitennis` connects to `wss://wss.api-tennis.com/live?APIkey=<key>&timezone=<tz>`. Auto-reconnects with exponential backoff. Always enabled; configured via `apitennis_timezone` in app_config.
 
 **Tables**: No dedicated tables — API-Tennis data drives strategy signals directly via WebSocket push. Market registration and player name matching cached in-memory.
 

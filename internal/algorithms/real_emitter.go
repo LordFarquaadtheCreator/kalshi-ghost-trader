@@ -5,10 +5,15 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
+	"github.com/farquaad/kalshi-ghost-trader/internal/liquiditypool"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
+	"github.com/farquaad/kalshi-ghost-trader/internal/strategyconfig"
+	"github.com/farquaad/kalshi-ghost-trader/internal/triggerranges"
 	"github.com/google/uuid"
 )
 
@@ -61,7 +66,14 @@ type KalshiOrderEmitter struct {
 	log    *slog.Logger
 }
 
-func NewKalshiOrderEmitter(client *kalshiclient.Client, db *store.DB, cfg RealOrderConfig, log *slog.Logger) *KalshiOrderEmitter {
+func NewKalshiOrderEmitter(client *kalshiclient.Client, db *store.DB, log *slog.Logger) *KalshiOrderEmitter {
+	cfg := RealOrderConfig{
+		Enabled:       true,
+		Bankroll:      config.Cfg.RealBankroll,
+		Environment:   config.Cfg.Environment,
+		TimeInForce:   config.Cfg.RealOrderTimeInForce,
+		OrderTimeoutS: config.Cfg.RealOrderTimeoutS,
+	}
 	if cfg.Bankroll <= 0 {
 		cfg.Bankroll = 1000
 	}
@@ -115,7 +127,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	}
 
 	// Guard 1: strategy must be enabled in strategy_config
-	enabled, err := e.db.IsStrategyEnabled(ctx, o.Strategy)
+	enabled, err := strategyconfig.IsEnabled(ctx, e.db.GormDB(), o.Strategy)
 	if err != nil {
 		e.log.Error("real: failed to check strategy enabled",
 			"strategy", o.Strategy, "error", err)
@@ -128,14 +140,14 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	}
 
 	// Guard 2: price must fall within an enabled trigger range (if any bands configured)
-	hasBands, err := e.db.HasTriggerRanges(ctx, o.Strategy)
+	hasBands, err := triggerranges.Has(ctx, e.db.GormDB(), o.Strategy)
 	if err != nil {
 		e.log.Error("real: failed to check trigger ranges",
 			"strategy", o.Strategy, "error", err)
 		return false
 	}
 	if hasBands {
-		inRange, err := e.db.IsPriceInTriggerRange(ctx, o.Strategy, o.MarketPrice)
+		inRange, err := triggerranges.IsPriceIn(ctx, e.db.GormDB(), o.Strategy, o.MarketPrice)
 		if err != nil {
 			e.log.Error("real: failed to check price in trigger range",
 				"strategy", o.Strategy, "price", o.MarketPrice, "error", err)
@@ -161,7 +173,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 
 	// Guard 4: clamp spend to available liquidity pool balance
 	spendCents := int64(count * o.MarketPrice * 100)
-	lp, err := e.db.GetLiquidityPool(ctx)
+	lp, err := liquiditypool.Get(ctx, e.db.GormDB())
 	if err != nil {
 		e.log.Error("real: failed to get liquidity pool balance",
 			"market", o.MarketTicker, "error", err)
@@ -204,7 +216,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	orderCtx, cancel := context.WithTimeout(ctx, time.Duration(e.cfg.OrderTimeoutS)*time.Second)
 	defer cancel()
 
-	newBalance, err := e.db.DeductLiquidityPool(orderCtx, spendCents)
+	newBalance, err := liquiditypool.Deduct(orderCtx, e.db.GormDB(), spendCents)
 	if err != nil {
 		e.log.Error("real: failed to deduct liquidity pool",
 			"market", o.MarketTicker, "spend_cents", spendCents, "error", err)
@@ -246,12 +258,7 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 			"market", o.MarketTicker, "strategy", o.Strategy,
 			"side", "bid", "count", countStr, "price", priceStr,
 			"error", err)
-		// refund liquidity pool — order never executed
-		if _, refundErr := e.db.RefundLiquidityPool(context.Background(), spendCents); refundErr != nil {
-			e.log.Error("real: failed to refund liquidity pool",
-				"market", o.MarketTicker, "spend_cents", spendCents, "error", refundErr)
-		}
-		// mark order as failed in DB
+		// MarkRealOrderFailed handles pool refund transactionally
 		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID); dbErr != nil {
 			e.log.Error("real: failed to mark order as failed", "order_id", o.ID, "error", dbErr)
 		}
@@ -259,11 +266,15 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	}
 
 	fillCount, _ := strconv.ParseFloat(resp.FillCount, 64)
+	remainingCount, _ := strconv.ParseFloat(resp.RemainingCount, 64)
 	status := "submitted"
-	if resp.RemainingCount == "0" && fillCount > 0 {
+	if remainingCount == 0 && fillCount > 0 {
 		status = "filled"
 	} else if fillCount > 0 {
 		status = "partial"
+	} else if remainingCount == 0 {
+		// IOC with zero fill — fully canceled by Kalshi
+		status = "canceled"
 	}
 
 	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status); err != nil {
@@ -285,3 +296,32 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 }
 
 var _ OrderEmitter = (*KalshiOrderEmitter)(nil)
+
+// LiveToggleEmitter gates the real order pipeline on real_trading_enabled.
+// Checks config.Cfg per EmitOrder call so dashboard flips take effect without restart.
+// Returns false before delegating to inner when flag is off — prevents QuotaGuard
+// from tracking budget spend on orders that will never submit.
+// Logs each on/off transition for audit.
+type LiveToggleEmitter struct {
+	Inner OrderEmitter
+	Log   *slog.Logger
+	Prev  atomic.Bool
+}
+
+func (e *LiveToggleEmitter) EmitOrder(o store.Order) bool {
+	on := config.Cfg.RealTradingEnabled
+	if !on {
+		if e.Prev.Load() {
+			e.Log.Warn("real trading disabled — live orders suppressed", "market", o.MarketTicker)
+			e.Prev.Store(false)
+		}
+		return false
+	}
+	if !e.Prev.Load() {
+		e.Log.Warn("real trading enabled — live orders active", "bankroll", config.Cfg.RealBankroll)
+		e.Prev.Store(true)
+	}
+	return e.Inner.EmitOrder(o)
+}
+
+var _ OrderEmitter = (*LiveToggleEmitter)(nil)

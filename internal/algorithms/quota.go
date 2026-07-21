@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -52,8 +53,15 @@ type QuotaGuard struct {
 
 // NewQuotaGuard creates a quota-throttling emitter wrapper.
 // paper always receives every order. inner receives only approved orders
-// when Enabled is true.
-func NewQuotaGuard(paper, inner OrderEmitter, cfg QuotaConfig, log *slog.Logger) *QuotaGuard {
+// when Enabled is true. QuotaConfig is read from config.Cfg.
+func NewQuotaGuard(paper, inner OrderEmitter, log *slog.Logger) *QuotaGuard {
+	cfg := QuotaConfig{
+		Enabled:      config.Cfg.OrderQuotaEnabled,
+		CooldownSecs: config.Cfg.OrderQuotaCooldownSecs,
+		MaxPerSec:    config.Cfg.OrderQuotaMaxPerSec,
+		BudgetTotal:  config.Cfg.OrderQuotaBudgetTotal,
+		BudgetFloor:  config.Cfg.OrderQuotaBudgetFloor,
+	}
 	q := &QuotaGuard{
 		paper:           paper,
 		inner:           inner,

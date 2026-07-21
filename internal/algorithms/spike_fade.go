@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -290,3 +291,5 @@ func (s *SpikeFadeStrategy) String() string {
 }
 
 func (s *SpikeFadeStrategy) PreMatchGated() {}
+
+func (s *SpikeFadeStrategy) OnTick(ctx context.Context) {}

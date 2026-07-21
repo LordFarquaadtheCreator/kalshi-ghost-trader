@@ -1,28 +1,52 @@
 #!/bin/bash
-# Deploy ghost-trader to remote instance.
-# Usage: ./deploy/deploy.sh <instance-ip>
-# Prerequisites: ARM instance running, 50GB block volume mounted at /data
-set -e
+# Deploy ghost-trader to mint box.
+# Builds artifacts locally into deploy/out/, scp's to remote, restarts services.
+# Usage: ./deploy/deploy.sh [host] [branch]
+# Defaults: host=mint, branch=main
+set -euo pipefail
 
-INSTANCE_IP="$1"
-if [ -z "$INSTANCE_IP" ]; then
-  echo "Usage: $0 <instance-ip>"
-  echo "Example: $0 129.146.42.10"
-  exit 1
-fi
+HOST="${1:-mint}"
+BRANCH="${2:-main}"
+REMOTE_DIR="/home/fahad/kalshi-ghost-trader"
+OUT="deploy/out"
 
 cd "$(dirname "$0")/.."
 
-echo "==> Building binary..."
-./deploy/build.sh
+echo "==> Cleaning build output..."
+rm -rf "$OUT"
+mkdir -p "$OUT"
 
-echo "==> Uploading to $INSTANCE_IP..."
-scp deploy/out/ghost-trader ubuntu@$INSTANCE_IP:/tmp/ghost-trader
-scp deploy/ghost-trader.service ubuntu@$INSTANCE_IP:/tmp/ghost-trader.service
-scp deploy/setup-remote.sh ubuntu@$INSTANCE_IP:/tmp/setup-remote.sh
+echo "==> Building backend (linux/amd64)..."
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$OUT/ghost-trader" .
 
-echo "==> Running remote setup..."
-ssh ubuntu@$INSTANCE_IP 'chmod +x /tmp/setup-remote.sh && sudo /tmp/setup-remote.sh'
+echo "==> Building dashboard..."
+cd dashboard && npm run build && cd ..
+cp -r dashboard/build "$OUT/dashboard-build"
+
+echo "==> Copying service file..."
+cp deploy/ghost-trader.service "$OUT/"
+
+echo "==> Uploading artifacts..."
+scp "$OUT/ghost-trader" "$HOST:$REMOTE_DIR/ghost-trader"
+ssh "$HOST" "chmod +x $REMOTE_DIR/ghost-trader"
+scp "$OUT/ghost-trader.service" "$HOST:/tmp/kalshi-ghost-trader.service"
+ssh "$HOST" 'sudo cmp -s /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service || { sudo cp /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service && sudo systemctl daemon-reload && echo "service file updated"; }'
+ssh "$HOST" "rm -rf $REMOTE_DIR/dashboard/build"
+scp -r "$OUT/dashboard-build" "$HOST:$REMOTE_DIR/dashboard/build"
+
+echo "==> Pulling latest code..."
+ssh "$HOST" "cd $REMOTE_DIR && git fetch origin && git checkout $BRANCH && git pull --ff-only origin $BRANCH"
+
+echo "==> Restarting backend..."
+ssh "$HOST" 'sudo -n systemctl restart kalshi-ghost-trader'
+sleep 3
+
+echo "==> Restarting dashboard..."
+ssh "$HOST" 'sudo -n systemctl restart kalshi-dashboard'
+sleep 2
+
+echo "==> Health check..."
+ssh "$HOST" 'curl -s -o /dev/null -w "backend: %{http_code}\n" http://127.0.0.1:6060/metrics && curl -s -o /dev/null -w "dashboard: %{http_code}\n" http://127.0.0.1:5173/'
 
 echo "==> Done. Check logs with:"
-echo "    ssh ubuntu@$INSTANCE_IP 'sudo journalctl -u ghost-trader -f'"
+echo "    ssh $HOST 'sudo -n journalctl -u kalshi-ghost-trader --no-pager -n 40 --since "5 min ago"'"

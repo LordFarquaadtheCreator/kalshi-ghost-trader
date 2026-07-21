@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 	"github.com/farquaad/kalshi-ghost-trader/internal/tracker"
 )
@@ -36,12 +37,12 @@ type Scheduler struct {
 	pending map[string]time.Time // market_ticker -> scheduled start time
 }
 
-// New creates a scheduler.
-func New(db *store.DB, tr *tracker.Tracker, leadMinutes int, log *slog.Logger) *Scheduler {
+// New creates a scheduler. leadMinutes is read from config.Cfg.TrackLeadMinutes.
+func New(db *store.DB, tr *tracker.Tracker, log *slog.Logger) *Scheduler {
 	return &Scheduler{
 		db:      db,
 		tracker: tr,
-		lead:    time.Duration(leadMinutes) * time.Minute,
+		lead:    time.Duration(config.Cfg.TrackLeadMinutes) * time.Minute,
 		log:     log,
 		pending: make(map[string]time.Time),
 	}
@@ -49,8 +50,8 @@ func New(db *store.DB, tr *tracker.Tracker, leadMinutes int, log *slog.Logger) *
 
 // Run periodically polls the DB for active markets and schedules tracking
 // for those whose occurrence_datetime is approaching.
-func (s *Scheduler) Run(ctx context.Context, pollInterval time.Duration) error {
-	ticker := time.NewTicker(pollInterval)
+func (s *Scheduler) Run(ctx context.Context) error {
+	ticker := time.NewTicker(time.Duration(config.Cfg.SchedulerPollSecs) * time.Second)
 	defer ticker.Stop()
 
 	// Run immediately

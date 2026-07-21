@@ -342,3 +342,5 @@ func (s *NoFadeStrategy) String() string {
 	return fmt.Sprintf("NoFadeStrategy{%s: markets=%d, fired=%d}",
 		s.cfg.Label, len(s.markets), len(s.fired))
 }
+
+func (s *NoFadeStrategy) OnTick(ctx context.Context) {}

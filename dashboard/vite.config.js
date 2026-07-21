@@ -28,4 +28,12 @@ export default defineConfig({
 			},
 		},
 	},
+	server: {
+		host: '0.0.0.0',
+		proxy: {
+			'/api': 'http://127.0.0.1:6060',
+			'/metrics': 'http://127.0.0.1:6060',
+			'/debug': 'http://127.0.0.1:6060',
+		},
+	},
 });

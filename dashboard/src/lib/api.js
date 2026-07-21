@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
 
-const GHOST_TRADER_URL = 'http://127.0.0.1:6060';
-const STRATEGY_API_URL = 'http://127.0.0.1:6060';
+const GHOST_TRADER_URL = '';
+const STRATEGY_API_URL = '';
 
 /** @typedef {{ data: any, timestamp: number, ttl: number }} CacheEntry */
 /** @type {Map<string, CacheEntry>} */
@@ -77,6 +77,19 @@ async function rawFetch(/** @type {string} */ url) {
   if (!browser) return null;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// Any mutation invalidates entire cache — write may affect multiple resources.
+async function mutate(/** @type {string} */ url, /** @type {string} */ method, /** @type {any} */ body) {
+  if (!browser) return null;
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  cache.clear();
   return res.json();
 }
 
@@ -156,14 +169,7 @@ export const api = {
   },
 
   async setStrategyEnabled(/** @type {string} */ strategy, /** @type {boolean} */ enabled) {
-    if (!browser) return null;
-    const res = await fetch(`${GHOST_TRADER_URL}/api/strategy-config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ strategy, enabled }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    return mutate(`${GHOST_TRADER_URL}/api/strategy-config`, 'PUT', { strategy, enabled });
   },
 
   async getAppConfig() {
@@ -171,14 +177,7 @@ export const api = {
   },
 
   async setAppConfig(/** @type {string} */ key, /** @type {string} */ value) {
-    if (!browser) return null;
-    const res = await fetch(`${GHOST_TRADER_URL}/api/app-config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key, value }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    return mutate(`${GHOST_TRADER_URL}/api/app-config`, 'PUT', { key, value });
   },
 
   /** @param {string} [strategy] */
@@ -190,14 +189,7 @@ export const api = {
   },
 
   async replaceTriggerRanges(/** @type {string} */ strategy, /** @type {Array<{min_price: number, max_price: number, source?: string, enabled?: boolean}>} */ ranges) {
-    if (!browser) return null;
-    const res = await fetch(`${GHOST_TRADER_URL}/api/trigger-ranges`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ strategy, ranges }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    return mutate(`${GHOST_TRADER_URL}/api/trigger-ranges`, 'PUT', { strategy, ranges });
   },
 
   get pollInterval() { return pollInterval; },

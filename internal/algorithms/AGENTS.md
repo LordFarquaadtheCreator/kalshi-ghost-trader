@@ -83,7 +83,6 @@ Standalone function `ClassifyPoint(PointContext) PointClassification` computing 
 
 Used by:
 - Live ingestion (`apitennis/scraper.go`) to set flags on `store.Point` before DB insert
-- Backfill command (`cmd/backfill`) to fix historical rows
 - Strategies can also call it directly for re-derivation
 
 **Gaps:**

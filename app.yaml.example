@@ -1,0 +1,13 @@
+# Production config — real Kalshi keys, prod API endpoints.
+# Copy to app.yaml and fill in real values.
+
+environment: prod
+kalshi_api_key_id: "00000000-0000-0000-0000-000000000000"
+kalshi_private_key_path: /path/to/kalshi_key.pem
+db_path: kalshi_tennis.db
+metrics_addr: "127.0.0.1:6060"
+apitennis_api_key: ""
+disable_ws_data_save: false
+rest_base_url: "https://external-api.kalshi.com/trade-api/v2"
+ws_url: "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
+backtest_cache_ttl_min: 30

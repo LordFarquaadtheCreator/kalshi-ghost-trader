@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
@@ -38,12 +39,12 @@ type Scanner struct {
 	lastCounts map[string]int
 }
 
-// New creates a scanner for the given series tickers.
-func New(client *kalshiclient.Client, db *store.DB, series []string, log *slog.Logger) *Scanner {
+// New creates a scanner. series tickers are read from config.Cfg.SeriesTickers.
+func New(client *kalshiclient.Client, db *store.DB, log *slog.Logger) *Scanner {
 	return &Scanner{
 		client:     client,
 		db:         db,
-		series:     series,
+		series:     config.Cfg.SeriesTickers,
 		log:        log,
 		lastCounts: make(map[string]int),
 	}

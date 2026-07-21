@@ -2,48 +2,9 @@ package store
 
 import (
 	"context"
-	"database/sql"
+
+	"gorm.io/gorm/clause"
 )
-
-// marketSelectColumns is the shared column list for market queries.
-const marketSelectColumns = `
-SELECT market_ticker, event_ticker, series_ticker, player_name, tennis_competitor,
-    status, occurrence_ts, open_ts, close_ts, result, settlement_ts, settlement_value
-FROM markets`
-
-// scanMarket scans a market row from a *sql.Rows into a Market.
-// Nullable columns use sql.Null* types.
-func scanMarket(rows *sql.Rows) (Market, error) {
-	return scanMarketScanner(rows)
-}
-
-// scanMarketRow scans a market row from a *sql.Row into a Market.
-func scanMarketRow(row *sql.Row) (Market, error) {
-	return scanMarketScanner(row)
-}
-
-// scanMarketScanner scans a market row from any sql.Scanner.
-func scanMarketScanner(s interface {
-	Scan(dest ...any) error
-}) (Market, error) {
-	var m Market
-	var occurrenceTS, openTS, closeTS, settlementTS sql.NullInt64
-	var tennisCompetitor, result, settlementValue sql.NullString
-	if err := s.Scan(
-		&m.MarketTicker, &m.EventTicker, &m.SeriesTicker, &m.PlayerName, &tennisCompetitor,
-		&m.Status, &occurrenceTS, &openTS, &closeTS, &result, &settlementTS, &settlementValue,
-	); err != nil {
-		return m, err
-	}
-	m.TennisCompetitor = tennisCompetitor.String
-	m.OccurrenceTS = occurrenceTS.Int64
-	m.OpenTS = openTS.Int64
-	m.CloseTS = closeTS.Int64
-	m.Result = result.String
-	m.SettlementTS = settlementTS.Int64
-	m.SettlementValue = settlementValue.String
-	return m, nil
-}
 
 // UpsertMarket inserts or updates a market row.
 func (d *DB) UpsertMarket(ctx context.Context, m Market) error {
@@ -54,52 +15,41 @@ func (d *DB) UpsertMarket(ctx context.Context, m Market) error {
 // UpsertMarketCheckNew inserts or updates a market. Returns true if new.
 func (d *DB) UpsertMarketCheckNew(ctx context.Context, m Market) (bool, error) {
 	now := nowMillis()
-	res, err := d.db.ExecContext(ctx, `
-INSERT OR IGNORE INTO markets (market_ticker, event_ticker, series_ticker, player_name, tennis_competitor,
-    status, occurrence_ts, open_ts, close_ts, result, settlement_ts, settlement_value,
-    first_seen_ts, last_updated_ts)
-VALUES (?,?,?,?,?,?, ?,?,?,?,?,?, ?,?)`,
-		m.MarketTicker, m.EventTicker, m.SeriesTicker, m.PlayerName, m.TennisCompetitor,
-		m.Status, m.OccurrenceTS, m.OpenTS, m.CloseTS, m.Result, m.SettlementTS, m.SettlementValue,
-		now, now,
-	)
-	if err != nil {
-		return false, err
+	m.FirstSeenTS = now
+	m.LastUpdatedTS = now
+
+	res := d.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&m)
+	if res.Error != nil {
+		return false, res.Error
 	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
+	if res.RowsAffected > 0 {
 		return true, nil
 	}
-	_, err = d.db.ExecContext(ctx, `
-UPDATE markets SET status=?, occurrence_ts=?, open_ts=?, close_ts=?,
-    result=?, settlement_ts=?, settlement_value=?, last_updated_ts=?
-WHERE market_ticker=?`,
-		m.Status, m.OccurrenceTS, m.OpenTS, m.CloseTS,
-		m.Result, m.SettlementTS, m.SettlementValue, now, m.MarketTicker,
-	)
-	return false, err
+
+	res = d.db.WithContext(ctx).Model(&Market{}).Where("market_ticker = ?", m.MarketTicker).
+		Updates(map[string]any{
+			"status":           m.Status,
+			"occurrence_ts":    m.OccurrenceTS,
+			"open_ts":          m.OpenTS,
+			"close_ts":         m.CloseTS,
+			"result":           m.Result,
+			"settlement_ts":    m.SettlementTS,
+			"settlement_value": m.SettlementValue,
+			"last_updated_ts":  now,
+		})
+	return false, res.Error
 }
 
 // GetActiveMarkets returns markets eligible for tracking: REST status "open"
 // or WS lifecycle status "active". Kalshi REST uses "open"; lifecycle WS
 // "activated" event maps to "active". Both mean market is live.
 func (d *DB) GetActiveMarkets(ctx context.Context) ([]Market, error) {
-	rows, err := d.db.QueryContext(ctx,
-		marketSelectColumns+` WHERE status IN ('open', 'active') AND result != 'scalar' ORDER BY occurrence_ts`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var markets []Market
-	for rows.Next() {
-		m, err := scanMarket(rows)
-		if err != nil {
-			return nil, err
-		}
-		markets = append(markets, m)
-	}
-	return markets, rows.Err()
+	err := d.db.WithContext(ctx).
+		Where("status IN ?", []string{"open", "active"}).
+		Where("result != ?", "scalar").
+		Order("occurrence_ts").Find(&markets).Error
+	return markets, err
 }
 
 // GetUnresolvedMarkets returns markets that need REST reconciliation:
@@ -109,86 +59,50 @@ func (d *DB) GetActiveMarkets(ctx context.Context) ([]Market, error) {
 // Deduplicated by market_ticker. Ordered by close_ts ascending (oldest first).
 func (d *DB) GetUnresolvedMarkets(ctx context.Context, graceMS int64) ([]Market, error) {
 	now := nowMillis()
-	rows, err := d.db.QueryContext(ctx, `
+	var markets []Market
+	err := d.db.WithContext(ctx).Raw(`
 SELECT m.market_ticker, m.event_ticker, m.series_ticker, m.player_name, m.tennis_competitor,
-    m.status, m.occurrence_ts, m.open_ts, m.close_ts, m.result, m.settlement_ts, m.settlement_value
+    m.status, m.occurrence_ts, m.open_ts, m.close_ts, m.result, m.settlement_ts, m.settlement_value,
+    m.first_seen_ts, m.last_updated_ts
 FROM markets m
 WHERE (
-    -- Has orders but no result
     (m.result IS NULL OR m.result = '')
     AND EXISTS (SELECT 1 FROM orders o WHERE o.market_ticker = m.market_ticker)
 )
 OR (
-    -- Active/open past close_ts + grace
     m.status IN ('open', 'active')
     AND m.close_ts > 0
     AND m.close_ts + ? < ?
 )
-ORDER BY m.close_ts ASC`, graceMS, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var markets []Market
-	for rows.Next() {
-		m, err := scanMarket(rows)
-		if err != nil {
-			return nil, err
-		}
-		markets = append(markets, m)
-	}
-	return markets, rows.Err()
+ORDER BY m.close_ts ASC`, graceMS, now).Scan(&markets).Error
+	return markets, err
 }
 
-// GetMarket returns a single market by ticker. Returns sql.ErrNoRows if not found.
+// GetMarket returns a single market by ticker. Returns gorm.ErrRecordNotFound if not found.
 func (d *DB) GetMarket(ctx context.Context, marketTicker string) (Market, error) {
-	row := d.db.QueryRowContext(ctx,
-		marketSelectColumns+` WHERE market_ticker = ?`, marketTicker)
-	return scanMarketRow(row)
+	var m Market
+	err := d.db.WithContext(ctx).Where("market_ticker = ?", marketTicker).First(&m).Error
+	return m, err
 }
 
 // GetMarketsByEvent returns all markets for a given event.
 func (d *DB) GetMarketsByEvent(ctx context.Context, eventTicker string) ([]Market, error) {
-	rows, err := d.db.QueryContext(ctx,
-		marketSelectColumns+` WHERE event_ticker = ?`, eventTicker)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var markets []Market
-	for rows.Next() {
-		m, err := scanMarket(rows)
-		if err != nil {
-			return nil, err
-		}
-		markets = append(markets, m)
-	}
-	return markets, rows.Err()
+	err := d.db.WithContext(ctx).Where("event_ticker = ?", eventTicker).Find(&markets).Error
+	return markets, err
 }
 
 // GetUpcomingMarkets returns active markets whose occurrence_ts is in the future.
 // Used by the schedule checker to refresh stale schedule data from REST.
 func (d *DB) GetUpcomingMarkets(ctx context.Context) ([]Market, error) {
 	now := nowMillis()
-	rows, err := d.db.QueryContext(ctx,
-		marketSelectColumns+` WHERE status IN ('open', 'active') AND result != 'scalar' AND occurrence_ts > ? ORDER BY occurrence_ts`,
-		now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var markets []Market
-	for rows.Next() {
-		m, err := scanMarket(rows)
-		if err != nil {
-			return nil, err
-		}
-		markets = append(markets, m)
-	}
-	return markets, rows.Err()
+	err := d.db.WithContext(ctx).
+		Where("status IN ?", []string{"open", "active"}).
+		Where("result != ?", "scalar").
+		Where("occurrence_ts > ?", now).
+		Order("occurrence_ts").Find(&markets).Error
+	return markets, err
 }
 
 // GetMarketsClosingWithin returns active markets whose close_ts falls within
@@ -197,21 +111,11 @@ func (d *DB) GetUpcomingMarkets(ctx context.Context) ([]Market, error) {
 func (d *DB) GetMarketsClosingWithin(ctx context.Context, withinSecs int64) ([]Market, error) {
 	now := nowMillis()
 	cutoff := now + withinSecs*1000
-	rows, err := d.db.QueryContext(ctx,
-		marketSelectColumns+` WHERE status IN ('open','active') AND result != 'scalar' AND close_ts > 0 AND close_ts BETWEEN ? AND ? ORDER BY close_ts`,
-		now, cutoff)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var markets []Market
-	for rows.Next() {
-		m, err := scanMarket(rows)
-		if err != nil {
-			return nil, err
-		}
-		markets = append(markets, m)
-	}
-	return markets, rows.Err()
+	err := d.db.WithContext(ctx).
+		Where("status IN ?", []string{"open", "active"}).
+		Where("result != ?", "scalar").
+		Where("close_ts > 0 AND close_ts BETWEEN ? AND ?", now, cutoff).
+		Order("close_ts").Find(&markets).Error
+	return markets, err
 }

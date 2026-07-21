@@ -1,4 +1,4 @@
-package kalshiauth
+package kalshiAuth
 
 import (
 	"crypto/ecdsa"

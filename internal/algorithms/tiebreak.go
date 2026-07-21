@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -316,3 +317,5 @@ func (s *TiebreakStrategy) String() string {
 // PreMatchGated prevents pre-match price movements from triggering
 // the price-based tiebreak path before real score data arrives.
 func (s *TiebreakStrategy) PreMatchGated() {}
+
+func (s *TiebreakStrategy) OnTick(ctx context.Context) {}

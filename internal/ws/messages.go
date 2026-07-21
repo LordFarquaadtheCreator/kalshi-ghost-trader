@@ -52,7 +52,9 @@ func (m *Manager) handleTicker(sid int64, msg json.RawMessage, raw []byte) {
 	}
 
 	m.trackLatency(recvTs, t.TsMs)
-	m.tickWriter.Ingest(tick)
+	if !m.disableSave {
+		m.tickWriter.Ingest(tick)
+	}
 
 	if m.priceUpd != nil && tick.Price > 0 {
 		m.priceUpd.OnPrice(t.MarketTicker, tick.Price)
@@ -95,7 +97,9 @@ func (m *Manager) handleTrade(sid int64, msg json.RawMessage, raw []byte) {
 		Payload:          string(raw),
 	}
 	m.trackLatency(recvTs, t.TsMs)
-	m.tickWriter.Ingest(tick)
+	if !m.disableSave {
+		m.tickWriter.Ingest(tick)
+	}
 }
 
 // lifecycleMsg maps the Kalshi WS market_lifecycle_v2 message.
@@ -140,7 +144,9 @@ func (m *Manager) handleLifecycle(msg json.RawMessage, raw []byte) {
 		SettledTS:       lc.SettledTS * secondsToMillis,
 		Payload:         string(raw),
 	}
-	m.tickWriter.IngestLifecycle(le)
+	if !m.disableSave {
+		m.tickWriter.IngestLifecycle(le)
+	}
 }
 
 // eventLifecycleMsg maps the Kalshi WS event_lifecycle message.
@@ -164,15 +170,17 @@ func (m *Manager) handleEventLifecycle(msg json.RawMessage, raw []byte) {
 	}
 
 	now := time.Now().UnixMilli()
-	m.tickWriter.IngestEventLifecycle(store.EventLifecycleEvent{
-		TS:           now,
-		RecvTS:       now,
-		EventTicker:  el.EventTicker,
-		SeriesTicker: el.SeriesTicker,
-		Title:        el.Title,
-		Subtitle:     el.Subtitle,
-		Payload:      string(raw),
-	})
+	if !m.disableSave {
+		m.tickWriter.IngestEventLifecycle(store.EventLifecycleEvent{
+			TS:           now,
+			RecvTS:       now,
+			EventTicker:  el.EventTicker,
+			SeriesTicker: el.SeriesTicker,
+			Title:        el.Title,
+			Subtitle:     el.Subtitle,
+			Payload:      string(raw),
+		})
+	}
 }
 
 // orderbookSnapshotMsg maps the Kalshi WS orderbook_snapshot message.
@@ -199,15 +207,17 @@ func (m *Manager) handleOrderbookSnapshot(sid, seq int64, msg json.RawMessage, r
 	}
 
 	now := time.Now().UnixMilli()
-	m.tickWriter.IngestOrderbook(store.OrderbookEvent{
-		TS:           now,
-		RecvTS:       now,
-		MarketTicker: s.MarketTicker,
-		MsgType:      "orderbook_snapshot",
-		SID:          sid,
-		Seq:          seq,
-		Payload:      string(raw),
-	})
+	if !m.disableSave {
+		m.tickWriter.IngestOrderbook(store.OrderbookEvent{
+			TS:           now,
+			RecvTS:       now,
+			MarketTicker: s.MarketTicker,
+			MsgType:      "orderbook_snapshot",
+			SID:          sid,
+			Seq:          seq,
+			Payload:      string(raw),
+		})
+	}
 }
 
 func (m *Manager) handleOrderbookDelta(sid, seq int64, msg json.RawMessage, raw []byte) {
@@ -221,16 +231,18 @@ func (m *Manager) handleOrderbookDelta(sid, seq int64, msg json.RawMessage, raw 
 	if ts == 0 {
 		ts = now
 	}
-	m.tickWriter.IngestOrderbook(store.OrderbookEvent{
-		TS:           ts,
-		RecvTS:       now,
-		MarketTicker: d.MarketTicker,
-		MsgType:      "orderbook_delta",
-		SID:          sid,
-		Seq:          seq,
-		Price:        kalshiclient.ParseFP(d.PriceDollars),
-		Delta:        kalshiclient.ParseFP(d.DeltaFP),
-		Side:         d.Side,
-		Payload:      string(raw),
-	})
+	if !m.disableSave {
+		m.tickWriter.IngestOrderbook(store.OrderbookEvent{
+			TS:           ts,
+			RecvTS:       now,
+			MarketTicker: d.MarketTicker,
+			MsgType:      "orderbook_delta",
+			SID:          sid,
+			Seq:          seq,
+			Price:        kalshiclient.ParseFP(d.PriceDollars),
+			Delta:        kalshiclient.ParseFP(d.DeltaFP),
+			Side:         d.Side,
+			Payload:      string(raw),
+		})
+	}
 }

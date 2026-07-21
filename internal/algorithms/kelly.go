@@ -1,5 +1,7 @@
 package algorithms
 
+import "github.com/farquaad/kalshi-ghost-trader/internal/config"
+
 // Package-level sizing params, set from config via SetSizingParams.
 var (
 	paperBankroll  float64 = 1000
@@ -7,15 +9,15 @@ var (
 	kellyFractionP float64 = 0.25
 )
 
-// SetSizingParams sets the global paper bankroll and Kelly fraction used by all strategies.
-func SetSizingParams(bankroll, fraction float64) {
-	paperBankroll = bankroll
-	kellyFractionP = fraction
+// SetSizingParams reads paper bankroll and Kelly fraction from config.Cfg.
+func SetSizingParams() {
+	paperBankroll = config.Cfg.PaperBankroll
+	kellyFractionP = config.Cfg.KellyFraction
 }
 
-// SetRealBankroll sets the bankroll used for real order Kelly sizing.
-func SetRealBankroll(bankroll float64) {
-	realBankroll = bankroll
+// SetRealBankroll reads real bankroll from config.Cfg.
+func SetRealBankroll() {
+	realBankroll = config.Cfg.RealBankroll
 }
 
 // kellySizeRaw computes order size using fractional Kelly criterion without cost cap.

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
@@ -25,10 +26,10 @@ type OccurrenceRefresher interface {
 
 // Checker polls upcoming markets via REST and updates stale schedule data.
 type Checker struct {
-	client   *kalshiclient.Client
-	db       *store.DB
+	client    *kalshiclient.Client
+	db        *store.DB
 	refresher OccurrenceRefresher
-	log      *slog.Logger
+	log       *slog.Logger
 }
 
 // New creates a schedule checker.
@@ -41,8 +42,10 @@ func New(client *kalshiclient.Client, db *store.DB, refresher OccurrenceRefreshe
 	}
 }
 
-// Run polls upcoming markets at the given interval. Blocks until ctx cancelled.
-func (c *Checker) Run(ctx context.Context, interval time.Duration) error {
+// Run polls upcoming markets. Interval is read from config.Cfg.ScheduleCheckerIntervalSecs.
+// Blocks until ctx cancelled.
+func (c *Checker) Run(ctx context.Context) error {
+	interval := time.Duration(config.Cfg.ScheduleCheckerIntervalSecs) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 

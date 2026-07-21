@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -196,3 +197,5 @@ func (s *Set1WinnerStrategy) String() string {
 }
 
 func (s *Set1WinnerStrategy) PreMatchGated() {}
+
+func (s *Set1WinnerStrategy) OnTick(ctx context.Context) {}

@@ -1,4 +1,4 @@
-# internal/kalshiauth
+# internal/kalshiAuth
 
 RSA-PSS-SHA256 request signing for Kalshi API.
 

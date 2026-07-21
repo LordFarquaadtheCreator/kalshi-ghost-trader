@@ -33,7 +33,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiauth"
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
+	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiAuth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -55,7 +56,7 @@ type PriceUpdater interface {
 // Auto-reconnects with exponential backoff and replays subscriptions.
 type Manager struct {
 	wsURL  string
-	signer *kalshiauth.Signer
+	signer *kalshiAuth.Signer
 	log    *slog.Logger
 
 	minBackoff time.Duration
@@ -83,28 +84,32 @@ type Manager struct {
 	latencyCount int64
 	latencyMax   int64 // ms
 
-	tickWriter *store.TickWriter
-	priceUpd   PriceUpdater // nil if no signal generator
+	tickWriter  *store.TickWriter
+	priceUpd    PriceUpdater // nil if no signal generator
+	disableSave bool         // skip persisting WS data to DB
 }
 
-// NewManager creates a WebSocket manager. series filters which event_lifecycle
-// messages get stored (lifecycle channel is unfiltered server-side).
-func NewManager(wsURL string, signer *kalshiauth.Signer, tw *store.TickWriter, series []string, minBackoff, maxBackoff time.Duration, log *slog.Logger) *Manager {
+// NewManager creates a WebSocket manager. Config values are read from config.Cfg.
+// series filters which event_lifecycle messages get stored (lifecycle channel is unfiltered server-side).
+// disableSave skips all WS data persistence to DB.
+func NewManager(signer *kalshiAuth.Signer, tw *store.TickWriter, log *slog.Logger) *Manager {
+	series := config.Cfg.SeriesTickers
 	sf := make(map[string]bool, len(series))
 	for _, s := range series {
 		sf[s] = true
 	}
 	return &Manager{
-		wsURL:        wsURL,
+		wsURL:        config.Cfg.WSURL,
 		signer:       signer,
 		log:          log,
-		minBackoff:   minBackoff,
-		maxBackoff:   maxBackoff,
+		minBackoff:   time.Duration(config.Cfg.WSMinBackoffSecs) * time.Second,
+		maxBackoff:   time.Duration(config.Cfg.WSMaxBackoffSecs) * time.Second,
 		seriesFilter: sf,
 		subs:         make(map[string]*subInfo),
 		cmdToMarket:  make(map[int64]string),
 		lastSeq:      make(map[int64]int64),
 		tickWriter:   tw,
+		disableSave:  config.Cfg.DisableWSDataSave,
 	}
 }
 

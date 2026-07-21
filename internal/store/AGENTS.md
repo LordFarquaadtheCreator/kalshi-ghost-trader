@@ -15,6 +15,8 @@ SQLite layer. Single-writer architecture via TickWriter.
 - `scan.go` — RecordScanRun
 - `janitor.go` — CleanOrphans, AdoptOrphans
 - `tickwriter.go` — TickWriter goroutine (batched writes across 4 channels)
+- `appconfig.go` — app_config KV store, app_config_history (change tracking), liquidity_pool, strategy_config, trigger_ranges
+- `migrations.go` — embedded SQL migration runner (files in `migrations/*.sql`, applied in order)
 
 ## PRAGMA
 
@@ -57,9 +59,27 @@ On `settled`: after both markets in an event are finalized, classifies coverage 
 
 `INSERT OR IGNORE` + check `RowsAffected()`. If 0, row existed — run UPDATE. `ON CONFLICT DO UPDATE` returns 1 for both insert and update, can't distinguish new vs existing.
 
+## Migrations
+
+SQL migrations live in `migrations/*.sql`, embedded via `go:embed`. `RunAllMigrations()` applies unapplied files in sorted order on startup.
+
+- **Changing default/seed data** — add a new numbered `.sql` file (e.g. `0003_*.sql`). Use `INSERT OR IGNORE` to avoid overwriting existing values.
+- **Schema changes** — prefer GORM `AutoMigrate` (add struct to `allModels` in `schema.go`). Use SQL migrations for indexes, triggers, or data seeds.
+- Migrations are idempotent and ordered. Never edit an applied migration — add a new one.
+
+## Transactions
+
+Multi-step writes **must** use transactions. Wrap in `db.Transaction(func(tx *gorm.DB) error { ... })`.
+
+- Read-then-write patterns (e.g. read old value, write new, insert history row) require transactions for atomicity.
+- Batch writes that must succeed or fail together require transactions.
+- Single-row upserts via `ON CONFLICT` don't need explicit transactions (GORM wraps them).
+
 ## Gotchas
 
 - Don't add FK to ticks, lifecycle_events, or event_lifecycle_events. See above.
 - Don't increase MaxOpenConns. SQLite + WAL still serializes writes. Multiple writers = lock contention.
 - `Close()` must be called after TickWriter exits, not before.
 - `ApplyLifecycleEvent` only handles explicit WS events. Implicit transitions need REST scan.
+- Multi-step writes must use transactions. See Transactions section above.
+- To change default seed data (app_config, strategy_config, liquidity_pool), add a new migration `.sql` file — don't edit existing migrations.

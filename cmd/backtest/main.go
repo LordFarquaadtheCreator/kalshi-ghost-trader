@@ -12,7 +12,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -22,10 +21,10 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
-
+	"github.com/glebarez/sqlite"
 	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
+	"gorm.io/gorm"
 )
 
 // replayStrategy extends algorithms.Strategy with backtest-specific
@@ -233,162 +232,127 @@ func main() {
 	ctx := context.Background()
 
 	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", *dbPath)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Error("open db", "err", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
 
 	// Load event titles for home/away market ordering
 	// eventSeries maps event_ticker -> series_ticker for ML strategies
 	eventSeries := make(map[string]string)
 	eventSurface := make(map[string]string)
-	eventRows, err := db.QueryContext(ctx, `SELECT event_ticker, title, series_ticker FROM events`)
-	if err != nil {
+	var events []struct {
+		EventTicker  string `gorm:"column:event_ticker"`
+		Title        string `gorm:"column:title"`
+		SeriesTicker string `gorm:"column:series_ticker"`
+	}
+	if err := db.WithContext(ctx).Raw(`SELECT event_ticker, title, series_ticker FROM events`).Scan(&events).Error; err != nil {
 		log.Error("query events", "err", err)
 		os.Exit(1)
 	}
-	for eventRows.Next() {
-		var et, title, series string
-		if err := eventRows.Scan(&et, &title, &series); err != nil {
-			log.Error("scan event", "err", err)
-			os.Exit(1)
-		}
-		eventTitles[et] = title
-		eventSeries[et] = series
+	for _, ev := range events {
+		eventTitles[ev.EventTicker] = ev.Title
+		eventSeries[ev.EventTicker] = ev.SeriesTicker
 	}
-	eventRows.Close()
 
 	// Load surface from flashscore_matches
-	fsRows, err := db.QueryContext(ctx,
-		`SELECT event_ticker, surface FROM flashscore_matches WHERE event_ticker IS NOT NULL AND surface IS NOT NULL`)
-	if err != nil {
+	var fsMatches []struct {
+		EventTicker string `gorm:"column:event_ticker"`
+		Surface     string `gorm:"column:surface"`
+	}
+	if err := db.WithContext(ctx).Raw(`SELECT event_ticker, surface FROM flashscore_matches WHERE event_ticker IS NOT NULL AND surface IS NOT NULL`).Scan(&fsMatches).Error; err != nil {
 		log.Error("query flashscore surfaces", "err", err)
 		os.Exit(1)
 	}
-	for fsRows.Next() {
-		var et, surface string
-		if err := fsRows.Scan(&et, &surface); err != nil {
-			log.Error("scan surface", "err", err)
-			os.Exit(1)
-		}
-		eventSurface[et] = surface
+	for _, fm := range fsMatches {
+		eventSurface[fm.EventTicker] = fm.Surface
 	}
-	fsRows.Close()
 
 	// Load markets
 	fmt.Println("Loading markets...")
 	markets := make(map[string][]marketRow)
 	marketCloseTs := make(map[string]int64)
-	marketRows, err := db.QueryContext(ctx, `SELECT event_ticker, market_ticker, player_name, result, status, close_ts FROM markets ORDER BY event_ticker, market_ticker`)
-	if err != nil {
+	var mkts []struct {
+		EventTicker  string `gorm:"column:event_ticker"`
+		MarketTicker string `gorm:"column:market_ticker"`
+		PlayerName   string `gorm:"column:player_name"`
+		Result       string `gorm:"column:result"`
+		Status       string `gorm:"column:status"`
+		CloseTs      int64  `gorm:"column:close_ts"`
+	}
+	if err := db.WithContext(ctx).Raw(`SELECT event_ticker, market_ticker, player_name, result, status, close_ts FROM markets ORDER BY event_ticker, market_ticker`).Scan(&mkts).Error; err != nil {
 		log.Error("query markets", "err", err)
 		os.Exit(1)
 	}
-	for marketRows.Next() {
-		var et, mt, pn, res, st string
-		var closeTs sql.NullInt64
-		if err := marketRows.Scan(&et, &mt, &pn, &res, &st, &closeTs); err != nil {
-			log.Error("scan market", "err", err)
-			os.Exit(1)
-		}
-		markets[et] = append(markets[et], marketRow{mt, pn, res, st})
-		if closeTs.Valid && closeTs.Int64 > 0 {
-			marketCloseTs[et] = closeTs.Int64
+	for _, m := range mkts {
+		markets[m.EventTicker] = append(markets[m.EventTicker], marketRow{m.MarketTicker, m.PlayerName, m.Result, m.Status})
+		if m.CloseTs > 0 {
+			marketCloseTs[m.EventTicker] = m.CloseTs
 		}
 	}
-	marketRows.Close()
 
 	// Load tick prices per market
 	fmt.Println("Loading tick prices...")
 	tickPrices := make(map[string][]tickPrice)
-	tickRows, err := db.QueryContext(ctx, `SELECT market_ticker, ts, price FROM ticks WHERE price IS NOT NULL AND price > 0 ORDER BY market_ticker, ts`)
-	if err != nil {
+	var tickPricesRaw []struct {
+		MarketTicker string  `gorm:"column:market_ticker"`
+		TS           int64   `gorm:"column:ts"`
+		Price        float64 `gorm:"column:price"`
+	}
+	if err := db.WithContext(ctx).Raw(`SELECT market_ticker, ts, price FROM ticks WHERE price IS NOT NULL AND price > 0 ORDER BY market_ticker, ts`).Scan(&tickPricesRaw).Error; err != nil {
 		log.Error("query ticks", "err", err)
 		os.Exit(1)
 	}
 	count := 0
-	for tickRows.Next() {
-		var mt string
-		var ts int64
-		var price float64
-		if err := tickRows.Scan(&mt, &ts, &price); err != nil {
-			log.Error("scan tick", "err", err)
-			os.Exit(1)
-		}
-		tickPrices[mt] = append(tickPrices[mt], tickPrice{ts, price})
+	for _, t := range tickPricesRaw {
+		tickPrices[t.MarketTicker] = append(tickPrices[t.MarketTicker], tickPrice{t.TS, t.Price})
 		count++
 	}
-	tickRows.Close()
 	fmt.Printf("Loaded %d tick prices across %d markets\n", count, len(tickPrices))
 
 	// Load dollar_volume time series per market (for volratio strategy)
 	fmt.Println("Loading tick volumes...")
 	tickVolumes := make(map[string][]algorithms.TickVolume)
-	vRows, err := db.QueryContext(ctx,
-		`SELECT market_ticker, ts, dollar_volume FROM ticks
-		 WHERE dollar_volume IS NOT NULL AND dollar_volume > 0
-		 ORDER BY market_ticker, ts`)
-	if err != nil {
+	var tickVolsRaw []struct {
+		MarketTicker string  `gorm:"column:market_ticker"`
+		TS           int64   `gorm:"column:ts"`
+		DollarVolume float64 `gorm:"column:dollar_volume"`
+	}
+	if err := db.WithContext(ctx).Raw(`SELECT market_ticker, ts, dollar_volume FROM ticks WHERE dollar_volume IS NOT NULL AND dollar_volume > 0 ORDER BY market_ticker, ts`).Scan(&tickVolsRaw).Error; err != nil {
 		log.Error("query tick volumes", "err", err)
 		os.Exit(1)
 	}
 	volCount := 0
-	for vRows.Next() {
-		var mt string
-		var ts int64
-		var dv float64
-		if err := vRows.Scan(&mt, &ts, &dv); err != nil {
-			log.Error("scan volume", "err", err)
-			os.Exit(1)
-		}
-		tickVolumes[mt] = append(tickVolumes[mt], algorithms.TickVolume{TS: ts, DollarVolume: dv})
+	for _, v := range tickVolsRaw {
+		tickVolumes[v.MarketTicker] = append(tickVolumes[v.MarketTicker], algorithms.TickVolume{TS: v.TS, DollarVolume: v.DollarVolume})
 		volCount++
 	}
-	vRows.Close()
 	fmt.Printf("Loaded %d volume samples across %d markets\n", volCount, len(tickVolumes))
 
 	// Load point-by-point score data
 	fmt.Println("Loading points...")
 	points := make(map[string][]store.Point)
-	pRows, err := db.QueryContext(ctx, `
+	var pointsRaw []store.Point
+	if err := db.WithContext(ctx).Raw(`
 		SELECT match_ticker, ts_ms, set_number, game_number, point_number,
 		       server, scorer, home_points, away_points,
 		       home_games, away_games,
-		       COALESCE(home_set_games, 0), COALESCE(away_set_games, 0),
+		       COALESCE(home_set_games, 0) as home_set_games, COALESCE(away_set_games, 0) as away_set_games,
 		       is_tiebreak, is_break_point, is_set_point, is_match_point
 		FROM points WHERE ts_ms IS NOT NULL
 		ORDER BY match_ticker, ts_ms
-	`)
-	if err != nil {
+	`).Scan(&pointsRaw).Error; err != nil {
 		log.Error("query points", "err", err)
 		os.Exit(1)
 	}
 	pointCount := 0
-	for pRows.Next() {
-		var mt string
-		var p store.Point
-		var isTB, isBP, isSP, isMP int
-		if err := pRows.Scan(
-			&mt, &p.TS, &p.SetNumber, &p.GameNumber, &p.PointNumber,
-			&p.Server, &p.Scorer, &p.HomePoints, &p.AwayPoints,
-			&p.HomeGames, &p.AwayGames,
-			&p.HomeSetGames, &p.AwaySetGames,
-			&isTB, &isBP, &isSP, &isMP,
-		); err != nil {
-			pRows.Close()
-			log.Error("scan point", "err", err)
-			os.Exit(1)
-		}
-		p.IsTiebreak = isTB != 0
-		p.IsBreakPoint = isBP != 0
-		p.IsSetPoint = isSP != 0
-		p.IsMatchPoint = isMP != 0
-		points[mt] = append(points[mt], p)
+	for _, p := range pointsRaw {
+		points[p.MatchTicker] = append(points[p.MatchTicker], p)
 		pointCount++
 	}
-	pRows.Close()
 	fmt.Printf("Loaded %d points across %d matches\n", pointCount, len(points))
 
 	fmt.Printf("Matches with markets: %d\n", len(markets))

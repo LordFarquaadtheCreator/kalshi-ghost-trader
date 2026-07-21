@@ -48,7 +48,7 @@ testing.
 ## Run
 
 ```bash
-go run ./cmd/ghost-trader
+go run .
 ```
 
 Logs go to stdout. Ctrl+C stops cleanly (flushes SQLite, unsubscribes WS).
@@ -75,8 +75,6 @@ Full reference in `config.yaml.example`.
 | `ws_min_backoff_secs` | `1` | WS reconnect min backoff |
 | `ws_max_backoff_secs` | `30` | WS reconnect max backoff |
 | `metrics_port` | `6060` | `0` disables metrics server |
-| `apitennis_enabled` | `false` | Enable API-Tennis WebSocket scraper |
-| `apitennis_api_key` | — | API-Tennis API key (required if enabled) |
 | `apitennis_timezone` | `+00:00` | Timezone for API-Tennis requests |
 
 ## Dashboard
@@ -174,13 +172,10 @@ Override with `series_tickers` in `config.yaml`.
 ## Architecture
 
 ```
-cmd/ghost-trader/        entrypoint, signal handling, errgroup wiring
-cmd/ghost-trader/metrics.go  runtime metrics + pprof HTTP handlers
-cmd/validate/            config + connectivity validation tool
-cmd/ws-debug/            WS + REST debug tool
+main.go                 entrypoint, signal handling, errgroup wiring
 cmd/backtest/           replay historical data through trading strategies
 internal/config/         YAML config loading
-internal/kalshiauth/     RSA-PSS-SHA256 request signing
+internal/kalshiAuth/     RSA-PSS-SHA256 request signing
 internal/kalshiclient/   REST client (events, markets, pagination, rate limit)
 internal/store/          SQLite (WAL, single writer, batched inserts)
 internal/ws/             WebSocket manager (auto-reconnect, re-subscribe)
@@ -206,12 +201,6 @@ Official docs at <https://docs.kalshi.com>.
 ## Diagnostic tools
 
 ```bash
-# Validate config, credentials, REST/WS connectivity, DB
-go run ./cmd/validate
-
-# Debug WS handshake + REST signing
-go run ./cmd/ws-debug
-
 # Backtest a strategy on historical data
 go run ./cmd/backtest -strategy matchpoint -db kalshi_tennis.db
 # Skip dead/illiquid markets (price < 0.05)

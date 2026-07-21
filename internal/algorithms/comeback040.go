@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -252,3 +253,5 @@ func (s *Comeback040Strategy) String() string {
 
 // PreMatchGated prevents pre-match price movements from triggering.
 func (s *Comeback040Strategy) PreMatchGated() {}
+
+func (s *Comeback040Strategy) OnTick(ctx context.Context) {}

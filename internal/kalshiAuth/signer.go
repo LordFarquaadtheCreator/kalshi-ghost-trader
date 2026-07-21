@@ -1,4 +1,4 @@
-// Package kalshiauth implements RSA-PSS-SHA256 request signing for the Kalshi API.
+// Package kalshiAuth implements RSA-PSS-SHA256 request signing for the Kalshi API.
 //
 // Kalshi requires three headers on every authenticated request:
 //   - KALSHI-ACCESS-KEY: the key ID from the Kalshi dashboard
@@ -12,7 +12,7 @@
 //
 // Private keys in both PKCS#8 ("PRIVATE KEY") and PKCS#1 ("RSA PRIVATE KEY")
 // PEM formats are supported. Kalshi dashboard exports PKCS#8 by default.
-package kalshiauth
+package kalshiAuth
 
 import (
 	"crypto"
@@ -27,6 +27,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 )
 
 // Signer holds Kalshi API credentials and signs requests with RSA-PSS-SHA256.
@@ -38,14 +40,14 @@ type Signer struct {
 // wsHandshakePath is the path signed for WebSocket handshake auth.
 const wsHandshakePath = "/trade-api/ws/v2"
 
-// NewSignerFromFile loads an RSA private key from a PEM file on disk.
+// NewSignerFromFile loads an RSA private key from config.Cfg.PrivateKeyPath.
 // Supports both PKCS#8 ("PRIVATE KEY") and PKCS#1 ("RSA PRIVATE KEY").
-func NewSignerFromFile(keyID, privateKeyPath string) (*Signer, error) {
-	pemData, err := os.ReadFile(privateKeyPath)
+func NewSignerFromFile() (*Signer, error) {
+	pemData, err := os.ReadFile(config.Cfg.PrivateKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("read private key file %s: %w", privateKeyPath, err)
+		return nil, fmt.Errorf("read private key file %s: %w", config.Cfg.PrivateKeyPath, err)
 	}
-	return NewSignerFromPEM(keyID, pemData)
+	return NewSignerFromPEM(config.Cfg.APIKeyID, pemData)
 }
 
 // NewSignerFromPEM parses an RSA private key from PEM-encoded bytes.
