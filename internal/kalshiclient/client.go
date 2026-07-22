@@ -156,13 +156,25 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 		}
 
 		if resp.StatusCode != 200 {
-			return fmt.Errorf("kalshi API %d: %s", resp.StatusCode, string(body))
+			return APIError{Code: resp.StatusCode, Body: string(body)}
 		}
 
 		return json.Unmarshal(body, out)
 	}
 
 	return fmt.Errorf("kalshi API: exhausted retries for %s", path)
+}
+
+// APIError is returned by get/post when the Kalshi API responds with a
+// non-success status code. Callers can use errors.As to inspect the code
+// and react accordingly (e.g. stop retrying on 404).
+type APIError struct {
+	Code int
+	Body string
+}
+
+func (e APIError) Error() string {
+	return fmt.Sprintf("kalshi API %d: %s", e.Code, e.Body)
 }
 
 // Post performs a signed POST request with a JSON body and decodes the response.
@@ -247,7 +259,7 @@ func (c *Client) post(ctx context.Context, path string, body any, out any) error
 		}
 
 		if resp.StatusCode != 200 && resp.StatusCode != 201 {
-			return fmt.Errorf("kalshi API %d: %s", resp.StatusCode, string(respBody))
+			return APIError{Code: resp.StatusCode, Body: string(respBody)}
 		}
 
 		return json.Unmarshal(respBody, out)

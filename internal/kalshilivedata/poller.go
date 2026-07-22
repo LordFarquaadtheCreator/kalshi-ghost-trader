@@ -14,6 +14,7 @@ package kalshilivedata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strconv"
 	"sync"
@@ -145,7 +146,7 @@ func (p *Poller) stopAll() {
 }
 
 // run is the per-match poll loop. Resolves the milestone ID once, then polls
-// live_data at the configured interval until done.
+// live_data at the configured interval until done or milestone disappears.
 func (w *matchPoller) run() {
 	if !w.resolveMilestone() {
 		return
@@ -159,7 +160,9 @@ func (w *matchPoller) run() {
 		case <-w.done:
 			return
 		case <-ticker.C:
-			w.poll()
+			if w.poll() {
+				return
+			}
 		}
 	}
 }
@@ -211,14 +214,21 @@ func (w *matchPoller) resolveMilestone() bool {
 
 // poll fetches one live_data snapshot, stores it, and dispatches to strategies
 // if the score changed and API-Tennis has no data for this match.
-func (w *matchPoller) poll() {
+// Returns true if the milestone is gone (404) and the poller should stop.
+func (w *matchPoller) poll() (stop bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	ld, err := w.client.GetLiveData(ctx, w.milestoneID)
 	if err != nil {
+		var apiErr kalshiclient.APIError
+		if errors.As(err, &apiErr) && apiErr.Code == 404 {
+			w.log.Info("kalshi livedata: milestone gone, stopping poller",
+				"event", w.eventTicker, "milestone_id", w.milestoneID)
+			return true
+		}
 		w.log.Warn("kalshi livedata: get live data", "event", w.eventTicker, "err", err)
-		return
+		return false
 	}
 
 	d := &ld.Details
@@ -274,7 +284,7 @@ func (w *matchPoller) poll() {
 	// Only dispatch to strategies if score changed and API-Tennis has no data.
 	hasAPItennis, _ := w.db.HasAPItennisPoints(ctx, w.eventTicker)
 	if hasAPItennis {
-		return
+		return false
 	}
 
 	changed := pointsHome != w.lastPointsHome ||
@@ -292,13 +302,14 @@ func (w *matchPoller) poll() {
 	w.lastSetsAway = d.Competitor2OverallScore
 
 	if !changed {
-		return
+		return false
 	}
 
 	p := synthesizePoint(w.eventTicker, w.milestoneID, score, currentSet)
 	if w.scoreObs != nil {
 		w.scoreObs.OnPoint(w.eventTicker, p)
 	}
+	return false
 }
 
 // synthesizePoint creates a store.Point from a Kalshi live-data snapshot.
