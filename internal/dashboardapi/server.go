@@ -41,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tracked", s.trackedHandler)
 	mux.HandleFunc("/api/strategies", corsHandler(s.strategyListHandler))
 	mux.HandleFunc("/api/simulation", corsHandler(s.simulationHandler))
+	mux.HandleFunc("/api/paper-orders-insights", corsHandler(s.paperOrdersInsightsHandler))
 	mux.HandleFunc("/api/ticks", corsHandler(s.ticksHandler))
 	mux.HandleFunc("/api/orders", corsHandler(s.ordersHandler))
 	mux.HandleFunc("/api/order-counts", corsHandler(s.orderCountsHandler))
@@ -195,6 +196,76 @@ func (s *Server) simulationHandler(w http.ResponseWriter, r *http.Request) {
 		"summaries":     summaries,
 		"bands":         insightRows,
 		"insight_run_ts": insightRunTS,
+	})
+}
+
+func (s *Server) paperOrdersInsightsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+
+	summaryRows, err := s.deps.DB.GetAllPaperOrderSummaries()
+	if err != nil {
+		s.deps.Log.Error("paper-orders-insights: get summaries", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	type summaryOut struct {
+		Strategy      string                `json:"strategy"`
+		TotalSignals  int                   `json:"total_signals"`
+		Wins          int                   `json:"wins"`
+		Losses        int                   `json:"losses"`
+		WinRate       float64               `json:"win_rate"`
+		TotalInvested float64               `json:"total_invested"`
+		NetPnL        float64               `json:"net_pnl"`
+		ROI           float64               `json:"roi"`
+		AvgEdge       float64               `json:"avg_edge"`
+		Sharpe        float64               `json:"sharpe"`
+		ProfitFactor  float64               `json:"profit_factor"`
+		MaxDrawdown   float64               `json:"max_drawdown"`
+		CumPnL        []backtest.CumPnLPoint `json:"cum_pnl"`
+	}
+
+	summaries := make([]summaryOut, 0, len(summaryRows))
+	for _, row := range summaryRows {
+		var cumPnL []backtest.CumPnLPoint
+		if row.CumPnLJSON != "" {
+			if err := json.Unmarshal([]byte(row.CumPnLJSON), &cumPnL); err != nil {
+				s.deps.Log.Error("paper-orders-insights: unmarshal cum_pnl", "strategy", row.Strategy, "err", err)
+			}
+		}
+		summaries = append(summaries, summaryOut{
+			Strategy:      row.Strategy,
+			TotalSignals:  row.TotalSignals,
+			Wins:          row.Wins,
+			Losses:        row.Losses,
+			WinRate:       row.WinRate,
+			TotalInvested: row.TotalInvested,
+			NetPnL:        row.NetPnL,
+			ROI:           row.ROI,
+			AvgEdge:       row.AvgEdge,
+			Sharpe:        row.Sharpe,
+			ProfitFactor:  row.ProfitFactor,
+			MaxDrawdown:   row.MaxDrawdown,
+			CumPnL:        cumPnL,
+		})
+	}
+
+	insightRows, err := s.deps.DB.GetAllPaperOrderInsights()
+	if err != nil {
+		s.deps.Log.Error("paper-orders-insights: get insights", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	runTS, _ := s.deps.DB.GetPaperOrderInsightRunTS()
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"summaries":     summaries,
+		"bands":         insightRows,
+		"insight_run_ts": runTS,
 	})
 }
 

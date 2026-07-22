@@ -19,6 +19,7 @@ PostgreSQL layer. Single-writer architecture via TickWriter.
 - `backtest.go` — SaveBacktestResult, GetAllBacktestResults, GetBacktestRunTS, GetLastFinalizedSettlementTS
 - `pricebands.go` — GetComputedDays, SavePriceBandDay, GetAllPriceBandResults, GetPriceBandRunTS
 - `simulation.go` — GetComputedInsightDays, SaveSimulationInsightDay, GetAllSimulationInsights, GetSimulationInsightRunTS
+- `paperorderinsights.go` — GetComputedPaperOrderInsightDays, SavePaperOrderInsightDay, GetAllPaperOrderInsights, GetPaperOrderInsightRunTS, ReplacePaperOrderSummaries, GetAllPaperOrderSummaries
 - `migrations.go` — embedded SQL migration runner (files in `migrations/*.sql`, applied in order)
 
 ## Connection settings

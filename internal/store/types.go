@@ -309,6 +309,55 @@ type SimulationInsightRow struct {
 
 func (SimulationInsightRow) TableName() string { return "simulation_insights" }
 
+// PaperOrderInsightRow is one row in paper_order_insights.
+// Per strategy × day × fixed price band, derived from live orders table
+// (is_real = false, market resolved). Populated by paperorderinsights cron.
+type PaperOrderInsightRow struct {
+	ID           int64   `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	RunTS        int64   `gorm:"column:run_ts" json:"run_ts"`
+	Day          string  `gorm:"column:day;index:idx_paper_insights_day" json:"day"`
+	Strategy     string  `gorm:"column:strategy;index:idx_paper_insights_strategy" json:"strategy"`
+	BandLabel    string  `gorm:"column:band_label" json:"band_label"`
+	BandLo       float64 `gorm:"column:band_lo" json:"band_lo"`
+	BandHi       float64 `gorm:"column:band_hi" json:"band_hi"`
+	N            int     `gorm:"column:n" json:"n"`
+	Wins         int     `gorm:"column:wins" json:"wins"`
+	WinRate      float64 `gorm:"column:win_rate" json:"win_rate"`
+	NetPnL       float64 `gorm:"column:net_pnl" json:"net_pnl"`
+	Invested     float64 `gorm:"column:invested" json:"invested"`
+	ROI          float64 `gorm:"column:roi" json:"roi"`
+	AvgEdge      float64 `gorm:"column:avg_edge" json:"avg_edge"`
+	Sharpe       float64 `gorm:"column:sharpe" json:"sharpe"`
+	ProfitFactor float64 `gorm:"column:profit_factor" json:"profit_factor"`
+	MaxDrawdown  float64 `gorm:"column:max_drawdown" json:"max_drawdown"`
+	Score        float64 `gorm:"column:score" json:"score"`
+	Peak         bool    `gorm:"column:peak" json:"peak"`
+}
+
+func (PaperOrderInsightRow) TableName() string { return "paper_order_insights" }
+
+// PaperOrderSummaryRow is one row in paper_order_summaries.
+// Per-strategy aggregate + cumulative P&L series for live paper orders.
+type PaperOrderSummaryRow struct {
+	ID            int64   `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Strategy      string  `gorm:"uniqueIndex;column:strategy" json:"strategy"`
+	RunTS         int64   `gorm:"column:run_ts" json:"run_ts"`
+	TotalSignals  int     `gorm:"column:total_signals" json:"total_signals"`
+	Wins          int     `gorm:"column:wins" json:"wins"`
+	Losses        int     `gorm:"column:losses" json:"losses"`
+	WinRate       float64 `gorm:"column:win_rate" json:"win_rate"`
+	TotalInvested float64 `gorm:"column:total_invested" json:"total_invested"`
+	NetPnL        float64 `gorm:"column:net_pnl" json:"net_pnl"`
+	ROI           float64 `gorm:"column:roi" json:"roi"`
+	AvgEdge       float64 `gorm:"column:avg_edge" json:"avg_edge"`
+	Sharpe        float64 `gorm:"column:sharpe" json:"sharpe"`
+	ProfitFactor  float64 `gorm:"column:profit_factor" json:"profit_factor"`
+	MaxDrawdown   float64 `gorm:"column:max_drawdown" json:"max_drawdown"`
+	CumPnLJSON    string  `gorm:"column:cum_pnl_json" json:"cum_pnl_json"`
+}
+
+func (PaperOrderSummaryRow) TableName() string { return "paper_order_summaries" }
+
 // SchemaMigration tracks applied SQL migrations.
 type SchemaMigration struct {
 	Name      string `gorm:"primaryKey;column:name"`

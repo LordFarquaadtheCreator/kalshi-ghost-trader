@@ -59,6 +59,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `cmd/backtest/` — replay historical data through trading strategies
 - `cmd/backfill-orders/` — one-shot CLI: backfill stale real order status + resolve markets with results but unresolved orders
 - `internal/pricebands/` — fixed-band price analysis cron (computes missing days, persists to `price_band_results` + `simulation_insights`)
+- `internal/paperorderinsights/` — cron-driven pre-computation of paper order insights (per-strategy × per-day × per-band aggregates + summaries from live orders table)
 - `internal/config/` — YAML config loading (legacy, superseded by app_config table)
 - `internal/kalshiAuth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
 - `internal/kalshiclient/` — REST client (events, markets, pagination, rate limit)
@@ -87,6 +88,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - One goroutine per active match (if Kalshi live-data enabled): REST poll loop
 - One goroutine per scheduled match: waits until start time, then subscribes
 - One pricebands cron goroutine: computes missing days daily, persists to `price_band_results` + `simulation_insights` (derived per-band metrics: sharpe, profit_factor, max_drawdown, score, peak)
+- One paperorderinsights cron goroutine: computes missing days daily from live orders table (paper only), persists to `paper_order_insights` + `paper_order_summaries`
 
 ## SQLite Schema
 
@@ -101,6 +103,8 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `backtest_results` — per-strategy backtest summary + orders + cumulative P&L series (JSON). One row per strategy.
 - `price_band_results` — per-day per-strategy per-fixed-band aggregates. Populated by pricebands cron.
 - `simulation_insights` — per-day per-strategy per-fixed-band derived metrics (sharpe, profit_factor, max_drawdown, score, peak). Populated by pricebands cron alongside `price_band_results`.
+- `paper_order_insights` — per-day per-strategy per-fixed-band derived metrics for live paper orders. Populated by paperorderinsights cron.
+- `paper_order_summaries` — per-strategy aggregate + cumulative P&L series for live paper orders. Populated by paperorderinsights cron.
 
 Cascade deletes use flattened triggers (not recursive FK chains):
 - `trg_markets_delete_cascade` — cleans ticks, orderbook, lifecycle on market delete.

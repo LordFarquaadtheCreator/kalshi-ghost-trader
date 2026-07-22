@@ -38,6 +38,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
 	"github.com/farquaad/kalshi-ghost-trader/internal/orderbackfill"
+	"github.com/farquaad/kalshi-ghost-trader/internal/paperorderinsights"
 	"github.com/farquaad/kalshi-ghost-trader/internal/positions"
 	"github.com/farquaad/kalshi-ghost-trader/internal/pricebands"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
@@ -334,6 +335,23 @@ func main() {
 			case <-ticker.C:
 				pricebands.ComputeMissingDays(db, log)
 				pricebands.ComputeMissingInsights(db, log)
+			}
+		}
+	})
+
+	// 9. Paper order insights cron — compute missing days daily, persist to DB.
+	// Pre-computes per-strategy × per-day × per-band aggregates + per-strategy
+	// summaries from live orders table (paper only). Read by /api/paper-orders-insights.
+	g.Go(func() error {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		paperorderinsights.ComputeMissing(db, log) // initial run at startup
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				paperorderinsights.ComputeMissing(db, log)
 			}
 		}
 	})

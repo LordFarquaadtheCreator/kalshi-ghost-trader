@@ -9,5 +9,6 @@ var AllModels = []any{
 	&RuntimeConfig{}, &RuntimeConfigHistory{}, &LiquidityPool{}, &StrategyConfigEntry{},
 	&TriggerRange{}, &FlashscoreMatch{}, &PriceBandResultRow{},
 	&BacktestResultRow{},
+	&PaperOrderInsightRow{}, &PaperOrderSummaryRow{},
 	&SchemaMigration{},
 }
