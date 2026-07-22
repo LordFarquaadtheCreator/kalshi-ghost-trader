@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -58,21 +57,4 @@ func main() {
 	t0 := time.Now()
 	m.Run(db, fs.Args())
 	fmt.Fprintf(os.Stderr, "\n[done in %s]\n", time.Since(t0).Round(time.Millisecond))
-}
-
-// writeJSON writes v as indented JSON to path (if non-empty).
-func writeJSON(path string, v any) {
-	if path == "" {
-		return
-	}
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "marshal: %v\n", err)
-		return
-	}
-	if err := os.WriteFile(path, b, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "write %s: %v\n", path, err)
-		return
-	}
-	fmt.Fprintf(os.Stderr, "[json -> %s]\n", path)
 }

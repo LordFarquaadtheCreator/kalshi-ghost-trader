@@ -41,7 +41,6 @@ type Scraper struct {
 // from the read loop and registers markets — all without blocking the WS read loop.
 type matchWorker struct {
 	eventTicker string
-	eventKey    int
 	ch          chan WSEvent
 	done        chan struct{}
 	strategy    algorithms.Strategy

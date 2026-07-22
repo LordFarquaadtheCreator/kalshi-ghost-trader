@@ -307,7 +307,7 @@ func (m *MarkovModel) tbWinProbMemoized(h, a int, p float64, homeServing bool, t
 	// Points 1-2: player 2 serves
 	// Points 3-4: player 1 serves
 	// etc.
-	nextHomeServing := !homeServing
+	var nextHomeServing bool
 	if totalPoints%2 == 0 {
 		nextHomeServing = !homeServing
 	} else {

@@ -99,7 +99,7 @@ func NewClientWithConfig(baseURL string, signer *kalshiAuth.Signer, httpTimeout 
 // Retries on 429 with exponential backoff (per Kalshi rate limit docs).
 func (c *Client) get(ctx context.Context, path string, params url.Values, out any) error {
 	fullURL := c.baseURL + path
-	if params != nil && len(params) > 0 {
+	if len(params) > 0 {
 		fullURL += "?" + params.Encode()
 	}
 

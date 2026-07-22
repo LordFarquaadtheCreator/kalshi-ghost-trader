@@ -40,12 +40,6 @@ func seriesPrefix(ticker string) string {
 	return ticker
 }
 
-// isDoubles reports whether the ticker is a doubles series.
-func isDoubles(ticker string) bool {
-	p := seriesPrefix(ticker)
-	return p == "KXATPDOUBLES" || p == "KXWTADOUBLES" || p == "KXITFDOUBLES" || p == "KXITFWDOUBLES"
-}
-
 // pct formats a fraction as a percentage string with one decimal.
 func pct(num, den int) string {
 	if den == 0 {

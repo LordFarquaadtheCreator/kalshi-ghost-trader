@@ -49,7 +49,3 @@ func (rl *rateLimiter) wait(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
-
-func (rl *rateLimiter) close() {
-	close(rl.stop)
-}
