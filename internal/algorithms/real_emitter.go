@@ -11,6 +11,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/liquiditypool"
+	"github.com/farquaad/kalshi-ghost-trader/internal/positions"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 	"github.com/farquaad/kalshi-ghost-trader/internal/strategyconfig"
 	"github.com/farquaad/kalshi-ghost-trader/internal/triggerranges"
@@ -52,6 +53,18 @@ type createOrderV2Response struct {
 // KalshiOrderEmitter submits real orders to Kalshi via REST.
 // Implements OrderEmitter — sits as the inner emitter behind QuotaGuard.
 //
+// Buy path (Action="buy", Side="open"):
+//   - Kelly sizing from live pool balance
+//   - Side: "bid" to Kalshi
+//   - Deducts cost from pool
+//   - ApplyBuy on position manager
+//
+// Sell path (Action="sell", Side="close"):
+//   - Size from open position (sell-to-close only, no naked shorts)
+//   - Side: "ask" to Kalshi
+//   - Credits proceeds to pool
+//   - ApplySell on position manager, computes realized PnL
+//
 // Safety:
 //   - IOC by default (no resting orders)
 //   - Hard cap on contracts per order
@@ -59,10 +72,11 @@ type createOrderV2Response struct {
 //   - All submissions logged with order_id, fill info
 //   - Never blocks — errors logged, not propagated to strategies
 type KalshiOrderEmitter struct {
-	client *kalshiclient.Client
-	db     *store.DB
-	cfg    RealOrderConfig
-	log    *slog.Logger
+	client   *kalshiclient.Client
+	db       *store.DB
+	pos      *positions.Manager
+	cfg      RealOrderConfig
+	log      *slog.Logger
 }
 
 func NewKalshiOrderEmitter(client *kalshiclient.Client, db *store.DB, log *slog.Logger) *KalshiOrderEmitter {
@@ -78,7 +92,13 @@ func NewKalshiOrderEmitter(client *kalshiclient.Client, db *store.DB, log *slog.
 	if cfg.OrderTimeoutS <= 0 {
 		cfg.OrderTimeoutS = 10
 	}
-	return &KalshiOrderEmitter{client: client, db: db, cfg: cfg, log: log}
+	return &KalshiOrderEmitter{
+		client: client,
+		db:     db,
+		pos:    positions.New(db.GormDB()),
+		cfg:    cfg,
+		log:    log,
+	}
 }
 
 func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
@@ -86,6 +106,17 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 		return false
 	}
 
+	// Route to sell path if Action="sell" or Side="close". Legacy orders
+	// (Side="") and explicit Side="open" go through buy path.
+	if o.Action == "sell" || o.Side == store.OrderSideClose {
+		return e.emitSell(o)
+	}
+	return e.emitBuy(o)
+}
+
+// emitBuy handles the buy-to-open path. Deducts cost from pool, submits
+// bid to Kalshi, ApplyBuy on position manager with fill count.
+func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 	ctx := context.Background()
 
 	// Guard 0: match must have started — refuse orders on pre-match markets.
@@ -206,6 +237,10 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	o.IsReal = true
 	o.OrderStatus = "pending"
 	o.SuggestedSize = count
+	o.Action = "buy"
+	if o.Side == "" {
+		o.Side = store.OrderSideOpen
+	}
 	orderID, err := e.db.InsertRealOrder(ctx, o)
 	if err != nil {
 		e.log.Error("real: failed to persist order to DB",
@@ -284,6 +319,22 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 			"order_id", resp.OrderID, "error", err)
 	}
 
+	// Apply buy to position manager using actual fill count. Zero-fill
+	// cancels don't create a position. Partial fills create a smaller
+	// position than suggested — reflects actual exposure.
+	if fillCount > 0 {
+		posID, perr := e.pos.ApplyBuy(ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, o.MarketPrice)
+		if perr != nil {
+			e.log.Error("real: ApplyBuy failed",
+				"market", o.MarketTicker, "strategy", o.Strategy,
+				"fill_count", fillCount, "error", perr)
+		} else {
+			// Link order to position for traceability.
+			_ = e.db.GormDB().Model(&store.Order{}).Where("id = ?", o.ID).
+				Update("position_id", posID).Error
+		}
+	}
+
 	e.log.Info("real: order submitted",
 		"market", o.MarketTicker, "strategy", o.Strategy,
 		"order_id", resp.OrderID, "client_order_id", clientOrderID,
@@ -293,6 +344,175 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 		"count", countStr, "price", priceStr,
 		"environment", e.cfg.Environment,
 		"pool_balance_cents", newBalance)
+
+	return true
+}
+
+// emitSell handles the sell-to-close path. Looks up open position, sizes
+// sell to open contracts, submits ask to Kalshi, credits proceeds to pool,
+// ApplySell on position manager with fill count.
+//
+// No naked shorts: rejects if no open position or sell exceeds open count.
+func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
+	ctx := context.Background()
+
+	// Sell path needs the same pre-match gate + market lookup for player/title.
+	mkt, err := e.db.GetMarket(ctx, o.MarketTicker)
+	if err != nil {
+		e.log.Error("real: sell failed to look up market",
+			"market", o.MarketTicker, "error", err)
+		return false
+	}
+	o.PlayerName = mkt.PlayerName
+	if title, err := e.db.GetEventTitle(ctx, mkt.EventTicker); err == nil {
+		o.MatchTitle = title
+	}
+
+	// Strategy enabled check still applies to sells.
+	enabled, err := strategyconfig.IsEnabled(ctx, e.db.GormDB(), o.Strategy)
+	if err != nil {
+		e.log.Error("real: sell failed to check strategy enabled",
+			"strategy", o.Strategy, "error", err)
+		return false
+	}
+	if !enabled {
+		e.log.Warn("real: sell skipped, strategy not enabled",
+			"strategy", o.Strategy, "market", o.MarketTicker)
+		return false
+	}
+
+	// Fetch open position. Sell-to-close only — no position, no sell.
+	pos, err := e.pos.GetOpenForStrategy(ctx, o.MarketTicker, o.Strategy, true)
+	if err != nil {
+		e.log.Error("real: sell failed to fetch open position",
+			"market", o.MarketTicker, "strategy", o.Strategy, "error", err)
+		return false
+	}
+	if pos == nil {
+		e.log.Warn("real: sell skipped, no open position",
+			"market", o.MarketTicker, "strategy", o.Strategy)
+		return false
+	}
+
+	openContracts := pos.FilledBuyCount - pos.FilledSellCount
+	if openContracts <= 0 {
+		e.log.Warn("real: sell skipped, position has no open contracts",
+			"market", o.MarketTicker, "strategy", o.Strategy,
+			"buy_count", pos.FilledBuyCount, "sell_count", pos.FilledSellCount)
+		return false
+	}
+
+	// Size sell to open contracts. SuggestedSize from strategy is a hint;
+	// clamp to actual open count to avoid naked-short rejection from Kalshi.
+	count := o.SuggestedSize
+	if count <= 0 || count > openContracts {
+		count = openContracts
+	}
+	if count < 1 {
+		count = 1
+	}
+
+	// Persist order to DB before submission.
+	o.IsReal = true
+	o.OrderStatus = "pending"
+	o.SuggestedSize = count
+	o.Action = "sell"
+	o.Side = store.OrderSideClose
+	o.PositionID = &pos.ID
+	orderID, err := e.db.InsertRealOrder(ctx, o)
+	if err != nil {
+		e.log.Error("real: sell failed to persist order to DB",
+			"market", o.MarketTicker, "error", err)
+		return false
+	}
+	o.ID = orderID
+
+	orderCtx, cancel := context.WithTimeout(ctx, time.Duration(e.cfg.OrderTimeoutS)*time.Second)
+	defer cancel()
+
+	// Submit ask to Kalshi. No pool deduction on sell — proceeds credit
+	// the pool after fill. Pre-fill we hold no capital.
+	priceStr := fmt.Sprintf("%.4f", o.MarketPrice)
+	countStr := fmt.Sprintf("%.2f", count)
+	clientOrderID := uuid.NewString()
+
+	req := createOrderV2Request{
+		Ticker:                  o.MarketTicker,
+		ClientOrderID:           clientOrderID,
+		Side:                    "ask",
+		Count:                   countStr,
+		Price:                   priceStr,
+		TimeInForce:             e.cfg.TimeInForce,
+		SelfTradePreventionType: "taker_at_cross",
+		ExchangeIndex:           -1,
+	}
+
+	var resp createOrderV2Response
+	err = e.client.Post(orderCtx, "/portfolio/events/orders", req, &resp)
+	if err != nil {
+		e.log.Error("real: sell submission FAILED",
+			"order_id", o.ID, "client_order_id", clientOrderID,
+			"market", o.MarketTicker, "strategy", o.Strategy,
+			"side", "ask", "count", countStr, "price", priceStr,
+			"error", err)
+		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID); dbErr != nil {
+			e.log.Error("real: failed to mark sell as failed", "order_id", o.ID, "error", dbErr)
+		}
+		return false
+	}
+
+	fillCount, _ := strconv.ParseFloat(resp.FillCount, 64)
+	remainingCount, _ := strconv.ParseFloat(resp.RemainingCount, 64)
+	status := "submitted"
+	if remainingCount == 0 && fillCount > 0 {
+		status = "filled"
+	} else if fillCount > 0 {
+		status = "partial"
+	} else if remainingCount == 0 {
+		status = "canceled"
+	}
+
+	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status); err != nil {
+		e.log.Error("real: failed to update sell order in DB",
+			"order_id", resp.OrderID, "error", err)
+	}
+
+	// Credit pool with proceeds and close position on actual fill count.
+	// Zero-fill cancels don't credit or close.
+	if fillCount > 0 {
+		proceedsCents := int64(fillCount * o.MarketPrice * 100)
+		newBalance, err := liquiditypool.Credit(orderCtx, e.db.GormDB(), proceedsCents)
+		if err != nil {
+			e.log.Error("real: sell failed to credit pool",
+				"market", o.MarketTicker, "proceeds_cents", proceedsCents, "error", err)
+		} else {
+			e.log.Info("real: sell proceeds credited",
+				"market", o.MarketTicker, "proceeds_cents", proceedsCents,
+				"pool_balance_cents", newBalance)
+		}
+
+		_, realizedPnL, remaining, perr := e.pos.ApplySell(
+			ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, o.MarketPrice)
+		if perr != nil {
+			e.log.Error("real: ApplySell failed",
+				"market", o.MarketTicker, "strategy", o.Strategy,
+				"fill_count", fillCount, "error", perr)
+		} else {
+			e.log.Info("real: position updated on sell",
+				"market", o.MarketTicker, "strategy", o.Strategy,
+				"fill_count", fillCount, "realized_pnl_cents", realizedPnL,
+				"remaining_open", remaining)
+		}
+	}
+
+	e.log.Info("real: sell order submitted",
+		"market", o.MarketTicker, "strategy", o.Strategy,
+		"order_id", resp.OrderID, "client_order_id", clientOrderID,
+		"server_ts_ms", resp.TsMS,
+		"fill_count", resp.FillCount,
+		"remaining_count", resp.RemainingCount,
+		"count", countStr, "price", priceStr,
+		"environment", e.cfg.Environment)
 
 	return true
 }

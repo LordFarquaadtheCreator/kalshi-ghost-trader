@@ -16,6 +16,7 @@ import (
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
+	"github.com/farquaad/kalshi-ghost-trader/internal/positions"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -27,12 +28,18 @@ const closeGraceMS = 30 * 60 * 1000
 type Reconciler struct {
 	client *kalshiclient.Client
 	db     *store.DB
+	pos    *positions.Manager
 	log    *slog.Logger
 }
 
 // New creates a reconciler.
 func New(client *kalshiclient.Client, db *store.DB, log *slog.Logger) *Reconciler {
-	return &Reconciler{client: client, db: db, log: log}
+	return &Reconciler{
+		client: client,
+		db:     db,
+		pos:    positions.New(db.GormDB()),
+		log:    log,
+	}
 }
 
 // Run polls for unresolved markets. Interval is read from config.Cfg.ReconcilerIntervalSecs.
@@ -130,6 +137,12 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 				r.log.Info("reconciler: resolved simulated orders",
 					"market", m.MarketTicker, "result", mkt.Result)
 			}
+			// Settle positions for this market. Sells-to-close already
+			// realized PnL at trade time; Settle handles any remaining
+			// open contracts (buy_count - sell_count) at $1 if won, $0
+			// if lost. No-op for markets with no position rows (legacy
+			// orders that bypassed the position pipeline).
+			r.settlePositions(ctx, m, mkt.Result)
 		}
 
 		// Run finalization once per event (both markets finalized check inside)
@@ -144,5 +157,44 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 
 	if resolved > 0 {
 		r.log.Info("reconciler: pass complete", "checked", len(markets), "resolved", resolved)
+	}
+}
+
+// settlePositions settles all open positions for a market at its result.
+// Called after ResolveRealOrders/ResolveSimulatedOrders. Iterates every
+// open position (any strategy, real + paper) and calls positions.Settle.
+// Settle is idempotent — already-settled positions are skipped.
+func (r *Reconciler) settlePositions(ctx context.Context, m store.Market, result string) {
+	won := result == "yes"
+
+	// Fetch all open positions for this market (both real + paper, all strategies).
+	var openPositions []store.Position
+	if err := r.db.GormDB().WithContext(ctx).
+		Where("market_ticker = ? AND status = ?", m.MarketTicker, store.PositionStatusOpen).
+		Find(&openPositions).Error; err != nil {
+		r.log.Warn("reconciler: fetch open positions failed",
+			"market", m.MarketTicker, "err", err)
+		return
+	}
+	if len(openPositions) == 0 {
+		return
+	}
+
+	for _, p := range openPositions {
+		_, settlePnL, remaining, err := r.pos.Settle(
+			ctx, p.MatchTicker, p.MarketTicker, p.Strategy, p.IsReal, won)
+		if err != nil {
+			r.log.Warn("reconciler: settle position failed",
+				"position_id", p.ID, "market", p.MarketTicker,
+				"strategy", p.Strategy, "is_real", p.IsReal, "err", err)
+			continue
+		}
+		if remaining > 0 {
+			r.log.Info("reconciler: settled position",
+				"position_id", p.ID, "market", p.MarketTicker,
+				"strategy", p.Strategy, "is_real", p.IsReal,
+				"result", result, "remaining_contracts", remaining,
+				"settlement_pnl_cents", settlePnL)
+		}
 	}
 }

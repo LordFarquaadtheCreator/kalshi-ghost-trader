@@ -1,6 +1,61 @@
 package store
 
-import "context"
+import (
+	"context"
+	"log/slog"
+)
+
+// PositionSettler settles open positions when a market settles via WS.
+// Implemented by positions.Manager (wired in main.go via DB.SetPositionSettler).
+// Decouples store from positions package (avoids import cycle).
+type PositionSettler interface {
+	Settle(ctx context.Context, matchTicker, marketTicker, strategy string, isReal bool, won bool) (positionID int64, settlementPNLCents int64, remainingContracts float64, err error)
+}
+
+// positionSettlerHook is set by main.go to enable WS-path position settlement.
+// nil = no position settlement (legacy behavior, backward compat).
+var positionSettlerHook PositionSettler
+
+// SetPositionSettler wires the position settler for WS lifecycle events.
+// Called once at startup. Pass nil to disable.
+func SetPositionSettler(p PositionSettler) { positionSettlerHook = p }
+
+// settlePositionsForMarket settles all open positions for a market at result.
+// Called from ApplyLifecycleEvent "settled" case. No-op if no hook set or
+// no open positions. Errors logged, not propagated — settlement is best-effort.
+func (d *DB) settlePositionsForMarket(ctx context.Context, marketTicker, eventTicker, result string, log *slog.Logger) {
+	if positionSettlerHook == nil {
+		return
+	}
+	won := result == "yes"
+	var openPositions []Position
+	if err := d.db.WithContext(ctx).
+		Where("market_ticker = ? AND status = ?", marketTicker, PositionStatusOpen).
+		Find(&openPositions).Error; err != nil {
+		if log != nil {
+			log.Warn("lifecycle: fetch open positions failed", "market", marketTicker, "err", err)
+		}
+		return
+	}
+	for _, p := range openPositions {
+		_, settlePnL, remaining, err := positionSettlerHook.Settle(
+			ctx, p.MatchTicker, p.MarketTicker, p.Strategy, p.IsReal, won)
+		if err != nil {
+			if log != nil {
+				log.Warn("lifecycle: settle position failed",
+					"position_id", p.ID, "market", p.MarketTicker, "err", err)
+			}
+			continue
+		}
+		if log != nil && remaining > 0 {
+			log.Info("lifecycle: settled position",
+				"position_id", p.ID, "market", p.MarketTicker,
+				"strategy", p.Strategy, "is_real", p.IsReal,
+				"result", result, "remaining_contracts", remaining,
+				"settlement_pnl_cents", settlePnL)
+		}
+	}
+}
 
 // InsertLifecycleEvent stores a market lifecycle WS event.
 func (d *DB) InsertLifecycleEvent(ctx context.Context, le LifecycleEvent) error {
@@ -68,6 +123,9 @@ WHERE market_ticker=?`,
 		if le.Result != "" {
 			_ = d.ResolveRealOrders(ctx, le.MarketTicker, le.Result)
 			_ = d.ResolveSimulatedOrders(ctx, le.MarketTicker, le.Result)
+			// Settle any open positions for this market (sell-to-close pipeline).
+			// No-op if no position rows exist (legacy orders).
+			d.settlePositionsForMarket(ctx, le.MarketTicker, "", le.Result, d.log)
 		}
 
 		// Get the event_ticker for this market

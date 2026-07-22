@@ -4,7 +4,7 @@ package store
 // Add new tables here — Migrate() iterates this slice.
 var AllModels = []any{
 	&Event{}, &Market{}, &Tick{}, &OrderbookEvent{},
-	&LifecycleEvent{}, &EventLifecycleEvent{}, &Order{},
+	&LifecycleEvent{}, &EventLifecycleEvent{}, &Order{}, &Position{},
 	&ScanRun{}, &FiredEvent{}, &Point{}, &KalshiScore{},
 	&RuntimeConfig{}, &RuntimeConfigHistory{}, &LiquidityPool{}, &StrategyConfigEntry{},
 	&TriggerRange{}, &FlashscoreMatch{}, &PriceBandResultRow{},

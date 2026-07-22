@@ -37,6 +37,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
 	"github.com/farquaad/kalshi-ghost-trader/internal/orderbackfill"
+	"github.com/farquaad/kalshi-ghost-trader/internal/positions"
 	"github.com/farquaad/kalshi-ghost-trader/internal/pricebands"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
 	"github.com/farquaad/kalshi-ghost-trader/internal/scanner"
@@ -79,6 +80,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+
+	// Wire position settler for WS-path settlement. positions.Manager
+	// implements store.PositionSettler. Enables sell-to-close pipeline:
+	// when a market settles via WS, open positions are settled too.
+	store.SetPositionSettler(positions.New(db.GormDB()))
 
 	if err := db.Migrate(); err != nil {
 		log.Error("schema migration failed", "err", err)
@@ -125,7 +131,9 @@ func main() {
 	//                    ↓ (if real quota approved)
 	//                 NoopEmitter (if real trading disabled)
 	paperEmitter := algorithms.NewEnrichEmitter(
-		algorithms.NewTickWriterEmitter(tickWriter), db, log)
+		algorithms.NewPaperPositionEmitter(
+			algorithms.NewTickWriterEmitter(tickWriter), db, log),
+		db, log)
 
 	// Paper quota guard — always active. When quota disabled, passes all through.
 	paperQuotaGuard := algorithms.NewQuotaGuard(paperEmitter, algorithms.NoopEmitter{}, log)

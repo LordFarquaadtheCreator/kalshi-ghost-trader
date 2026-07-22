@@ -131,6 +131,14 @@ type Point struct {
 	Payload      string `gorm:"column:payload"`
 }
 
+// OrderSide values: "open" = buy to open/add to a long position,
+// "close" = sell to close an existing long. NULL on legacy orders is
+// treated as "open" by the position pipeline.
+const (
+	OrderSideOpen  = "open"
+	OrderSideClose = "close"
+)
+
 // Order maps a simulated buy order from the match point signal algorithm.
 // Traceable to the match via match_ticker (event_ticker) and market_ticker.
 type Order struct {
@@ -140,7 +148,8 @@ type Order struct {
 	MarketTicker           string  `gorm:"column:market_ticker"`
 	MatchTitle             string  `gorm:"column:match_title"`
 	PlayerName             string  `gorm:"column:player_name"`
-	Action                 string  `gorm:"column:action"`
+	Action                 string  `gorm:"column:action"`        // "buy" or "sell"
+	Side                   string  `gorm:"column:side"`          // "open" or "close"; NULL = legacy open
 	Context                string  `gorm:"column:context"`
 	ConvProb               float64 `gorm:"column:conv_prob"`
 	MarketPrice            float64 `gorm:"column:market_price"`
@@ -159,7 +168,36 @@ type Order struct {
 	PoolBalanceBeforeCents int64   `gorm:"column:pool_balance_before_cents"`
 	PoolBalanceAfterCents  int64   `gorm:"column:pool_balance_after_cents"`
 	UnfilledRefundedCents  int64   `gorm:"column:unfilled_refunded_cents"`
+	PositionID             *int64  `gorm:"column:position_id"`
 }
+
+// Position aggregates buys + sells for one (market, strategy, is_real).
+// One row per position. Buys add to FilledBuyCount and reweight AvgEntryPrice.
+// Sells add to FilledSellCount, compute realized PnL, reweight AvgExitPrice.
+// When FilledSellCount == FilledBuyCount, status -> "closed".
+// At market settlement, reconciler settles any remaining open contracts.
+type Position struct {
+	ID                 int64   `gorm:"primaryKey;autoIncrement;column:id"`
+	MatchTicker        string  `gorm:"column:match_ticker"`
+	MarketTicker       string  `gorm:"column:market_ticker"`
+	Strategy           string  `gorm:"column:strategy"`
+	IsReal             bool    `gorm:"column:is_real"`
+	FilledBuyCount     float64 `gorm:"column:filled_buy_count"`
+	FilledSellCount    float64 `gorm:"column:filled_sell_count"`
+	AvgEntryPrice      float64 `gorm:"column:avg_entry_price"`
+	AvgExitPrice       float64 `gorm:"column:avg_exit_price"`
+	RealizedPNLCents   int64   `gorm:"column:realized_pnl_cents"`
+	Status             string  `gorm:"column:status"` // open, closed, settled
+	OpenedTS           int64   `gorm:"column:opened_ts"`
+	ClosedTS           int64   `gorm:"column:closed_ts"`
+}
+
+// Position status constants.
+const (
+	PositionStatusOpen    = "open"
+	PositionStatusClosed  = "closed"
+	PositionStatusSettled = "settled"
+)
 
 // KalshiScore is a live score snapshot from Kalshi's /live_data endpoint.
 // Point-level granularity via PointsHome/PointsAway (0/15/30/40/50 where 50=A).

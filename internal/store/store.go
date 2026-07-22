@@ -41,6 +41,12 @@ type DB struct {
 	log *slog.Logger
 }
 
+// NewFromGorm wraps an existing *gorm.DB as a *DB. Used by tests that
+// want sqlite instead of postgres. Production code should use New.
+func NewFromGorm(db *gorm.DB, log *slog.Logger) *DB {
+	return &DB{db: db, log: log}
+}
+
 // New opens the PostgreSQL database using the provided DSN.
 func New(ctx context.Context, dsn string, log *slog.Logger) (*DB, error) {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
@@ -101,6 +107,7 @@ BEGIN
     DELETE FROM markets WHERE event_ticker = OLD.event_ticker;
     DELETE FROM event_lifecycle_events WHERE event_ticker = OLD.event_ticker;
     DELETE FROM orders WHERE match_ticker = OLD.event_ticker;
+    DELETE FROM positions WHERE match_ticker = OLD.event_ticker;
     DELETE FROM fired_events WHERE event_ticker = OLD.event_ticker;
     DELETE FROM points WHERE match_ticker = OLD.event_ticker;
     RETURN OLD;

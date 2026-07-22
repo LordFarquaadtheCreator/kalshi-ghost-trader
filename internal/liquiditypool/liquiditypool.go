@@ -93,3 +93,20 @@ RETURNING balance_cents`,
 		refundCents, refundCents, time.Now().UnixMilli()).Scan(&newBalance).Error
 	return newBalance, err
 }
+
+// Credit atomically adds proceedsCents to the pool balance.
+// Used for sell-to-close fills: selling N contracts at price p credits
+// N*p*100 cents to the pool. Does NOT touch total_spent_cents (that
+// tracks buy-side capital deployed, not sell-side proceeds).
+// Realized P&L from the trade is tracked on the position row, not here.
+func Credit(ctx context.Context, db *gorm.DB, proceedsCents int64) (int64, error) {
+	var newBalance int64
+	err := db.WithContext(ctx).Raw(`
+UPDATE liquidity_pool
+SET balance_cents = balance_cents + ?,
+    updated_ts = ?
+WHERE id = 1
+RETURNING balance_cents`,
+		proceedsCents, time.Now().UnixMilli()).Scan(&newBalance).Error
+	return newBalance, err
+}
