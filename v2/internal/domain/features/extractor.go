@@ -12,10 +12,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
-	"strconv"
 
 	"github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/domain/match"
-	"github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/domain/strategy"
 )
 
 // View is the point-in-time state the extractor sees. It contains only
@@ -94,6 +92,20 @@ func (e *DefaultExtractor) Names() []string {
 // Extract produces the feature vector from a View and event.
 func (e *DefaultExtractor) Extract(v View, ev match.Event) []float64 {
 	vec := make([]float64, len(e.names))
+	for i, name := range e.names {
+		vec[i] = extractFeature(name, v, ev)
+	}
+	return vec
+}
+
+// ExtractInto writes the feature vector into a preallocated buffer.
+// The buffer must be at least len(Names()) long. Returns the slice
+// actually used. This is the zero-alloc hot path.
+func (e *DefaultExtractor) ExtractInto(buf []float64, v View, ev match.Event) []float64 {
+	if len(buf) < len(e.names) {
+		buf = make([]float64, len(e.names))
+	}
+	vec := buf[:len(e.names)]
 	for i, name := range e.names {
 		vec[i] = extractFeature(name, v, ev)
 	}
@@ -273,33 +285,4 @@ func boolToFloat(b bool) float64 {
 		return 1.0
 	}
 	return 0.0
-}
-
-// ViewFromMatchView converts a strategy.MatchView to a features.View.
-// This is the bridge between the loop's state and the feature extractor.
-func ViewFromMatchView(mv strategy.MatchView, marketTicker string) View {
-	price := mv.Prices[marketTicker]
-	ts := mv.PriceTS[marketTicker]
-
-	homePoints, _ := strconv.Atoi(mv.HomePoints)
-	awayPoints, _ := strconv.Atoi(mv.AwayPoints)
-
-	return View{
-		SetsHome:     mv.SetsHome,
-		SetsAway:     mv.SetsAway,
-		GamesHome:    mv.GamesHome,
-		GamesAway:    mv.GamesAway,
-		HomePoints:   homePoints,
-		AwayPoints:   awayPoints,
-		Server:       mv.Server,
-		IsTiebreak:   mv.IsTiebreak,
-		SetNumber:    mv.SetNumber,
-		GameNumber:   mv.GameNumber,
-		PointNumber:  mv.PointNumber,
-		IsBreakPoint: mv.IsBreakPoint,
-		IsSetPoint:   mv.IsSetPoint,
-		IsMatchPoint: mv.IsMatchPoint,
-		PriceCents:   price,
-		PriceTS:      ts,
-	}
 }
