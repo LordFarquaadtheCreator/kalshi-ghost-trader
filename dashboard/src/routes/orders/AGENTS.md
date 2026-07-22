@@ -1,54 +1,51 @@
 # /orders — Paper Orders
 
-Simulated paper trading orders split into pending (open positions) and settled trades.
-Filter surface mirrors `/simulation` (simulation insights) for parity.
+Paper trading orders with pre-computed analysis (mirrors `/simulation` architecture).
 
 ## Files
 
-- `+page.svelte` — No `+page.js`. Client-side polling via `createPoll(() => api.getOrders(), 5000)`.
+- `+page.js` — SSR disabled. Initial load: `/api/orders?limit=100` + `/api/paper-orders-insights` in parallel.
+- `+page.svelte` — Polls `/api/orders` (5s, limit 100) for tables. Insights from `+page.js` load + manual refresh + 5-min auto-refresh. Analysis rendered by `PaperOrdersInsights` component.
 
 ## Data
 
-- `api.getOrders()` → `GET :6060/api/orders` → `{orders: PaperOrder[], summary: PaperOrderSummary}`
-- `PaperOrder`: `{ts, match_ticker, market_ticker, player_name, context, market_price, edge_cents, suggested_size, strategy, result, won, pnl}`
-- `result` empty = pending, "yes" = won, else lost.
+- `api.getOrders({limit:100})` → `GET :6060/api/orders` → `{orders, summary, strategies, has_more, next_cursor}`
+- `api.getPaperOrdersInsights()` → `GET :6060/api/paper-orders-insights` → `{summaries, bands, insight_run_ts}`
+- PaperOrder: `{ts, match_ticker, market_ticker, player_name, context, market_price, edge_cents, suggested_size, strategy, result, won, pnl}`
 
 ## State
 
-- `selectedStrategies` — Set of strategy names (multi-toggle). Auto-initialized to all strategies on first data load.
-- `minPrice` — drop orders with `market_price` below threshold (client-side, mirrors backtest `min_price`)
-- `filterMatch` — substring filter on `match_ticker`
-- `filterResult` — won / lost / pending / all
-- `filteredOrders` — `$derived` applying all four filters, sorted by ts desc
-- `settledOrders` — `$derived` from `filteredOrders.filter(o => o.result)`
-- `pendingOrders` — `$derived` from `filteredOrders.filter(o => !o.result)`
-- `filteredSummary` — `$derived` recomputes summary stats from `filteredOrders` (not from API summary)
+- `selectedStrategies` — Set of strategy names (multi-toggle). Shared between tables + insights via `bind:`. Auto-initialized to all strategies on first data load.
+- `minPrice` / `maxPrice` / `filterMatch` / `filterResult` — table-only filters (not applied to insights).
+- `filteredOrders` — `$derived` applying table filters to polled page, sorted by ts desc.
+- `settledOrders` / `pendingOrders` — `$derived` from `filteredOrders`.
+- `filteredSummary` — `$derived` recomputes summary stats from `filteredOrders` (page subset only).
 
 ## Layout
 
 - `.layout` flex: `.main-content` (left, flex:1) + `.filter-sidebar` (right, 240px sticky)
-- Sidebar groups: Strategies (toggle-all + per-strategy toggle buttons) + Filters (min price, match, result)
-- Mirrors `/simulation` page sidebar structure for visual parity
+- Sidebar groups: Strategies (shared toggle) + Filters (tables only) + Insights (refresh button)
+- Summary bar: `filteredSummary` (reflects active table filters, page subset only)
 
-## UI
+## Analysis — PaperOrdersInsights component
 
-- Summary bar: uses `filteredSummary` (reflects active filters)
-- Filter count line above main content
-- Open Positions table: `CollapsibleSection`, pending orders only, no P&L column
-- Settled Trades table: `CollapsibleSection`, resolved orders with WON/LOST badge + P&L
-- Strategy toggles reuse `strategyColors` map from `/simulation` page; fallback `vibrantColor(name)`
+All analysis pre-computed by `internal/paperorderinsights` cron. No client-side recompute.
 
-## Charts
+- Summary cards per strategy (signals, win rate, net P&L, ROI, sharpe, profit factor, avg edge, max DD)
+- Cumulative P&L chart (from `cum_pnl` series per strategy)
+- Win/Loss bar chart (from summaries)
+- Band performance chart (from `bands`, metric selectable)
+- Signal count per band (stacked bars)
+- Peak band cards (local maxima above median score)
+- Cross-strategy band totals table
+- Best bands table (N ≥ minN, WR ≥ minWR)
+- Per-strategy per-band detail table
 
-Six Chart.js charts in Analysis `CollapsibleSection`:
-1. Cumulative P&L — line, settled orders sorted by ts
-2. P&L by Strategy — bar, net pnl per strategy
-3. Win / Loss by Strategy — stacked bar
-4. Entry Price Distribution — bar, 10 bins (0-100c)
-5. Orders by Day — mixed: count bars (left y) + net P&L line (right y). Day = YYYY-MM-DD from `o.ts`
-6. Orders by Hour (24hr) — mixed: count bars + P&L line. Hour = 0-23 from `new Date(o.ts).getHours()`
+## Tables
 
-`bucketByDay` / `bucketByHour` helpers group filtered orders. Count bars use all filtered orders; P&L line sums `o.pnl` for settled orders only (pending orders contribute to count, not P&L).
+- Open Positions: pending orders from polled page, no P&L column
+- Settled Trades (recent): settled orders from polled page (max 100), WON/LOST badge + P&L
+- No "load more" pagination. Recent 100 rows only. Full history in `/matches/[event]` or `/simulation`.
 
 ## Chart Colors
 

@@ -25,6 +25,7 @@ All in `components/` directory:
 - `LineChart.svelte` — Chart.js line chart bound to a polling store's history. Series config with `getValue` + `color`.
 - `BarChart.svelte` — Chart.js bar chart. Used for win/loss comparison.
 - `CollapsibleSection.svelte` — Collapsible wrapper with title + count. Props: `title`, `count`, `defaultOpen`. Used for all table sections.
+- `PaperOrdersInsights.svelte` — Pre-computed paper order analysis (summary cards, charts, band tables). Props: `data` (load function output), `selectedStrategies` (bindable), `strategyColors`. Exposes `refresh(fetcher)` method via `bind:this`. Mirrors `/simulation` page analysis section.
 
 ## Conventions
 

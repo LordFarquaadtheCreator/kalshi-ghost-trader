@@ -144,6 +144,10 @@ export const api = {
     return cachedFetch(`${STRATEGY_API_URL}/api/simulation`, TTL.simulation);
   },
 
+  async getPaperOrdersInsights() {
+    return cachedFetch(`${STRATEGY_API_URL}/api/paper-orders-insights`, TTL.simulation);
+  },
+
   async getRealOrders() {
     return cachedFetch(`${GHOST_TRADER_URL}/api/real-orders`, TTL.orders);
   },

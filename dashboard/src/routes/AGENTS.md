@@ -16,7 +16,8 @@ File-based routing. Each route directory has `+page.svelte` (component) and `+pa
 - `+page.svelte` — Match detail. Polls `getTicks(eventTicker)` (3s). Chart.js line chart with price data + order markers. Market cards with tick counts. Simulated orders table in `CollapsibleSection`. Real orders section (empty, collapsed by default).
 
 ### `/orders`
-- `+page.svelte` — Paper orders. Polls `getOrders()` (5s). Filters: strategy, result (won/lost/pending). Summary bar computed from filtered orders (`filteredSummary`). Two `CollapsibleSection` tables: Open Positions (pending) + Settled Trades. No `+page.js` — uses client-side polling only.
+- `+page.js` — Disables SSR, initial load of `/api/orders?limit=100` + `/api/paper-orders-insights` in parallel.
+- `+page.svelte` — Paper orders. Polls `getOrders({limit:100})` (5s) for tables. Pre-computed insights from `PaperOrdersInsights` component (manual refresh + 5-min auto). Filters: strategy (shared with insights), result, match, price (tables only). Summary bar from `filteredSummary` (page subset). Two `CollapsibleSection` tables: Open Positions (pending) + Settled Trades (recent 100). No "load more" pagination.
 
 ### `/simulation`
 - `+page.js` — Disables SSR, initial load of strategy list.
