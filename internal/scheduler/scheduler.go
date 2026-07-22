@@ -76,6 +76,21 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 		return
 	}
 
+	// Events with API-Tennis points — match is actually live (point scored).
+	// Used to track early starts immediately instead of waiting for schedule.
+	// Kalshi REST returns "active" for any tradeable market, including future
+	// matches days away. Without this check, all "active" markets track
+	// immediately, spawning pollers that exhaust the rate limiter.
+	eventsWithPoints, err := s.db.GetMatchTickersWithPoints(ctx)
+	if err != nil {
+		s.log.Error("get events with points", "err", err)
+		return
+	}
+	liveEvents := make(map[string]bool, len(eventsWithPoints))
+	for _, e := range eventsWithPoints {
+		liveEvents[e] = true
+	}
+
 	now := time.Now()
 	// Sort by occurrence time so we log in order
 	sort.Slice(markets, func(i, j int) bool {
@@ -134,9 +149,14 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 			continue
 		}
 
-		// If occurrence is in the past or within lead window, start now
-		// Also start immediately if status is 'active' — WS lifecycle says market is live
-		if m.Status == "active" || now.After(startAt) {
+		// Track immediately if:
+		//   - Scheduled start time has passed (occurrence_ts - lead), OR
+		//   - API-Tennis has recorded a point for this event (match is live
+		//     now, may have started ahead of schedule)
+		// Kalshi REST "active" alone is NOT sufficient — it means "tradeable",
+		// not "match is happening". Future markets are "active" on REST for
+		// days before the match.
+		if now.After(startAt) || liveEvents[m.EventTicker] {
 			s.startTracking(ctx, m.MarketTicker, m.EventTicker)
 			scheduled++
 		} else {
