@@ -96,13 +96,14 @@ func (d *DB) GetRealOrders(ctx context.Context) ([]Order, error) {
 	return orders, err
 }
 
-// CountRealOrdersByMarketStrategy counts all real orders for a (market, strategy) pair.
-// Includes every status — submitted, filled, partial, canceled, failed, resolved.
-// Used by KalshiOrderEmitter per-market strategy limit guard.
+// CountRealOrdersByMarketStrategy counts real orders for a (market, strategy) pair
+// that actually filled (fill_count > 0). Canceled/failed/zero-fill orders don't count
+// — allows retries after cancels. Used by KalshiOrderEmitter per-market strategy limit guard.
 func (d *DB) CountRealOrdersByMarketStrategy(ctx context.Context, marketTicker, strategy string) (int64, error) {
 	var count int64
 	err := d.db.WithContext(ctx).Model(&Order{}).
-		Where("is_real = ? AND market_ticker = ? AND strategy = ?", true, marketTicker, strategy).
+		Where("is_real = ? AND market_ticker = ? AND strategy = ? AND fill_count > 0",
+			true, marketTicker, strategy).
 		Count(&count).Error
 	return count, err
 }
