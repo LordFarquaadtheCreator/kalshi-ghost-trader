@@ -3,6 +3,7 @@ package algorithms
 import (
 	"math"
 	"strconv"
+	"sync"
 )
 
 // MarkovModel computes tennis win probability from any score state
@@ -14,13 +15,16 @@ import (
 // State space is small enough for exact computation via recursion with
 // memoization. Levels: game (points), set (games + tiebreak), match (sets).
 //
-// All recursive functions are memoized per-model. Since each strategy
-// creates its own model and uses it single-threaded, no locks needed.
+// All recursive functions are memoized per-model. The exported entry points
+// (WinProbability, FairValue) hold a mutex guarding the memo maps; the
+// unexported recursion helpers are only reachable under that lock and do
+// not re-lock.
 
 const defaultPServe = 0.64
 
 // MarkovModel holds the server win probability and memoized recursion caches.
 type MarkovModel struct {
+	mu      sync.Mutex
 	pServe  float64 // probability server wins a point
 	pReturn float64 // probability returner wins a point (= 1 - pServe)
 
@@ -69,6 +73,14 @@ func NewMarkovModelWithProb(pServe float64) *MarkovModel {
 // server: 1=home serving, 2=away serving.
 // isTiebreak: current game is a tiebreak.
 func (m *MarkovModel) WinProbability(setsHome, setsAway int, gamesHome, gamesAway int, homePoints, awayPoints string, server int, isTiebreak bool) float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.winProbability(setsHome, setsAway, gamesHome, gamesAway, homePoints, awayPoints, server, isTiebreak)
+}
+
+// winProbability is the unlocked implementation of WinProbability. Callers
+// must hold m.mu. FairValue calls this to avoid self-deadlock.
+func (m *MarkovModel) winProbability(setsHome, setsAway int, gamesHome, gamesAway int, homePoints, awayPoints string, server int, isTiebreak bool) float64 {
 	if setsHome >= setsToWin {
 		return 1.0
 	}
@@ -365,7 +377,9 @@ func tbPointValue(s string) int {
 // FairValue returns the Markov fair-value probability for the home player
 // as a price (0-1). This is the "true" probability the market should price.
 func (m *MarkovModel) FairValue(setsHome, setsAway int, gamesHome, gamesAway int, homePoints, awayPoints string, server int, isTiebreak bool) float64 {
-	p := m.WinProbability(setsHome, setsAway, gamesHome, gamesAway, homePoints, awayPoints, server, isTiebreak)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p := m.winProbability(setsHome, setsAway, gamesHome, gamesAway, homePoints, awayPoints, server, isTiebreak)
 	// Clamp to [0.01, 0.99] to avoid extreme values
 	return math.Max(0.01, math.Min(0.99, p))
 }

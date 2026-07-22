@@ -2,6 +2,7 @@ package algorithms
 
 import (
 	"math"
+	"sync"
 	"testing"
 )
 
@@ -210,4 +211,52 @@ func TestCustomServeProb(t *testing.T) {
 	if !approxEqual(p2, 0.5) {
 		t.Errorf("tiebreak with pServe=0.5, away serving = %.4f, want 0.5", p2)
 	}
+}
+
+// TestMarkovModelConcurrentFairValue drives a single shared MarkovModel from
+// 8 goroutines × 500 iterations with varied score inputs (including tiebreak
+// states). The test's purpose is to crash under -race / concurrent-map-write
+// if the memo locking is wrong. No value assertions beyond the [0,1] range.
+func TestMarkovModelConcurrentFairValue(t *testing.T) {
+	m := NewMarkovModel()
+
+	// Varied inputs covering regular games, deuce, and tiebreak states.
+	type args struct {
+		setsHome, setsAway     int
+		gamesHome, gamesAway   int
+		homePoints, awayPoints string
+		server                 int
+		isTiebreak             bool
+	}
+	cases := []args{
+		{0, 0, 0, 0, "0", "0", 1, false},
+		{0, 0, 3, 2, "30", "30", 1, false},
+		{0, 0, 5, 4, "40", "40", 2, false},
+		{1, 0, 4, 3, "A", "40", 1, false},
+		{0, 1, 6, 6, "3", "4", 1, true},
+		{1, 1, 6, 6, "8", "7", 2, true},
+		{0, 0, 6, 6, "12", "12", 1, true},
+		{1, 0, 0, 0, "0", "0", 2, false},
+	}
+
+	const goroutines = 8
+	const iterations = 500
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				c := cases[i%len(cases)]
+				v := m.FairValue(c.setsHome, c.setsAway, c.gamesHome, c.gamesAway,
+					c.homePoints, c.awayPoints, c.server, c.isTiebreak)
+				if v < 0 || v > 1 {
+					t.Errorf("FairValue = %v, want [0,1]", v)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
