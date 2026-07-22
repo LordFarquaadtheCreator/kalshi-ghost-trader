@@ -299,12 +299,22 @@ func (w *matchWorker) processEvent(ev WSEvent) {
 			scorer = parseServer(setData.ServeLost)
 		}
 
-		// Games before this set
+		// Games before this set (cumulative, stored on Point for strategies
+		// that compare home vs away to determine set winner)
 		homeSetGames := 0
 		awaySetGames := 0
+		// Sets won before this set (for ClassifyPoint which needs actual
+		// sets won, not cumulative games)
+		setsHomeWon := 0
+		setsAwayWon := 0
 		for sn := 1; sn < setNum; sn++ {
 			homeSetGames += setGamesHome[sn]
 			awaySetGames += setGamesAway[sn]
+			if setGamesHome[sn] > setGamesAway[sn] {
+				setsHomeWon++
+			} else if setGamesAway[sn] > setGamesHome[sn] {
+				setsAwayWon++
+			}
 		}
 
 		// Current game score from SetData.Score "h - a"
@@ -348,8 +358,8 @@ func (w *matchWorker) processEvent(ev WSEvent) {
 
 			// Classify point flags
 			pc := algorithms.ClassifyPoint(algorithms.PointContext{
-				SetsHome:   homeSetGames,
-				SetsAway:   awaySetGames,
+				SetsHome:   setsHomeWon,
+				SetsAway:   setsAwayWon,
 				HomeGames:  hg,
 				AwayGames:  ag,
 				HomePoints: homePts,
