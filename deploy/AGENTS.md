@@ -6,9 +6,10 @@ All deployment artifacts for ghost-trader on the Linux Mint box.
 
 - `deploy.sh` — Build locally, scp artifacts to remote, restart services. Main deploy workflow.
 - `setup-remote.sh` — First-time setup. Run on remote with sudo. Installs Go, Node, PostgreSQL, clones repo, installs systemd services.
-- `ghost-trader.service` — systemd unit for backend. Copied to `/etc/systemd/system/` by deploy.sh.
-- `kalshi-dashboard.service` — systemd unit for dashboard (if present).
+- `ghost-trader.service` — systemd unit for backend. Copied to `/etc/systemd/system/kalshi-ghost-trader.service` by deploy.sh (only if changed).
 - `out/` — Build output directory (gitignored). Wiped on each deploy.
+
+Note: `kalshi-dashboard.service` is NOT in this dir. It lives only on the remote at `/etc/systemd/system/kalshi-dashboard.service` (installed by `setup-remote.sh`). `deploy.sh` restarts it but does not sync a unit file.
 
 ## Deploy
 
@@ -32,7 +33,5 @@ After setup:
 
 ## Service files
 
-Service files in this dir are the source of truth. `deploy.sh` copies them to `/etc/systemd/system/` on the remote (only if changed). No manual edits on the remote.
-
-- Backend: `ghost-trader.service` — `APP_ENV=prod`, runs as `fahad`
-- Dashboard: `kalshi-dashboard.service` — Vite dev server, `BindsTo` backend
+- Backend: `ghost-trader.service` (in this dir) — source of truth. `deploy.sh` syncs to `/etc/systemd/system/kalshi-ghost-trader.service` on remote only if changed. `APP_ENV=prod`, runs as `fahad`.
+- Dashboard: `kalshi-dashboard.service` — lives only on remote (installed by `setup-remote.sh`). Vite dev server, `BindsTo` backend. `deploy.sh` restarts it but does not sync the unit file.

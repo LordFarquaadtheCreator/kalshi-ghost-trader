@@ -26,10 +26,10 @@ go run ./research/go
 
 ## Architecture
 
-- `main.go` — subcommand dispatch, `-db` flag
-- `db.go` — read-only SQLite connection, shared helpers
+- `main.go` — subcommand dispatch, `-dsn` flag
+- `db.go` — read-only PostgreSQL connection (pgx/v5), shared helpers
 - One file per module, registers via `init()`
-- All DB access read-only (`mode=ro`) — safe while scraper writes
+- All DB access read-only — safe while scraper writes
 - No output files — prints to stdout. Redirect with `> research/go/out/<module>.txt`
 
 ## Known Data Limitations

@@ -36,14 +36,16 @@ npm run preview  # preview production build
 
 ## Backend Dependencies
 
-- `localhost:6060` — ghost-trader: metrics, tracked markets, strategy API (backtest, ticks, orders)
+- `localhost:6060` — ghost-trader: metrics, tracked markets, REST API (ticks, orders, real-orders, liquidity-pool, strategy-config, app-config, trigger-ranges, simulation, paper-orders-insights, passed-matches, order-counts, pending-order-counts)
 
 ## Pages
 
 | Route | Description |
 |---|---|
-| `/matches` | Tracked matches table, links to match detail |
+| `/matches` | Tracked matches table (live + upcoming split), links to match detail |
 | `/matches/[event_ticker]` | Match detail: price chart, market cards, sim orders |
-| `/orders` | Paper orders: open positions + settled trades, filters, summary |
+| `/orders` | Paper orders: open positions + settled trades, filters, summary, pre-computed insights |
+| `/real-orders` | Real orders: status filter, liquidity pool reset/topup |
 | `/simulation` | Pre-computed backtest insights: strategy summaries, cumulative P&L, band performance, peaks |
+| `/config` | app_config editor + strategy_config enable toggles + trigger_ranges editor |
 | `/system` | System metrics: Go runtime stats, memory/GC charts (singleton store) |

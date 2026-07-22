@@ -28,6 +28,12 @@ Chart.js bar chart. Props: `title`, `labels`, `datasets`, `yLabel?`. Used for wi
 ### CollapsibleSection.svelte
 Collapsible wrapper for table sections. Props: `title`, `count?`, `defaultOpen?` (default true). Button header with arrow icon (▼/▶). Content via snippet children. Used across all pages with tables.
 
+### StatAnalysis.svelte
+Statistical analysis of an order set. Props: `orders`, `title?` ('Statistical Analysis'), `count?`. Uses `computeStats` from `$lib/stats.js` to compute mean/median/std dev/variance/skewness/kurtosis/min/max P&L. Groups results into P&L stats + count/WR/ROI stats. Wrapped in `CollapsibleSection`.
+
+### PaperOrdersInsights.svelte
+Pre-computed paper order analysis (mirrors `/simulation` page analysis section). Props: `data` (load function output: `{summaries, bands, insight_run_ts}`), `selectedStrategies` (bindable set), `strategyColors`. Exposes `refresh(fetcher)` method via `bind:this` for manual refresh from parent. Renders summary cards per strategy, cumulative P&L chart, win/loss bars, band performance chart, signal count per band, peak band cards, cross-strategy band totals, best bands table, per-strategy per-band detail table.
+
 ## Conventions
 
 - Import from `$lib/components/Name.svelte`.

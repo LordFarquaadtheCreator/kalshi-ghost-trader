@@ -1,7 +1,7 @@
 # Kalshi Ghost Trader
 
 Go service tracking Kalshi tennis match markets in real-time via WebSocket,
-storing every price/trade/lifecycle message to SQLite for algorithm testing.
+storing every price/trade/lifecycle message to PostgreSQL for algorithm testing.
 
 ## Build
 
@@ -18,16 +18,16 @@ go vet ./...
 
 Two-layer config:
 - **`app.yaml` / `app.dev.yaml`** — technical config (environment, credentials, paths). See `internal/appconfig/`.
-- **`app_config` DB table** — runtime tunables (intervals, strategy params, bankroll). Dashboard-editable.
+- **`app_config` DB table** — runtime tunables (intervals, strategy params, bankroll). Dashboard-editable. See `internal/runtimeconfig/`.
 
 ```bash
 # First-time setup:
 cp app.dev.yaml.example app.dev.yaml   # dev (demo keys)
 # OR
 cp app.yaml.example app.yaml           # prod (real keys)
-# Edit: set kalshi_api_key_id, kalshi_private_key_path, environment
+# Edit: set kalshi_api_key_id, kalshi_private_key_path, environment, db_dsn
 
-# app_config, liquidity_pool, strategy_config seeded automatically
+# app_config, liquidity_pool, strategy_config, trigger_ranges seeded automatically
 # by SQL migrations on first startup. No manual seeding needed.
 
 # Run (dev — auto-selects app.dev.yaml if present):
@@ -58,12 +58,12 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `main.go` — entrypoint, signal handling, errgroup wiring
 - `cmd/backtest/` — replay historical data through trading strategies
 - `cmd/backfill-orders/` — one-shot CLI: backfill stale real order status + resolve markets with results but unresolved orders
-- `internal/pricebands/` — fixed-band price analysis cron (computes missing days, persists to `price_band_results` + `simulation_insights`)
-- `internal/paperorderinsights/` — cron-driven pre-computation of paper order insights (per-strategy × per-day × per-band aggregates + summaries from live orders table)
-- `internal/config/` — YAML config loading (legacy, superseded by app_config table)
+- `internal/appconfig/` — YAML config loading (env, credentials, paths)
+- `internal/runtimeconfig/` — `app_config` DB table CRUD (runtime tunables, dashboard-editable)
+- `internal/config/` — global `Config` combining `appconfig.EnvConfig` + `runtimeconfig.RuntimeConfig`; `config.Cfg` package-level singleton
 - `internal/kalshiAuth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
 - `internal/kalshiclient/` — REST client (events, markets, pagination, rate limit)
-- `internal/store/` — SQLite (WAL, single writer, batched tick inserts, app_config, orders, liquidity_pool)
+- `internal/store/` — PostgreSQL (GORM, single writer via TickWriter, batched tick inserts, app_config, orders, liquidity_pool, strategy_config, trigger_ranges, positions)
 - `internal/ws/` — WebSocket manager (auto-reconnect, re-subscribe, dispatch)
 - `internal/scanner/` — daily series scan, stores new events/markets
 - `internal/tracker/` — market subscription lifecycle (no per-match goroutine)
@@ -74,23 +74,38 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `internal/apitennis/` — API-Tennis WebSocket real-time scraper (optional, primary score source)
 - `internal/kalshilivedata/` — Kalshi live-data REST poller (optional, backup score source)
 - `internal/algorithms/` — pluggable trading strategies (match-point detection, order emission)
+- `internal/strategies/` — `Build()` factory wiring all strategies into `MultiStrategyRuntime`
+- `internal/strategyconfig/` — `strategy_config` table CRUD (per-strategy real-trading enable)
+- `internal/triggerranges/` — `trigger_ranges` table CRUD (per-strategy price bands for real orders)
 - `internal/liquiditypool/` — liquidity pool (single source of truth for real cash, kelly sizing reads balance live)
+- `internal/positions/` — position lifecycle for sell-to-close pipeline (one Position per market×strategy×is_real)
 - `internal/signal/` — close-timer strategy, simulated order emission
+- `internal/pricebands/` — fixed-band price analysis cron (computes missing days, persists to `price_band_results` + `simulation_insights`)
+- `internal/paperorderinsights/` — cron-driven pre-computation of paper order insights (per-strategy × per-day × per-band aggregates + summaries from live orders table)
+- `internal/orderbackfill/` — background poller refreshing stale real order status from Kalshi REST
+- `internal/dashboardapi/` — HTTP server (metrics, pprof, REST API for dashboard)
+- `internal/dashboarddata/` — live DB queries for dashboard (separate from backtest replay engine)
 - `dashboard/` — SvelteKit + Vite dashboard (real orders, liquidity pool, config management, charts)
 
 ## Concurrency Model
 
 - One WSManager goroutine: owns connection, read loop, dispatch
-- One TickWriter goroutine: batches inserts, single SQLite writer
+- One TickWriter goroutine: batches inserts, single PostgreSQL writer
 - One Scanner goroutine: daily REST scan
 - One Scheduler goroutine: polls DB, schedules match tracking
+- One Reconciler goroutine: polls DB for unresolved markets, REST fetches results
+- One OrderBackfill goroutine: polls DB for stale real orders, REST refreshes status
+- One ScheduleChecker goroutine: polls upcoming markets, REST refreshes occurrence_ts
 - One API-Tennis goroutine (if enabled): WS read loop, per-match dispatch
 - One goroutine per active match (if Kalshi live-data enabled): REST poll loop
 - One goroutine per scheduled match: waits until start time, then subscribes
+- One MultiStrategyRuntime timer goroutine: drives periodic `OnTick` calls (close_timer etc)
+- One Backtest recompute cron goroutine: daily midnight UTC, recomputes if new finalized markets
 - One pricebands cron goroutine: computes missing days daily, persists to `price_band_results` + `simulation_insights` (derived per-band metrics: sharpe, profit_factor, max_drawdown, score, peak)
 - One paperorderinsights cron goroutine: computes missing days daily from live orders table (paper only), persists to `paper_order_insights` + `paper_order_summaries`
+- One dashboardapi HTTP server goroutine: serves metrics + REST API on `metrics_addr` (default `127.0.0.1:6060`)
 
-## SQLite Schema
+## PostgreSQL Schema
 
 - `events` — tennis match events (1 per match). `coverage` tag set at settlement.
 - `markets` — 2 markets per event (one per player). FK to events, triggers handle cascade.
@@ -99,14 +114,22 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `lifecycle_events` — market_lifecycle_v2 WS events.
 - `event_lifecycle_events` — event_lifecycle WS messages (event creation announcements).
 - `kalshi_scores` — live score snapshots from Kalshi /live_data (backup score source).
+- `points` — point-by-point score data from API-Tennis (primary score source).
 - `scan_runs` — scan audit log.
+- `orders` — simulated + real orders from strategy signals. No FK. Traceable via match_ticker + market_ticker. Includes `match_title` and `player_name` columns (populated by real emitter, empty for legacy/paper rows).
+- `positions` — one row per (market_ticker, strategy, is_real). Tracks FilledBuyCount/FilledSellCount/AvgEntryPrice/AvgExitPrice for sell-to-close pipeline.
 - `backtest_results` — per-strategy backtest summary + orders + cumulative P&L series (JSON). One row per strategy.
 - `price_band_results` — per-day per-strategy per-fixed-band aggregates. Populated by pricebands cron.
 - `simulation_insights` — per-day per-strategy per-fixed-band derived metrics (sharpe, profit_factor, max_drawdown, score, peak). Populated by pricebands cron alongside `price_band_results`.
 - `paper_order_insights` — per-day per-strategy per-fixed-band derived metrics for live paper orders. Populated by paperorderinsights cron.
 - `paper_order_summaries` — per-strategy aggregate + cumulative P&L series for live paper orders. Populated by paperorderinsights cron.
+- `app_config` — runtime tunables KV store. Seeded by migration `0002_seed_app_config.sql`.
+- `app_config_history` — change tracking for app_config.
+- `liquidity_pool` — single row (id=1). Single source of truth for real cash. Kelly sizing reads `balance_cents` live.
+- `strategy_config` — per-strategy enable/disable flag for real trading.
+- `trigger_ranges` — per-strategy price bands gating real order emission.
 
-Cascade deletes use flattened triggers (not recursive FK chains):
+Cascade deletes use PL/pgSQL trigger functions (see `internal/store/`):
 - `trg_markets_delete_cascade` — cleans ticks, orderbook, lifecycle on market delete.
 - `trg_events_delete_cascade` — cleans markets, event_lifecycle, orders on event delete.
 
@@ -121,7 +144,7 @@ Orphan janitor (`CleanOrphans`) and late-parenting sweep (`AdoptOrphans`) run af
 ## Deployment (Linux Mint box)
 
 Scraper runs on Linux Mint box on LAN — same machine as `ssh mint` (see below).
-Not a cloud instance. DB lives on local disk there (31GB+).
+Not a cloud instance. DB lives on local disk there.
 
 ```bash
 ssh mint                                    # alias in ~/.ssh/config
@@ -134,7 +157,7 @@ Linux Mint 24.04, x86_64. Passwordless sudo granted for `systemctl` + `journalct
 
 ### systemd services
 
-- `kalshi-ghost-trader.service` — backend binary, `Restart=always`
+- `kalshi-ghost-trader.service` — backend binary, `Restart=always`, `APP_ENV=prod`
 - `kalshi-dashboard.service` — Vite dev server, `BindsTo` backend
 
 Unit files: `/etc/systemd/system/kalshi-{ghost-trader,dashboard}.service`
@@ -159,7 +182,7 @@ If schema changed, run migration first.
 
 ## Snapshots (Remote → Local)
 
-`scripts/snapshot.sh` runs on mint via cron, exports gzipped JSON summaries + backtest output
+`scripts/snapshot.sh` exports gzipped JSON summaries + backtest output
 to `snapshots/YYYYMMDD_HHMM/`. `scripts/fetch-snapshots.sh` rsyncs them locally to `snapshots/`.
 
 Exports:
@@ -168,7 +191,7 @@ Exports:
 - `events_summary.json.gz` — events with coverage, market status, tick counts
 - `strategy_summary.json.gz` — per-strategy aggregates (win rate, ROI, P&L)
 - `tick_stats.json.gz` — tick counts per market (top 500)
-- `scan_runs.json.gz` — recent scan audit log
+- `scan_runs.json.gz` — scan audit log
 - `lifecycle_summary.json.gz` — recent market lifecycle transitions
 - `points_summary.json.gz` — point-by-point score data summary
 - `db_stats.json.gz` — table row counts, DB file size
@@ -181,9 +204,9 @@ Tiered retention (both remote + local):
 - 30–90 days: keep 1 per week
 - 90+ days: delete
 
-Cron (on mint, every 6 hours):
-```
-0 */6 * * * /home/fahad/kalshi-ghost-trader/scripts/snapshot.sh >> /home/fahad/kalshi-ghost-trader/snapshots/cron.log 2>&1
+Run manually (no cron currently configured on mint):
+```bash
+ssh mint '/home/fahad/kalshi-ghost-trader/scripts/snapshot.sh'
 ```
 
 Fetch locally:
@@ -199,7 +222,7 @@ zcat snapshots/<dir>/backtest.txt.gz
 
 ## Backup
 
-On mint — daily full DB backup, keep 7 days:
+On mint — manual full DB backup (no cron currently configured):
 ```bash
 ssh mint 'pg_dump -U kalshi kalshi_tennis | gzip > /home/fahad/kalshi-ghost-trader/backups/kalshi_$(date +%Y%m%d).sql.gz'
 ssh mint 'find /home/fahad/kalshi-ghost-trader/backups/ -name "kalshi_*.sql.gz" -mtime +7 -delete'
@@ -242,8 +265,9 @@ go run ./cmd/backtest -strategy matchpoint
 go run ./cmd/backtest -strategy matchpoint -debug   # log filter reasons
 ```
 
-Strategies register in `strategies` map in `cmd/backtest/main.go`.
-Must implement `replayStrategy` (Strategy + `SetReplayTime` + `OnPriceAt`).
+Strategies register in `DefaultFactories()` in `internal/backtest/factories.go` —
+single source of truth for CLI + dashboard + live. Must implement `replayStrategy`
+(Strategy + `SetReplayTime` + `OnPriceAt`).
 
 ## Price Band Analysis + Simulation Insights
 
