@@ -61,7 +61,7 @@
 <svelte:head><title>Strategies — Kalshi Ghost Trader</title></svelte:head>
 
 <div class="page-container">
-	<PageHeader title="Learned Strategies" {connected} {error}>
+	<PageHeader title="Learned Strategies" {connected} error={error || undefined}>
 		<button onclick={refresh} class="refresh-btn">Refresh</button>
 	</PageHeader>
 

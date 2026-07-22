@@ -128,9 +128,14 @@ func Load(ctx context.Context, db *gorm.DB, envPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load env config: %w", err)
 	}
-	pairs, err := getAllAppConfig(ctx, db)
-	if err != nil {
-		return nil, fmt.Errorf("read app_config: %w", err)
+	var pairs map[string]string
+	if db != nil {
+		pairs, err = getAllAppConfig(ctx, db)
+		if err != nil {
+			return nil, fmt.Errorf("read app_config: %w", err)
+		}
+	} else {
+		pairs = make(map[string]string)
 	}
 	snap := buildSnapshot(env, pairs)
 	s := &Store{

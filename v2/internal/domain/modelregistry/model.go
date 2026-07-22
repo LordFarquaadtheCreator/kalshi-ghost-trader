@@ -27,18 +27,54 @@ const (
 
 // Model is a registered model artifact.
 type Model struct {
-	ID            int64
-	Family        Family
-	Version       int
-	TrainedAt     int64
-	TrainFromTS   int64
-	TrainToTS     int64
-	FeatureHash   string
-	ArtifactPath  string
-	ArtifactSHA   string
-	Metrics       map[string]any
-	Status        Status
-	TrialIndex    int
+	ID            int64          `json:"id"`
+	Family        Family         `json:"family"`
+	Version       int            `json:"version"`
+	TrainedAt     int64          `json:"trained_at"`
+	TrainFromTS   int64          `json:"train_from_ts"`
+	TrainToTS     int64          `json:"train_to_ts"`
+	FeatureHash   string         `json:"feature_hash"`
+	ArtifactPath  string         `json:"artifact_path"`
+	ArtifactSHA   string         `json:"artifact_sha"`
+	Metrics       map[string]any `json:"metrics"`
+	Status        Status         `json:"status"`
+	TrialIndex    int            `json:"trial_index"`
+}
+
+// ModelJSON is the JSON representation of a Model, including derived fields.
+type ModelJSON struct {
+	ID            int64          `json:"id"`
+	Family        string         `json:"family"`
+	Version       int            `json:"version"`
+	TrainedAt     int64          `json:"trained_at"`
+	TrainFromTS   int64          `json:"train_from_ts"`
+	TrainToTS     int64          `json:"train_to_ts"`
+	FeatureHash   string         `json:"feature_hash"`
+	ArtifactPath  string         `json:"artifact_path"`
+	ArtifactSHA   string         `json:"artifact_sha"`
+	Metrics       map[string]any `json:"metrics"`
+	Status        string         `json:"status"`
+	TrialIndex    int            `json:"trial_index"`
+	StrategyName  string         `json:"strategy_name"`
+}
+
+// ToJSON converts a Model to its JSON representation.
+func (m Model) ToJSON() ModelJSON {
+	return ModelJSON{
+		ID:            m.ID,
+		Family:        string(m.Family),
+		Version:       m.Version,
+		TrainedAt:     m.TrainedAt,
+		TrainFromTS:   m.TrainFromTS,
+		TrainToTS:     m.TrainToTS,
+		FeatureHash:   m.FeatureHash,
+		ArtifactPath:  m.ArtifactPath,
+		ArtifactSHA:   m.ArtifactSHA,
+		Metrics:       m.Metrics,
+		Status:        string(m.Status),
+		TrialIndex:    m.TrialIndex,
+		StrategyName:  m.StrategyName(),
+	}
 }
 
 // StrategyName returns the strategy name for this model.

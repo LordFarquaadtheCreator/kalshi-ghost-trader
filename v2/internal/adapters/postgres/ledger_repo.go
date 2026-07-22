@@ -239,3 +239,16 @@ func (r *LedgerRepo) GetEntries(ctx context.Context) ([]ledger.Entry, error) {
 
 // ErrNoBalance is returned when the balance row doesn't exist.
 var ErrNoBalance = errors.New("pool balance row not found")
+
+// CheckInvariants verifies that the ledger entries sum to the balance.
+func (r *LedgerRepo) CheckInvariants(ctx context.Context) error {
+	entries, err := r.GetEntries(ctx)
+	if err != nil {
+		return fmt.Errorf("get entries: %w", err)
+	}
+	bal, err := r.GetBalance(ctx)
+	if err != nil {
+		return fmt.Errorf("get balance: %w", err)
+	}
+	return ledger.CheckInvariants(entries, bal)
+}

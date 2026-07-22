@@ -30,7 +30,11 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, models)
+	out := make([]modelregistry.ModelJSON, len(models))
+	for i, m := range models {
+		out[i] = m.ToJSON()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) registerModel(w http.ResponseWriter, r *http.Request) {
