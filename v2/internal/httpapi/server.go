@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/postgres"
+	"github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/app/tracker"
 	"gorm.io/gorm"
 )
 
@@ -25,7 +26,11 @@ type Server struct {
 	mux       *http.ServeMux
 	sse       *sseHub
 	modelRepo *postgres.ModelRepo
+	tracker   *tracker.Tracker
 }
+
+// SetTracker wires the tracker for /api/tracked.
+func (s *Server) SetTracker(t *tracker.Tracker) { s.tracker = t }
 
 // NewServer creates an HTTP API server. Token comes from env API_TOKEN.
 func NewServer(db *gorm.DB, log *slog.Logger) *Server {
@@ -63,6 +68,11 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/models", s.auth(s.handleModels))
 	mux.HandleFunc("POST /api/v1/models/{id}/status", s.auth(s.handleModelStatus))
 	mux.HandleFunc("GET /api/v1/stream", s.auth(s.handleStream))
+
+	// v1-compatible routes for dashboard pages not yet migrated to v1 API.
+	mux.HandleFunc("GET /api/tracked", s.cors(s.handleTracked))
+	mux.HandleFunc("GET /api/order-counts", s.cors(s.handleOrderCounts))
+	mux.HandleFunc("GET /api/pending-order-counts", s.cors(s.handlePendingOrderCounts))
 
 	return mux
 }

@@ -30,8 +30,11 @@ type orderWorker interface {
 
 // matchLoop holds a loop and its cancel function.
 type matchLoop struct {
-	loop   *match.Loop
-	cancel context.CancelFunc
+	loop    *match.Loop
+	cancel  context.CancelFunc
+	event   string
+	markets []string
+	started int64
 }
 
 // NewTracker creates a tracker.
@@ -73,7 +76,7 @@ func (t *Tracker) StartMatch(ctx context.Context, eventTicker string, marketTick
 		}
 	})
 
-	t.loops[eventTicker] = &matchLoop{loop: loop, cancel: cancel}
+	t.loops[eventTicker] = &matchLoop{loop: loop, cancel: cancel, event: eventTicker, markets: marketTickers, started: time.Now().UnixMilli()}
 
 	// Subscribe to market data.
 	if t.stream != nil {
@@ -135,6 +138,44 @@ func (t *Tracker) ActiveMatches() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.loops)
+}
+
+// ActiveSub is one tracked market→event pair, matching v1 dashboard shape.
+type ActiveSub struct {
+	MarketTicker string `json:"market_ticker"`
+	EventTicker  string `json:"event_ticker"`
+	Title        string `json:"title"`
+	SubscribedAt int64  `json:"subscribed_at"`
+	OccurrenceTS int64  `json:"occurrence_ts"`
+	LatestTickTS int64  `json:"latest_tick_ts"`
+}
+
+// ActiveSubs returns all tracked market→event pairs.
+func (t *Tracker) ActiveSubs() []ActiveSub {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]ActiveSub, 0, len(t.loops))
+	for _, ml := range t.loops {
+		for _, mkt := range ml.markets {
+			out = append(out, ActiveSub{
+				MarketTicker: mkt,
+				EventTicker:  ml.event,
+				SubscribedAt: ml.started,
+			})
+		}
+	}
+	return out
+}
+
+// ActiveEvents returns event tickers for all tracked matches (deduplicated).
+func (t *Tracker) ActiveEvents() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, 0, len(t.loops))
+	for ev := range t.loops {
+		out = append(out, ev)
+	}
+	return out
 }
 
 // multiHandler dispatches events to all strategies and collects intents.

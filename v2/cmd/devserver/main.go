@@ -36,6 +36,7 @@ func main() {
 	log.Info("devserver: db connected", "dsn", dsn)
 
 	srv := httpapi.NewServer(db, log)
+	// devserver has no tracker — /api/tracked returns empty.
 	addr := ":6060"
 	log.Info("devserver: starting", "addr", addr)
 

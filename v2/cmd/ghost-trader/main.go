@@ -189,6 +189,7 @@ func main() {
 
 	// 16. HTTP API — dashboard + metrics.
 	srv := httpapi.NewServer(db, log)
+	srv.SetTracker(tr)
 	g.Go(func() error { return srv.Serve(ctx, cfg.MetricsAddr) })
 
 	log.Info("main: ghost-trader v2 starting", "metrics_addr", cfg.MetricsAddr, "strategies", len(strategies))
