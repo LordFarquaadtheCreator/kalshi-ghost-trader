@@ -56,13 +56,16 @@ func (d *DB) GetActiveMarkets(ctx context.Context) ([]Market, error) {
 
 // GetUnresolvedMarkets returns markets that need REST reconciliation:
 //   - Has orders but no result (missed WS settled event)
-//   - Status active/open but close_ts + grace period elapsed (should have settled)
+//   - Status active/open but match should have finished: occurrence_ts +
+//     matchDurationBuffer elapsed, OR close_ts + grace elapsed (whichever
+//     fires first). Tennis close_ts can be weeks after the match (tournament
+//     wrap date), so occurrence_ts is the primary signal.
 //   - Has result but orders still in non-terminal status (ResolveRealOrders
 //     never ran — e.g. WS settled event missed, market already has result
 //     from determined event or daily scan)
 //
-// Deduplicated by market_ticker. Ordered by close_ts ascending (oldest first).
-func (d *DB) GetUnresolvedMarkets(ctx context.Context, graceMS int64) ([]Market, error) {
+// Deduplicated by market_ticker. Ordered by occurrence_ts ascending (oldest first).
+func (d *DB) GetUnresolvedMarkets(ctx context.Context, graceMS int64, matchDurationMS int64) ([]Market, error) {
 	now := nowMillis()
 	var markets []Market
 	err := d.db.WithContext(ctx).Raw(`
@@ -76,8 +79,10 @@ WHERE (
 )
 OR (
     m.status IN ('open', 'active')
-    AND m.close_ts > 0
-    AND m.close_ts + ? < ?
+    AND (
+        (m.occurrence_ts > 0 AND m.occurrence_ts + ? < ?)
+        OR (m.close_ts > 0 AND m.close_ts + ? < ?)
+    )
 )
 OR (
     m.result IS NOT NULL AND m.result != ''
@@ -88,7 +93,7 @@ OR (
           AND o.order_status NOT IN ('resolved', 'failed', 'canceled')
     )
 )
-ORDER BY m.close_ts ASC`, graceMS, now).Scan(&markets).Error
+ORDER BY m.occurrence_ts ASC`, matchDurationMS, now, graceMS, now).Scan(&markets).Error
 	return markets, err
 }
 

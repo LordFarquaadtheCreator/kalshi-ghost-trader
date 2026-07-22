@@ -24,6 +24,13 @@ import (
 // overdue for settlement. 30 minutes — matches can run long, rain delays, etc.
 const closeGraceMS = 30 * 60 * 1000
 
+// matchDurationBufferMS is how long after occurrence_ts before an active/open
+// market is considered overdue for settlement. Tennis close_ts can be weeks
+// after occurrence_ts (tournament wrap date), so close_ts-based grace never
+// fires for matches that finished on court. 6 hours covers 5-setters + rain
+// delays. Reconciler fetches via REST and finalizes.
+const matchDurationBufferMS = 6 * 60 * 60 * 1000
+
 // Reconciler polls for unresolved markets and fills settlement data from REST.
 type Reconciler struct {
 	client *kalshiclient.Client
@@ -63,7 +70,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 
 // reconcile queries unresolved markets, fetches each from REST, updates the DB.
 func (r *Reconciler) reconcile(ctx context.Context) {
-	markets, err := r.db.GetUnresolvedMarkets(ctx, closeGraceMS)
+	markets, err := r.db.GetUnresolvedMarkets(ctx, closeGraceMS, matchDurationBufferMS)
 	if err != nil {
 		r.log.Error("reconciler: get unresolved markets", "err", err)
 		return

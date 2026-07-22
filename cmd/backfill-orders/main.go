@@ -32,6 +32,10 @@ import (
 // are considered overdue for settlement.
 const closeGraceMS = 30 * 60 * 1000
 
+// matchDurationBufferMS matches reconciler default — markets past
+// occurrence_ts + 6h are considered overdue (tennis close_ts can be weeks out).
+const matchDurationBufferMS = 6 * 60 * 60 * 1000
+
 func main() {
 	onlyOrders := flag.Bool("orders", false, "only backfill order status, skip market resolution")
 	onlyMarkets := flag.Bool("markets", false, "only resolve markets, skip order status backfill")
@@ -163,7 +167,7 @@ func backfillOrders(ctx context.Context, client *kalshiclient.Client, db *store.
 // any market with a result. Mirrors reconciler.reconcile but runs once across
 // the full backlog and resolves per-market (not gated on event finalization).
 func resolveMarkets(ctx context.Context, client *kalshiclient.Client, db *store.DB, log *slog.Logger, dryRun bool) error {
-	markets, err := db.GetUnresolvedMarkets(ctx, closeGraceMS)
+	markets, err := db.GetUnresolvedMarkets(ctx, closeGraceMS, matchDurationBufferMS)
 	if err != nil {
 		return fmt.Errorf("get unresolved markets: %w", err)
 	}
