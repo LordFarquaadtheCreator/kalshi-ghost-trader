@@ -4,6 +4,7 @@
   import { fmtTime, fmtTicker, seriesFromTicker, fmtPnL, fmtPct, vibrantColor } from '$lib/utils.js';
   import { browser } from '$app/environment';
   import { goto } from '$app/navigation';
+  import { untrack } from 'svelte';
   import PageHeader from '$lib/components/PageHeader.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
@@ -13,11 +14,11 @@
   let { data } = $props();
 
   const PAGE_SIZE = 100;
-  const store = createPoll(() => api.getOrders({ limit: PAGE_SIZE }), 5000, {
+  const store = createPoll(() => api.getOrders({ limit: PAGE_SIZE }), 5000, untrack(() => ({
     data: data?.initial ?? null,
     error: null,
     connected: !!data?.initial,
-  });
+  })));
 
   let ordersData = $derived($store.data);
   let loading = $derived(!$store.data && $store.connected === false && !$store.error);
