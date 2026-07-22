@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,40 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/triggerranges"
 	"github.com/google/uuid"
 )
+
+// sizeRealOrder converts a raw Kelly float size into a whole-contract count
+// and the exact integer-cent spend, clamped to the available pool balance.
+//
+// kellyRaw is the float output of kellySizeRaw (fraction * edge * bankroll).
+// priceCents is the per-contract price in cents (1..99). balanceCents is the
+// pool balance in cents.
+//
+// Returns contracts=0 when kellyRaw floors to 0, when the edge is non-positive,
+// or when the pool cannot afford a single contract at priceCents. The minimum
+// of one contract is applied exactly once — after the clamp, not before — so
+// a clamp that brings the count below 1 results in no order rather than a
+// rounded-up order the pool can't cover.
+func sizeRealOrder(kellyRaw float64, priceCents, balanceCents int64) (contracts int, spendCents int64) {
+	if priceCents <= 0 || balanceCents <= 0 {
+		return 0, 0
+	}
+	contracts = int(math.Floor(kellyRaw))
+	if contracts < 1 {
+		return 0, 0
+	}
+	spendCents = int64(contracts) * priceCents
+	if spendCents > balanceCents {
+		// Clamp to what the pool can afford. Integer division floors, which
+		// is correct — we cannot buy a fractional contract.
+		maxContracts := balanceCents / priceCents
+		if maxContracts < 1 {
+			return 0, 0
+		}
+		contracts = int(maxContracts)
+		spendCents = int64(contracts) * priceCents
+	}
+	return contracts, spendCents
+}
 
 // RealOrderConfig controls real order submission to Kalshi.
 type RealOrderConfig struct {
@@ -225,41 +260,29 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 	}
 	bankrollDollars := float64(lp.BalanceCents) / 100.0
 
-	// Kelly size from live pool balance
-	count := kellySizeRaw(o.ConvProb, o.MarketPrice, bankrollDollars, kellyFractionP)
-	if count <= 0 {
+	// Kelly size from live pool balance.
+	// sizeRealOrder floors to a whole contract count and clamps spend to
+	// the available pool balance. Returns 0 contracts when Kelly says 0,
+	// when the edge is non-positive, or when the pool can't afford one
+	// contract at the current price.
+	priceCents := int64(math.Round(o.MarketPrice * 100))
+	contracts, spendCents := sizeRealOrder(
+		kellySizeRaw(o.ConvProb, o.MarketPrice, bankrollDollars, kellyFractionP),
+		priceCents, lp.BalanceCents)
+	if contracts < 1 {
 		e.log.Warn("real: skipped zero-size order",
-			"market", o.MarketTicker, "bankroll", bankrollDollars)
-		return false
-	}
-	// Kalshi rejects sub-1 contract counts; round up to 1
-	if count < 1 {
-		count = 1
-	}
-
-	// Guard 4: clamp spend to available pool balance (race safety — balance
-	// could change between fetch and deduct under concurrent orders)
-	spendCents := int64(count * o.MarketPrice * 100)
-	if spendCents > lp.BalanceCents {
-		// clamp to what's available
-		maxCount := float64(lp.BalanceCents) / (o.MarketPrice * 100)
-		e.log.Warn("real: clamping order to available pool balance",
 			"market", o.MarketTicker,
-			"original_count", count, "clamped_count", maxCount,
-			"spend_cents", spendCents, "balance_cents", lp.BalanceCents)
-		count = maxCount
-		spendCents = int64(count * o.MarketPrice * 100)
-		if count <= 0 {
-			e.log.Warn("real: clamped count is zero, skipping",
-				"market", o.MarketTicker, "balance_cents", lp.BalanceCents)
-			return false
-		}
+			"bankroll", bankrollDollars,
+			"price_cents", priceCents,
+			"balance_cents", lp.BalanceCents,
+			"contracts", contracts)
+		return false
 	}
 
 	// persist order to DB as real before submission
 	o.IsReal = true
 	o.OrderStatus = "pending"
-	o.SuggestedSize = count
+	o.SuggestedSize = float64(contracts)
 	o.Action = "buy"
 	if o.Side == "" {
 		o.Side = store.OrderSideOpen
@@ -288,7 +311,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 
 	// format price as fixed-point dollars (Kalshi expects string like "0.6500")
 	priceStr := fmt.Sprintf("%.4f", o.MarketPrice)
-	countStr := fmt.Sprintf("%.2f", count)
+	countStr := strconv.Itoa(contracts)
 
 	// client_order_id: per-order UUID for idempotency. If a timeout leaves the
 	// order in an ambiguous state, retrying with the same client_order_id is
@@ -325,8 +348,28 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		return false
 	}
 
-	fillCount, _ := strconv.ParseFloat(resp.FillCount, 64)
-	remainingCount, _ := strconv.ParseFloat(resp.RemainingCount, 64)
+	fillCount, err := strconv.ParseFloat(resp.FillCount, 64)
+	if err != nil {
+		e.log.Error("real: unparseable fill_count, marking unverified",
+			"order_id", o.ID, "server_order_id", resp.OrderID,
+			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
+			"error", err)
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, "unverified"); uerr != nil {
+			e.log.Error("real: failed to mark order unverified", "order_id", o.ID, "error", uerr)
+		}
+		return true
+	}
+	remainingCount, err := strconv.ParseFloat(resp.RemainingCount, 64)
+	if err != nil {
+		e.log.Error("real: unparseable remaining_count, marking unverified",
+			"order_id", o.ID, "server_order_id", resp.OrderID,
+			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
+			"error", err)
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, "unverified"); uerr != nil {
+			e.log.Error("real: failed to mark order unverified", "order_id", o.ID, "error", uerr)
+		}
+		return true
+	}
 	status := "submitted"
 	if remainingCount == 0 && fillCount > 0 {
 		status = "filled"
@@ -484,8 +527,28 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 		return false
 	}
 
-	fillCount, _ := strconv.ParseFloat(resp.FillCount, 64)
-	remainingCount, _ := strconv.ParseFloat(resp.RemainingCount, 64)
+	fillCount, err := strconv.ParseFloat(resp.FillCount, 64)
+	if err != nil {
+		e.log.Error("real: sell unparseable fill_count, marking unverified",
+			"order_id", o.ID, "server_order_id", resp.OrderID,
+			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
+			"error", err)
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, "unverified"); uerr != nil {
+			e.log.Error("real: failed to mark sell unverified", "order_id", o.ID, "error", uerr)
+		}
+		return true
+	}
+	remainingCount, err := strconv.ParseFloat(resp.RemainingCount, 64)
+	if err != nil {
+		e.log.Error("real: sell unparseable remaining_count, marking unverified",
+			"order_id", o.ID, "server_order_id", resp.OrderID,
+			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
+			"error", err)
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, "unverified"); uerr != nil {
+			e.log.Error("real: failed to mark sell unverified", "order_id", o.ID, "error", uerr)
+		}
+		return true
+	}
 	status := "submitted"
 	if remainingCount == 0 && fillCount > 0 {
 		status = "filled"
