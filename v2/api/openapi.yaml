@@ -1,0 +1,146 @@
+openapi: 3.1.0
+info:
+  title: Kalshi Ghost Trader v2 API
+  version: 1.0.0
+  description: Dashboard API for the v2 ghost trader.
+
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/overview:
+    get:
+      summary: Pool equity curve, open exposure, today funnel
+      responses:
+        "200":
+          description: Overview data
+
+  /api/v1/strategies:
+    get:
+      summary: Strategy daily aggregated, sortable
+      parameters:
+        - name: sort
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Strategy list
+
+  /api/v1/strategies/{name}:
+    get:
+      summary: Daily series + band performance for a strategy
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Strategy detail
+
+  /api/v1/matches:
+    get:
+      summary: Match summary + live loop state
+      parameters:
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [live, done]
+      responses:
+        "200":
+          description: Match list
+
+  /api/v1/matches/{event}:
+    get:
+      summary: Match detail with markets, orders, gated signals
+      parameters:
+        - name: event
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Match detail
+
+  /api/v1/orders:
+    get:
+      summary: Cursor-paginated orders
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Order list
+
+  /api/v1/ledger:
+    get:
+      summary: Cursor-paginated ledger entries
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ledger entries
+
+  /api/v1/config:
+    get:
+      summary: Config keys with value, classification, last_applied_ts
+      responses:
+        "200":
+          description: Config list
+    put:
+      summary: Update a config key
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key:
+                  type: string
+                value:
+                  type: string
+      responses:
+        "200":
+          description: Config updated
+
+  /api/v1/stream:
+    get:
+      summary: SSE stream for price, order, pool topics
+      parameters:
+        - name: topics
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SSE stream
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+security:
+  - bearerAuth: []
