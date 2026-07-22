@@ -197,4 +197,13 @@ export const api = {
   },
 
   get pollInterval() { return pollInterval; },
+
+  async getModels() {
+    return cachedFetch(`${GHOST_TRADER_URL}/api/v1/models`, TTL.strategies);
+  },
+
+  async promoteModel(/** @type {number} */ id, /** @type {string} */ status, /** @type {boolean} */ [confirm]) {
+    const url = `${GHOST_TRADER_URL}/api/v1/models/${id}/status${confirm ? '?confirm=true' : ''}`;
+    return mutate(url, 'POST', { status });
+  },
 };
