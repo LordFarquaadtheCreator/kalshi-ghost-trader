@@ -311,18 +311,11 @@
     }
   }
 
-  /** @type {ReturnType<typeof setInterval> | null} */
-  let pollTimer = null;
-
   onMount(() => {
-    if (browser) {
-      loadStrategies().then(() => loadSimulation());
-      pollTimer = setInterval(() => { if (browser) loadSimulation(); }, 300_000);
-    }
+    if (browser) loadStrategies().then(() => loadSimulation());
   });
 
   onDestroy(() => {
-    if (pollTimer) clearInterval(pollTimer);
     if (pnlChart) pnlChart.destroy();
     if (winlossChart) winlossChart.destroy();
     if (bandChart) bandChart.destroy();

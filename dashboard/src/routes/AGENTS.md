@@ -20,7 +20,7 @@ File-based routing. Each route directory has `+page.svelte` (component) and `+pa
 
 ### `/simulation`
 - `+page.js` — Disables SSR, initial load of strategy list.
-- `+page.svelte` — Pre-computed simulation insights. Single `getSimulation()` call (5-min poll). Strategy toggles + day filter + chart metric selector. Summary cards per strategy (from `backtest_results.summary_json`). Four Chart.js charts: cumulative P&L (from pre-computed `cum_pnl_json`), win/loss bars, band performance, signal count per band. Peak band cards + cross-strategy band totals + best bands table + per-strategy per-band detail table. No live recompute — all data from `simulation_insights` + `backtest_results` tables.
+- `+page.svelte` — Pre-computed simulation insights. Single `getSimulation()` call on mount (no polling — data updates daily via cron). Strategy toggles + day filter + chart metric selector. Summary cards per strategy (from `backtest_results.summary_json`). Four Chart.js charts: cumulative P&L (from pre-computed `cum_pnl_json`), win/loss bars, band performance, signal count per band. Peak band cards + cross-strategy band totals + best bands table + per-strategy per-band detail table. No live recompute — all data from `simulation_insights` + `backtest_results` tables.
 
 ### `/system`
 - `+page.js` — Disables SSR, initial load of metrics.
