@@ -6,6 +6,7 @@
 	"scripts": {
 		"dev": "curl -s http://127.0.0.1:6060/metrics > /dev/null 2>&1 || (cd .. && go run . &) && sleep 1 && vite dev",
 		"dev:web": "vite dev",
+		"dev:prod": "VITE_BACKEND_URL=http://192.168.1.246:6060 vite dev",
 		"build": "vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",

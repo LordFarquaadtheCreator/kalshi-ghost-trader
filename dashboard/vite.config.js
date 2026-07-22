@@ -31,9 +31,9 @@ export default defineConfig({
 	server: {
 		host: '0.0.0.0',
 		proxy: {
-			'/api': 'http://127.0.0.1:6060',
-			'/metrics': 'http://127.0.0.1:6060',
-			'/debug': 'http://127.0.0.1:6060',
+			'/api': process.env.VITE_BACKEND_URL || 'http://127.0.0.1:6060',
+			'/metrics': process.env.VITE_BACKEND_URL || 'http://127.0.0.1:6060',
+			'/debug': process.env.VITE_BACKEND_URL || 'http://127.0.0.1:6060',
 		},
 	},
 });
