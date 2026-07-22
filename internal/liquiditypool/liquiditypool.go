@@ -2,6 +2,7 @@ package liquiditypool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,6 +10,14 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// ErrInsufficientBalance is returned when a deduction exceeds the pool balance.
+var ErrInsufficientBalance = errors.New("insufficient liquidity pool balance")
+
+// ErrPoolMissing is returned when the pool row (id=1) is absent — the singleton
+// has not been initialized. Returned by Refund/TopUp/Credit when the UPDATE
+// matches zero rows.
+var ErrPoolMissing = errors.New("liquidity pool row missing")
 
 // Get returns the liquidity pool state. Returns error if not initialized.
 func Get(ctx context.Context, db *gorm.DB) (*store.LiquidityPool, error) {
@@ -49,49 +58,70 @@ func Reset(ctx context.Context, db *gorm.DB, initialBalanceCents int64) error {
 // Increases balance_cents and initial_balance_cents by addCents so P&L %
 // stays meaningful against the new contribution baseline. Use when injecting
 // more capital mid-run without resetting the track record.
+// Returns ErrPoolMissing if the singleton row (id=1) is absent.
 func TopUp(ctx context.Context, db *gorm.DB, addCents int64) error {
-	return db.WithContext(ctx).Exec(`
+	res := db.WithContext(ctx).Exec(`
 UPDATE liquidity_pool
 SET balance_cents = balance_cents + ?,
     initial_balance_cents = initial_balance_cents + ?,
     updated_ts = ?
 WHERE id = 1`,
-		addCents, addCents, time.Now().UnixMilli()).Error
+		addCents, addCents, time.Now().UnixMilli())
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrPoolMissing
+	}
+	return nil
 }
 
 // Deduct atomically deducts spendCents from the pool balance
 // and adds to total_spent_cents. Returns new balance in cents.
-// Fails if insufficient balance (prevents going negative under concurrent access).
+// Returns ErrInsufficientBalance when the spend exceeds the current balance
+// (detected via RowsAffected == 0 on the guarded UPDATE, not via a sentinel
+// error — the previous ErrRecordNotFound comparison never fired because
+// Raw().Scan() on a no-row UPDATE returns no error).
 func Deduct(ctx context.Context, db *gorm.DB, spendCents int64) (int64, error) {
 	var newBalance int64
-	err := db.WithContext(ctx).Raw(`
+	res := db.WithContext(ctx).Raw(`
 UPDATE liquidity_pool
 SET balance_cents = balance_cents - ?,
     total_spent_cents = total_spent_cents + ?,
     updated_ts = ?
 WHERE id = 1 AND balance_cents >= ?
 RETURNING balance_cents`,
-		spendCents, spendCents, time.Now().UnixMilli(), spendCents).Scan(&newBalance).Error
-	if err == gorm.ErrRecordNotFound {
-		return 0, fmt.Errorf("insufficient liquidity pool balance for spend of %d cents", spendCents)
+		spendCents, spendCents, time.Now().UnixMilli(), spendCents).Scan(&newBalance)
+	if res.Error != nil {
+		return 0, res.Error
 	}
-	return newBalance, err
+	if res.RowsAffected == 0 {
+		return 0, fmt.Errorf("%w: spend of %d cents", ErrInsufficientBalance, spendCents)
+	}
+	return newBalance, nil
 }
 
 // Refund atomically refunds spendCents to the pool balance
 // and subtracts from total_spent_cents. Used when a real order fails
 // after deduction but before execution.
+// Returns ErrPoolMissing if the singleton row (id=1) is absent.
 func Refund(ctx context.Context, db *gorm.DB, refundCents int64) (int64, error) {
 	var newBalance int64
-	err := db.WithContext(ctx).Raw(`
+	res := db.WithContext(ctx).Raw(`
 UPDATE liquidity_pool
 SET balance_cents = balance_cents + ?,
     total_spent_cents = MAX(total_spent_cents - ?, 0),
     updated_ts = ?
 WHERE id = 1
 RETURNING balance_cents`,
-		refundCents, refundCents, time.Now().UnixMilli()).Scan(&newBalance).Error
-	return newBalance, err
+		refundCents, refundCents, time.Now().UnixMilli()).Scan(&newBalance)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return 0, ErrPoolMissing
+	}
+	return newBalance, nil
 }
 
 // Credit atomically adds proceedsCents to the pool balance.
@@ -99,14 +129,21 @@ RETURNING balance_cents`,
 // N*p*100 cents to the pool. Does NOT touch total_spent_cents (that
 // tracks buy-side capital deployed, not sell-side proceeds).
 // Realized P&L from the trade is tracked on the position row, not here.
+// Returns ErrPoolMissing if the singleton row (id=1) is absent.
 func Credit(ctx context.Context, db *gorm.DB, proceedsCents int64) (int64, error) {
 	var newBalance int64
-	err := db.WithContext(ctx).Raw(`
+	res := db.WithContext(ctx).Raw(`
 UPDATE liquidity_pool
 SET balance_cents = balance_cents + ?,
     updated_ts = ?
 WHERE id = 1
 RETURNING balance_cents`,
-		proceedsCents, time.Now().UnixMilli()).Scan(&newBalance).Error
-	return newBalance, err
+		proceedsCents, time.Now().UnixMilli()).Scan(&newBalance)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return 0, ErrPoolMissing
+	}
+	return newBalance, nil
 }
