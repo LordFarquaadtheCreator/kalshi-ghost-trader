@@ -168,10 +168,15 @@ func main() {
 	log.Info("apitennis scraper initialized", "timezone", config.Cfg.APITennisTimezone)
 
 	// Kalshi live-data poller (optional — backup score source via REST polling)
+	// Dedicated REST client with its own rate limiter so pollers can't starve
+	// scanner/reconciler on the shared client.
 	var kldPoller *kalshilivedata.Poller
 	if config.Cfg.KalshiLiveDataEnabled {
-		kldPoller = kalshilivedata.New(restClient, db, multi, tickWriter, log)
-		log.Info("kalshi livedata poller enabled", "poll_secs", config.Cfg.KalshiLiveDataPollSecs)
+		kldClient := kalshiclient.NewClientWithConfig(config.Cfg.RESTBaseURL, signer,
+			time.Duration(config.Cfg.HTTPTimeoutSecs)*time.Second, config.Cfg.KalshiLiveDataRateLimitRPS, log)
+		kldPoller = kalshilivedata.New(kldClient, db, multi, tickWriter, log)
+		log.Info("kalshi livedata poller enabled", "poll_secs", config.Cfg.KalshiLiveDataPollSecs,
+			"rate_limit_rps", config.Cfg.KalshiLiveDataRateLimitRPS)
 	}
 
 	// Tracker (market subscription lifecycle)

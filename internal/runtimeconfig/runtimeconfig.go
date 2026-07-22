@@ -47,8 +47,9 @@ type RuntimeConfig struct {
 
 	APITennisTimezone string
 
-	KalshiLiveDataEnabled  bool
-	KalshiLiveDataPollSecs int
+	KalshiLiveDataEnabled      bool
+	KalshiLiveDataPollSecs     int
+	KalshiLiveDataRateLimitRPS int
 
 	CloseTimerEnabled  bool
 	CloseTimerLeadMin  int
@@ -150,6 +151,7 @@ func (rc *RuntimeConfig) GetAll() []store.RuntimeConfig {
 		{Key: "apitennis_timezone", Value: rc.APITennisTimezone},
 		{Key: "kalshi_livedata_enabled", Value: strconv.FormatBool(rc.KalshiLiveDataEnabled)},
 		{Key: "kalshi_livedata_poll_secs", Value: strconv.Itoa(rc.KalshiLiveDataPollSecs)},
+		{Key: "kalshi_livedata_rate_limit_rps", Value: strconv.Itoa(rc.KalshiLiveDataRateLimitRPS)},
 		{Key: "close_timer_enabled", Value: strconv.FormatBool(rc.CloseTimerEnabled)},
 		{Key: "close_timer_lead_min", Value: strconv.Itoa(rc.CloseTimerLeadMin)},
 		{Key: "close_timer_min_price", Value: strconv.FormatFloat(rc.CloseTimerMinPrice, 'f', -1, 64)},
@@ -291,6 +293,7 @@ func (rc *RuntimeConfig) applyFromMap(m map[string]string) {
 
 	rc.KalshiLiveDataEnabled = atob(m["kalshi_livedata_enabled"])
 	rc.KalshiLiveDataPollSecs = atoi(m["kalshi_livedata_poll_secs"])
+	rc.KalshiLiveDataRateLimitRPS = atoi(m["kalshi_livedata_rate_limit_rps"])
 
 	rc.CloseTimerEnabled = atob(m["close_timer_enabled"])
 	rc.CloseTimerLeadMin = atoi(m["close_timer_lead_min"])
