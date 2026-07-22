@@ -51,26 +51,28 @@ func DefaultBreakBackConfig() BreakBackConfig {
 // Score-based: OnPoint detects actual break (scorer != server), then
 // buys the broken player's market at current price.
 type BreakBackStrategy struct {
-	mu        sync.RWMutex
-	prices    map[string]float64  // market_ticker -> latest price
-	maxPrices map[string]float64  // market_ticker -> peak price seen
-	markets   map[string][]string // event_ticker -> [home, away]
-	fired     map[string]bool     // event_ticker -> fired
-	emitter   OrderEmitter
-	log       *slog.Logger
-	cfg       BreakBackConfig
-	replayNow *time.Time
+	mu         sync.RWMutex
+	prices     map[string]float64  // market_ticker -> latest price
+	priceTimes map[string]time.Time // market_ticker -> last price update
+	maxPrices  map[string]float64  // market_ticker -> peak price seen
+	markets    map[string][]string // event_ticker -> [home, away]
+	fired      map[string]bool     // event_ticker -> fired
+	emitter    OrderEmitter
+	log        *slog.Logger
+	cfg        BreakBackConfig
+	replayNow  *time.Time
 }
 
 func NewBreakBackStrategy(emitter OrderEmitter, log *slog.Logger, cfg BreakBackConfig) *BreakBackStrategy {
 	return &BreakBackStrategy{
-		prices:    make(map[string]float64),
-		maxPrices: make(map[string]float64),
-		markets:   make(map[string][]string),
-		fired:     make(map[string]bool),
-		emitter:   emitter,
-		log:       log,
-		cfg:       cfg,
+		prices:     make(map[string]float64),
+		priceTimes: make(map[string]time.Time),
+		maxPrices:  make(map[string]float64),
+		markets:    make(map[string][]string),
+		fired:      make(map[string]bool),
+		emitter:    emitter,
+		log:        log,
+		cfg:        cfg,
 	}
 }
 
@@ -84,6 +86,7 @@ func (s *BreakBackStrategy) UnregisterMarkets(eventTicker string) {
 	s.mu.Lock()
 	for _, mkt := range s.markets[eventTicker] {
 		delete(s.prices, mkt)
+		delete(s.priceTimes, mkt)
 		delete(s.maxPrices, mkt)
 	}
 	delete(s.markets, eventTicker)
@@ -98,6 +101,7 @@ func (s *BreakBackStrategy) OnPrice(marketTicker string, price float64) {
 func (s *BreakBackStrategy) OnPriceAt(marketTicker string, price float64, ts time.Time) {
 	s.mu.Lock()
 	s.prices[marketTicker] = price
+	s.priceTimes[marketTicker] = ts
 	if price > s.maxPrices[marketTicker] {
 		s.maxPrices[marketTicker] = price
 	}
@@ -193,9 +197,14 @@ func (s *BreakBackStrategy) OnPoint(eventTicker string, p store.Point) {
 		}
 		price := s.prices[brokenMkt]
 		maxPrice := s.maxPrices[brokenMkt]
+		priceTime := s.priceTimes[brokenMkt]
 		s.mu.Unlock()
 
 		if price <= 0 || price > s.cfg.MaxEntryPrice {
+			return
+		}
+		// Stale price guard — WS may have gone silent
+		if s.now().Sub(priceTime) > priceStaleTTL {
 			return
 		}
 		if maxPrice < s.cfg.MinPeakPrice {
@@ -282,6 +291,7 @@ func (s *BreakBackStrategy) eventForMarket(marketTicker string) string {
 func (s *BreakBackStrategy) DeletePrice(marketTicker string) {
 	s.mu.Lock()
 	delete(s.prices, marketTicker)
+	delete(s.priceTimes, marketTicker)
 	delete(s.maxPrices, marketTicker)
 	s.mu.Unlock()
 }
@@ -293,7 +303,13 @@ func (s *BreakBackStrategy) GetPrice(marketTicker string) float64 {
 }
 
 func (s *BreakBackStrategy) GetPriceAge(marketTicker string) time.Duration {
-	return time.Hour
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.priceTimes[marketTicker]
+	if !ok {
+		return time.Hour
+	}
+	return time.Since(t)
 }
 
 func (s *BreakBackStrategy) String() string {
