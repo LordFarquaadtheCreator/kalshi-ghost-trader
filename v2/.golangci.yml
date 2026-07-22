@@ -7,57 +7,64 @@ linters:
     - staticcheck
     - govet
 
-settings:
-  depguard:
-    rules:
-      domain-only:
-        list-mode: lax
-        files:
-          - "**/internal/domain/**"
-        deny:
-          - pkg: "gorm.io/**"
-            desc: "domain must not import GORM or any I/O library"
-          - pkg: "github.com/jackc/**"
-            desc: "domain must not import pgx or any I/O library"
-          - pkg: "net/http"
-            desc: "domain must not import net/http"
-          - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/app/**"
-            desc: "domain must not import app packages"
-          - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/**"
-            desc: "domain must not import adapter packages"
-          - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/httpapi/**"
-            desc: "domain must not import httpapi"
-          - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/config/**"
-            desc: "domain must not import config"
-          - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/ports/**"
-            desc: "domain must not import ports"
-      app-only:
-        list-mode: lax
-        files:
-          - "**/internal/app/**"
-        deny:
-          - pkg: "gorm.io/**"
-            desc: "app must not import GORM directly; go through ports"
-          - pkg: "github.com/jackc/**"
-            desc: "app must not import pgx directly; go through ports"
-          - pkg: "net/http"
-            desc: "app must not import net/http; go through httpapi or ports"
-          - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/**"
-            desc: "app must not import adapters; depend on ports"
-          - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/httpapi/**"
-            desc: "app must not import httpapi"
-      adapters-and-httpapi-only:
-        list-mode: lax
-        files:
-          - "**/internal/adapters/**"
-          - "**/internal/httpapi/**"
-        deny: []
+  settings:
+    depguard:
+      rules:
+        domain-only:
+          list-mode: lax
+          files:
+            - "**/internal/domain/**"
+          deny:
+            - pkg: "gorm.io/**"
+              desc: "domain must not import GORM or any I/O library"
+            - pkg: "github.com/jackc/**"
+              desc: "domain must not import pgx or any I/O library"
+            - pkg: "net/http"
+              desc: "domain must not import net/http"
+            - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/app/**"
+              desc: "domain must not import app packages"
+            - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/**"
+              desc: "domain must not import adapter packages"
+            - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/httpapi/**"
+              desc: "domain must not import httpapi"
+            - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/config/**"
+              desc: "domain must not import config"
+            - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/ports/**"
+              desc: "domain must not import ports"
+        app-only:
+          list-mode: lax
+          files:
+            - "**/internal/app/**"
+          deny:
+            - pkg: "gorm.io/**"
+              desc: "app must not import GORM directly; go through ports"
+            - pkg: "github.com/jackc/**"
+              desc: "app must not import pgx directly; go through ports"
+            - pkg: "net/http"
+              desc: "app must not import net/http; go through httpapi or ports"
+            - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/**"
+              desc: "app must not import adapters; depend on ports"
+            - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/httpapi/**"
+              desc: "app must not import httpapi"
+        config-allowed:
+          list-mode: lax
+          files:
+            - "**/internal/config/**"
+          deny:
+            - pkg: "net/http"
+              desc: "config must not import net/http"
+            - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/app/**"
+              desc: "config must not import app packages"
+            - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/**"
+              desc: "config must not import adapter packages"
+            - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/httpapi/**"
+              desc: "config must not import httpapi"
 
-  forbidigo:
-    forbid:
-      - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/postgres"
-        pattern: '\.Raw\(.*\)\.Scan\('
-        msg: "Raw().Scan() on guarded mutations hides RowsAffected; use the guard helper"
-      - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/postgres"
-        pattern: 'gorm\.ErrRecordNotFound'
-        msg: "Use RowsAffected checks, not gorm.ErrRecordNotFound sentinel comparisons"
+    forbidigo:
+      forbid:
+        - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/postgres"
+          pattern: '\.Raw\(.*\)\.Scan\('
+          msg: "Raw().Scan() on guarded mutations hides RowsAffected; use the guard helper"
+        - pkg: "github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/postgres"
+          pattern: 'gorm\.ErrRecordNotFound'
+          msg: "Use RowsAffected checks, not gorm.ErrRecordNotFound sentinel comparisons"
