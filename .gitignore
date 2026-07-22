@@ -3,6 +3,7 @@
 *.db-wal
 *.db-shm
 *.db-journal
+orderbook_archive.db
 
 # Private keys
 *.pem
@@ -23,7 +24,7 @@ config.yaml
 app.yaml
 app.dev.yaml
 
-# Binary
+# Binaries — all compiled output goes in /bin/, never repo root
 /bin/
 /ghost-trader
 /validate
