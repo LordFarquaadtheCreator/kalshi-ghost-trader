@@ -172,6 +172,10 @@ export const api = {
     return mutate(`${GHOST_TRADER_URL}/api/strategy-config`, 'PUT', { strategy, enabled });
   },
 
+  async setStrategyLimit(/** @type {string} */ strategy, /** @type {number} */ perMarketMaxOrders) {
+    return mutate(`${GHOST_TRADER_URL}/api/strategy-config`, 'PUT', { strategy, per_market_max_orders: perMarketMaxOrders });
+  },
+
   async getAppConfig() {
     return cachedFetch(`${GHOST_TRADER_URL}/api/app-config`, TTL.strategies);
   },

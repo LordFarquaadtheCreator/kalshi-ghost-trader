@@ -513,19 +513,35 @@ func (s *Server) strategyConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPut:
 		var body struct {
-			Strategy string `json:"strategy"`
-			Enabled  bool   `json:"enabled"`
+			Strategy           string `json:"strategy"`
+			Enabled            *bool  `json:"enabled"`
+			PerMarketMaxOrders *int   `json:"per_market_max_orders"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"error": "invalid body"})
 			return
 		}
-		if err := strategyconfig.SetEnabled(r.Context(), s.deps.DB.GormDB(), body.Strategy, body.Enabled); err != nil {
-			s.deps.Log.Error("set strategy config", "err", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		if body.Strategy == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "strategy is required"})
 			return
+		}
+		if body.Enabled != nil {
+			if err := strategyconfig.SetEnabled(r.Context(), s.deps.DB.GormDB(), body.Strategy, *body.Enabled); err != nil {
+				s.deps.Log.Error("set strategy enabled", "err", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
+		}
+		if body.PerMarketMaxOrders != nil {
+			if err := strategyconfig.SetLimit(r.Context(), s.deps.DB.GormDB(), body.Strategy, *body.PerMarketMaxOrders); err != nil {
+				s.deps.Log.Error("set strategy per-market limit", "err", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+				return
+			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 

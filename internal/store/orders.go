@@ -96,6 +96,17 @@ func (d *DB) GetRealOrders(ctx context.Context) ([]Order, error) {
 	return orders, err
 }
 
+// CountRealOrdersByMarketStrategy counts all real orders for a (market, strategy) pair.
+// Includes every status — submitted, filled, partial, canceled, failed, resolved.
+// Used by KalshiOrderEmitter per-market strategy limit guard.
+func (d *DB) CountRealOrdersByMarketStrategy(ctx context.Context, marketTicker, strategy string) (int64, error) {
+	var count int64
+	err := d.db.WithContext(ctx).Model(&Order{}).
+		Where("is_real = ? AND market_ticker = ? AND strategy = ?", true, marketTicker, strategy).
+		Count(&count).Error
+	return count, err
+}
+
 // ResolveRealOrders resolves all real orders for a settled market.
 // Pool adjustment: refund unfilled portion cost + add gross payout ($1/contract if won).
 // resolved_pnl_cents = payout - filled_cost (P&L on filled contracts only).

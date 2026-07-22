@@ -35,9 +35,10 @@ func (LiquidityPool) TableName() string { return "liquidity_pool" }
 
 // StrategyConfigEntry is one row from strategy_config.
 type StrategyConfigEntry struct {
-	Strategy  string `gorm:"primaryKey;column:strategy"`
-	Enabled   bool   `gorm:"column:enabled"`
-	UpdatedTS int64  `gorm:"column:updated_ts"`
+	Strategy           string `gorm:"primaryKey;column:strategy"`
+	Enabled            bool   `gorm:"column:enabled"`
+	PerMarketMaxOrders int    `gorm:"column:per_market_max_orders"` // 0 = no limit, 1 = default
+	UpdatedTS          int64  `gorm:"column:updated_ts"`
 }
 
 func (StrategyConfigEntry) TableName() string { return "strategy_config" }

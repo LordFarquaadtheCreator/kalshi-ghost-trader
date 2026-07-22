@@ -51,3 +51,32 @@ func Ensure(ctx context.Context, db *gorm.DB, strategy string) error {
 		UpdatedTS: time.Now().UnixMilli(),
 	}).Error
 }
+
+// GetLimit returns the per-market max orders for a strategy.
+// Returns 1 (default) if the strategy has no config row.
+func GetLimit(ctx context.Context, db *gorm.DB, strategy string) (int, error) {
+	var e store.StrategyConfigEntry
+	err := db.WithContext(ctx).Select("per_market_max_orders").
+		Where("strategy = ?", strategy).First(&e).Error
+	if err == gorm.ErrRecordNotFound {
+		return 1, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return e.PerMarketMaxOrders, nil
+}
+
+// SetLimit sets the per-market max orders for a strategy.
+// Inserts the row if it doesn't exist; preserves enabled flag on update.
+func SetLimit(ctx context.Context, db *gorm.DB, strategy string, maxOrders int) error {
+	return db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "strategy"}},
+		DoUpdates: clause.AssignmentColumns([]string{"per_market_max_orders", "updated_ts"}),
+	}).Create(&store.StrategyConfigEntry{
+		Strategy:           strategy,
+		Enabled:            false,
+		PerMarketMaxOrders: maxOrders,
+		UpdatedTS:          time.Now().UnixMilli(),
+	}).Error
+}

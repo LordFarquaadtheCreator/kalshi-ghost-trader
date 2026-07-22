@@ -28,6 +28,10 @@
   let toggleMsg = $state('');
   let bandMsg = $state('');
 
+  // Per-market strategy limit editing state
+  /** @type {Record<string, string>} */
+  let limitInputs = $state({});
+
   // Price band editing state
   /** @type {Record<string, {min: string, max: string}>} */
   let bandInputs = $state({});
@@ -51,6 +55,24 @@
     try {
       await api.setStrategyEnabled(name, !current);
       toggleMsg = `${name}: ${!current ? 'enabled' : 'disabled'}`;
+      setTimeout(() => { toggleMsg = ''; }, 3000);
+    } catch (/** @type {any} */ err) {
+      toggleMsg = `Error: ${err.message}`;
+    }
+  }
+
+  async function saveLimit(/** @type {string} */ name) {
+    const raw = limitInputs[name] ?? '';
+    const parsed = parseInt(raw, 10);
+    if (isNaN(parsed) || parsed < 0) {
+      toggleMsg = 'Invalid limit: must be non-negative integer';
+      setTimeout(() => { toggleMsg = ''; }, 3000);
+      return;
+    }
+    try {
+      await api.setStrategyLimit(name, parsed);
+      toggleMsg = `${name}: per-market limit set to ${parsed}`;
+      limitInputs[name] = '';
       setTimeout(() => { toggleMsg = ''; }, 3000);
     } catch (/** @type {any} */ err) {
       toggleMsg = `Error: ${err.message}`;
@@ -128,6 +150,7 @@
             <tr>
               <th>Strategy</th>
               <th>Enabled</th>
+              <th>Per-Market Limit</th>
               <th>Updated</th>
               <th>Action</th>
             </tr>
@@ -140,6 +163,18 @@
                   <span class="badge {s.Enabled ? 'badge-ok' : 'badge-pending'}">
                     {s.Enabled ? 'enabled' : 'disabled'}
                   </span>
+                </td>
+                <td class="mono">
+                  {s.PerMarketMaxOrders > 0 ? s.PerMarketMaxOrders : 'none'}
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="set"
+                    class="config-input limit-input"
+                    bind:value={limitInputs[s.Strategy]}
+                  />
+                  <button class="toggle-btn limit-save-btn" onclick={() => saveLimit(s.Strategy)}>Set</button>
                 </td>
                 <td class="mono">{new Date(s.UpdatedTS).toLocaleString()}</td>
                 <td>
@@ -378,5 +413,14 @@
     color: var(--text-dim);
     font-size: 13px;
     padding: 8px 0;
+  }
+  .limit-input {
+    max-width: 70px;
+    display: inline-block;
+    margin: 0 6px;
+  }
+  .limit-save-btn {
+    padding: 3px 10px;
+    font-size: 12px;
   }
 </style>

@@ -165,6 +165,29 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		return false
 	}
 
+	// Guard 1b: per-market strategy limit — caps how many real buy orders a
+	// strategy may place on the same market. 0 = no limit. Sells bypass.
+	maxOrders, err := strategyconfig.GetLimit(ctx, e.db.GormDB(), o.Strategy)
+	if err != nil {
+		e.log.Error("real: failed to check per-market strategy limit",
+			"strategy", o.Strategy, "error", err)
+		return false
+	}
+	if maxOrders > 0 {
+		count, err := e.db.CountRealOrdersByMarketStrategy(ctx, o.MarketTicker, o.Strategy)
+		if err != nil {
+			e.log.Error("real: failed to count real orders for per-market limit",
+				"market", o.MarketTicker, "strategy", o.Strategy, "error", err)
+			return false
+		}
+		if count >= int64(maxOrders) {
+			e.log.Info("real: per-market strategy limit reached, skipping",
+				"market", o.MarketTicker, "strategy", o.Strategy,
+				"count", count, "limit", maxOrders)
+			return false
+		}
+	}
+
 	// Guard 2: price must fall within an enabled trigger range (if any bands configured)
 	hasBands, err := triggerranges.Has(ctx, e.db.GormDB(), o.Strategy)
 	if err != nil {
