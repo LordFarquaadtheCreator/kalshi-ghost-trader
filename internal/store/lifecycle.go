@@ -77,10 +77,13 @@ func (d *DB) ApplyLifecycleEvent(ctx context.Context, le LifecycleEvent) error {
 
 	switch le.EventType {
 	case "activated":
-		// Conditional: only set open_ts if le.OpenTS != 0, else preserve existing
+		// Conditional: only set open_ts if le.OpenTS != 0, else preserve existing.
+		// Cast the comparison to bigint so pgx binds the int64 param as int8,
+		// not int4 (the literal 0 defaults to int4 and would force overflow on
+		// ms-epoch values > 2^31-1).
 		return d.db.WithContext(ctx).Exec(`
 UPDATE markets SET status='active',
-    open_ts=CASE WHEN ?!=0 THEN ? ELSE open_ts END,
+    open_ts=CASE WHEN ?::bigint!=0 THEN ? ELSE open_ts END,
     is_deactivated=false,
     last_updated_ts=?
 WHERE market_ticker=?`,

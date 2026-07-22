@@ -2,21 +2,8 @@ package store
 
 import (
 	"context"
-	"log/slog"
-	"path/filepath"
 	"testing"
 )
-
-func testDB(t *testing.T) *DB {
-	t.Helper()
-	dir := t.TempDir()
-	db, err := New(context.Background(), filepath.Join(dir, "test.db"), slog.Default())
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
 
 func TestUpsertEventCheckNew(t *testing.T) {
 	db := testDB(t)
