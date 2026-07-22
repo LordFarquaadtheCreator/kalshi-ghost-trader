@@ -88,6 +88,9 @@ var strategies = map[string]strategyFactory{
 	"breakpoint": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		return algorithms.NewBreakPointStrategy(em, log, algorithms.DefaultBreakPointConfig())
 	},
+	"adout": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
+		return algorithms.NewAdOutStrategy(em, log, algorithms.DefaultAdOutConfig())
+	},
 	"convexpool": func(em algorithms.OrderEmitter, log *slog.Logger) replayStrategy {
 		return algorithms.NewConvexPoolStrategy(em, log, algorithms.DefaultConvexPoolConfig())
 	},
@@ -195,6 +198,7 @@ type order struct {
 	won       bool
 	pnl       float64
 	result    string
+	side      string // "open" (buy) or "close" (sell) — for sell-aware PnL
 }
 
 func main() {
@@ -469,39 +473,13 @@ func runStrategy(
 
 		replayInterleaved(strat, matchTicker, homeMkt, awayMkt, tickPrices, points)
 
-		for _, o := range collector.Orders() {
-			mktResult := ""
-			for _, m := range mkts {
-				if m.marketTicker == o.MarketTicker {
-					mktResult = m.result
-					break
-				}
-			}
-			// Skip unresolved markets — can't evaluate PnL
-			if mktResult == "" {
-				continue
-			}
-			won := mktResult == "yes"
-			// buy_no: win when result is "no". PnL = size*(1-no_price) on win, -size*no_price on loss.
-			// no_price stored in MarketPrice for buy_no orders.
-			if o.Action == "buy_no" {
-				won = mktResult == "no"
-			}
-			var pnl float64
-			if won {
-				pnl = o.SuggestedSize * (1.0 - o.MarketPrice)
-			} else {
-				pnl = -o.SuggestedSize * o.MarketPrice
-			}
-			ord := order{
-				match: o.MatchTicker, market: o.MarketTicker, context: o.Context,
-				setNum: o.SetNumber,
-				price:  o.MarketPrice, edgeCents: o.EdgeCents, size: o.SuggestedSize,
-				won: won, pnl: pnl, result: mktResult,
-			}
-			orders = append(orders, ord)
-			allOrders = append(allOrders, ord)
-		}
+		// Process orders with sell-aware PnL.
+		// Sells match to prior buys on same market. PnL = (sell_price - buy_price) * size.
+		// Unmatched buys settle at market close (existing behavior).
+		// Unmatched sells skip (shouldn't happen — position pipeline rejects naked shorts).
+		processed := processOrdersWithSells(collector.Orders(), mkts)
+		orders = append(orders, processed...)
+		allOrders = append(allOrders, processed...)
 	}
 
 	// Close-time backtest path
@@ -803,27 +781,131 @@ func runCloseTimeBacktest(
 
 	fmt.Printf("Close-time backtest: scanned %d finalized events with close_ts\n", both)
 
-	for _, o := range collector.Orders() {
-		mktResult := ""
-		for _, m := range markets[o.MatchTicker] {
-			if m.marketTicker == o.MarketTicker {
-				mktResult = m.result
-				break
+	// Collect all market rows for sell-aware PnL processing.
+	var allMkts []marketRow
+	for _, mkts := range markets {
+		allMkts = append(allMkts, mkts...)
+	}
+	orders = append(orders, processOrdersWithSells(collector.Orders(), allMkts)...)
+
+	return orders
+}
+
+// processOrdersWithSells computes PnL for a mix of buy and sell orders.
+// Sells match to prior buys on the same market (FIFO). PnL = (sell_price - buy_price) * size.
+// Unmatched buys settle at market close (existing behavior). Unmatched sells skip.
+//
+// Double-counting avoidance: when a sell matches a buy, the buy's PnL is
+// zeroed (the sell carries the round-trip PnL). Both legs are kept in the
+// output for display, but only the sell contributes to aggregate PnL.
+//
+// For buy-only strategies (all existing strategies), this is equivalent to
+// the old per-order settlement logic — no sells means all buys settle at close.
+func processOrdersWithSells(rawOrders []store.Order, mkts []marketRow) []order {
+	// Build market result lookup.
+	resultByMarket := make(map[string]string)
+	for _, m := range mkts {
+		resultByMarket[m.marketTicker] = m.result
+	}
+
+	// openBuys tracks unmatched buys per market, FIFO queue.
+	// Also tracks the index into orders so we can zero out matched buys.
+	type buyEntry struct {
+		price    float64
+		size     float64
+		orderIdx int // index into orders slice
+	}
+	openBuys := make(map[string][]buyEntry)
+
+	var orders []order
+	for _, o := range rawOrders {
+		mktResult := resultByMarket[o.MarketTicker]
+		if mktResult == "" {
+			continue // unresolved market
+		}
+
+		isSell := o.Action == "sell" || o.Side == store.OrderSideClose
+
+		if isSell {
+			// Match to oldest unmatched buys on this market (FIFO).
+			buys := openBuys[o.MarketTicker]
+			if len(buys) == 0 {
+				continue // no matching buy — skip (naked short)
 			}
-		}
-		won := mktResult == "yes"
-		var pnl float64
-		if won {
-			pnl = o.SuggestedSize * (1.0 - o.MarketPrice)
+			sellSize := o.SuggestedSize
+			var sellPnL float64
+			for sellSize > 0 && len(buys) > 0 {
+				buy := buys[0]
+				matchSize := sellSize
+				if matchSize > buy.size {
+					matchSize = buy.size
+				}
+				// Round-trip PnL for matched portion.
+				sellPnL += (o.MarketPrice - buy.price) * matchSize
+				buy.size -= matchSize
+				sellSize -= matchSize
+
+				// Zero out the matched buy's PnL — sell carries the round-trip.
+				orders[buy.orderIdx].pnl = 0
+				orders[buy.orderIdx].won = false
+				orders[buy.orderIdx].context += " [matched]"
+
+				if buy.size <= 0 {
+					buys = buys[1:]
+				} else {
+					buys[0] = buy
+				}
+			}
+			openBuys[o.MarketTicker] = buys
+
+			won := sellPnL > 0
+			orders = append(orders, order{
+				match:     o.MatchTicker,
+				market:    o.MarketTicker,
+				context:   o.Context,
+				setNum:    o.SetNumber,
+				price:     o.MarketPrice,
+				edgeCents: o.EdgeCents,
+				size:      o.SuggestedSize,
+				won:       won,
+				pnl:       sellPnL,
+				result:    mktResult,
+				side:      "close",
+			})
 		} else {
-			pnl = -o.SuggestedSize * o.MarketPrice
+			// Buy — queue for matching with future sells.
+			idx := len(orders)
+			openBuys[o.MarketTicker] = append(openBuys[o.MarketTicker], buyEntry{
+				price:    o.MarketPrice,
+				size:     o.SuggestedSize,
+				orderIdx: idx,
+			})
+
+			// Default settlement PnL (used if no sell matches — hold to close).
+			won := mktResult == "yes"
+			if o.Action == "buy_no" {
+				won = mktResult == "no"
+			}
+			var pnl float64
+			if won {
+				pnl = o.SuggestedSize * (1.0 - o.MarketPrice)
+			} else {
+				pnl = -o.SuggestedSize * o.MarketPrice
+			}
+			orders = append(orders, order{
+				match:     o.MatchTicker,
+				market:    o.MarketTicker,
+				context:   o.Context,
+				setNum:    o.SetNumber,
+				price:     o.MarketPrice,
+				edgeCents: o.EdgeCents,
+				size:      o.SuggestedSize,
+				won:       won,
+				pnl:       pnl,
+				result:    mktResult,
+				side:      "open",
+			})
 		}
-		orders = append(orders, order{
-			match: o.MatchTicker, market: o.MarketTicker, context: o.Context,
-			setNum: o.SetNumber,
-			price:  o.MarketPrice, edgeCents: o.EdgeCents, size: o.SuggestedSize,
-			won: won, pnl: pnl, result: mktResult,
-		})
 	}
 
 	return orders

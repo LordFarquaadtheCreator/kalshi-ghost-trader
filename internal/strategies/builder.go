@@ -82,6 +82,9 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 		"breakpoint": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewBreakPointStrategy(e, log, algorithms.DefaultBreakPointConfig())
 		},
+		"adout": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewAdOutStrategy(e, log, algorithms.DefaultAdOutConfig())
+		},
 		"convexpool": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewConvexPoolStrategy(e, log, algorithms.DefaultConvexPoolConfig())
 		},
