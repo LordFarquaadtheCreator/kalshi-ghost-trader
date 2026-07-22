@@ -21,7 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_points_match_ts ON points(match_ticker, ts_ms);
 CREATE INDEX IF NOT EXISTS idx_points_match_set ON points(match_ticker, set_number, game_number, point_number);
 CREATE INDEX IF NOT EXISTS idx_points_fs_match ON points(fs_match_id);
 
-CREATE INDEX IF NOT EXISTS idx_trigger_ranges_strategy ON strategy_trigger_ranges(strategy);
+CREATE INDEX IF NOT EXISTS idx_trigger_ranges_strategy ON trigger_ranges(strategy);
 
 CREATE INDEX IF NOT EXISTS idx_orders_real ON orders(is_real) WHERE is_real = true;
 CREATE INDEX IF NOT EXISTS idx_orders_ts_id ON orders(ts DESC, id DESC);

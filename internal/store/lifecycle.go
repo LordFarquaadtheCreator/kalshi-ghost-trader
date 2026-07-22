@@ -98,7 +98,7 @@ WHERE market_ticker=?`,
 			}).Error
 
 	case "determined":
-		return d.db.WithContext(ctx).Model(&Market{}).Where("market_ticker = ?", le.MarketTicker).
+		err := d.db.WithContext(ctx).Model(&Market{}).Where("market_ticker = ?", le.MarketTicker).
 			Updates(map[string]any{
 				"status":           "determined",
 				"result":           le.Result,
@@ -106,6 +106,16 @@ WHERE market_ticker=?`,
 				"settlement_value": le.SettlementValue,
 				"last_updated_ts":  now,
 			}).Error
+		if err != nil {
+			return err
+		}
+		// R.1: denormalize result onto orders so the paper-orders route can
+		// aggregate without joining markets. Best-effort — order resolution
+		// still runs at "settled" and is the source of resolved_pnl_cents.
+		if le.Result != "" {
+			_ = d.DenormalizeResultToOrders(ctx, le.MarketTicker, le.Result, le.DeterminationTS)
+		}
+		return nil
 
 	case "settled":
 		// P6: Prune the event if it has zero ticks after settlement.
@@ -126,6 +136,9 @@ WHERE market_ticker=?`,
 		if le.Result != "" {
 			_ = d.ResolveRealOrders(ctx, le.MarketTicker, le.Result)
 			_ = d.ResolveSimulatedOrders(ctx, le.MarketTicker, le.Result)
+			// R.1: denormalize result onto orders (idempotent — determined may
+			// have already filled it). settled_ts uses the settled event time.
+			_ = d.DenormalizeResultToOrders(ctx, le.MarketTicker, le.Result, le.SettledTS)
 			// Settle any open positions for this market (sell-to-close pipeline).
 			// No-op if no position rows exist (legacy orders).
 			d.settlePositionsForMarket(ctx, le.MarketTicker, "", le.Result, d.log)

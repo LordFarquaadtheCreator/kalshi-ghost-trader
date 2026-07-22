@@ -169,6 +169,8 @@ type Order struct {
 	PoolBalanceAfterCents  int64   `gorm:"column:pool_balance_after_cents"`
 	UnfilledRefundedCents  int64   `gorm:"column:unfilled_refunded_cents"`
 	PositionID             *int64  `gorm:"column:position_id"`
+	Result                 string  `gorm:"column:result"`
+	SettledTS              int64   `gorm:"column:settled_ts"`
 }
 
 // Position aggregates buys + sells for one (market, strategy, is_real).

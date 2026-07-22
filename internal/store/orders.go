@@ -15,6 +15,20 @@ func (d *DB) InsertOrdersBatch(ctx context.Context, orders []Order) error {
 	return d.db.WithContext(ctx).CreateInBatches(&orders, len(orders)).Error
 }
 
+// DenormalizeResultToOrders copies the market result onto every unsettled
+// order row for that market. Lets the paper-orders route filter and aggregate
+// without joining markets. Idempotent — only fills rows where result IS NULL.
+// No-op when result is empty.
+func (d *DB) DenormalizeResultToOrders(ctx context.Context, marketTicker, result string, settledTS int64) error {
+	if result == "" {
+		return nil
+	}
+	return d.db.WithContext(ctx).Exec(`
+UPDATE orders SET result = ?, settled_ts = ?
+WHERE market_ticker = ? AND (result IS NULL OR result = '')`,
+		result, settledTS, marketTicker).Error
+}
+
 // GetOrders returns all simulated orders, ordered by timestamp.
 func (d *DB) GetOrders(ctx context.Context) ([]Order, error) {
 	var orders []Order

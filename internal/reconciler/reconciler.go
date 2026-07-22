@@ -144,6 +144,17 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 				r.log.Info("reconciler: resolved simulated orders",
 					"market", m.MarketTicker, "result", mkt.Result)
 			}
+			// R.1: denormalize result onto orders so the paper-orders route
+			// can aggregate without joining markets. settled_ts uses the
+			// REST settlement timestamp when present, else close_ts.
+			settledTS := kalshiclient.ParseISOTime(mkt.SettlementTS, r.log)
+			if settledTS == 0 {
+				settledTS = kalshiclient.ParseISOTime(mkt.CloseTime, r.log)
+			}
+			if err := r.db.DenormalizeResultToOrders(ctx, m.MarketTicker, mkt.Result, settledTS); err != nil {
+				r.log.Warn("reconciler: denormalize result to orders failed",
+					"market", m.MarketTicker, "err", err)
+			}
 			// Settle positions for this market. Sells-to-close already
 			// realized PnL at trade time; Settle handles any remaining
 			// open contracts (buy_count - sell_count) at $1 if won, $0

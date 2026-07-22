@@ -54,4 +54,4 @@ type TriggerRange struct {
 	CreatedTS int64   `gorm:"column:created_ts" json:"created_ts,omitempty"`
 }
 
-func (TriggerRange) TableName() string { return "strategy_trigger_ranges" }
+func (TriggerRange) TableName() string { return "trigger_ranges" }
