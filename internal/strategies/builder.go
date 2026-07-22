@@ -115,6 +115,9 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 		"spike-fade": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewSpikeFadeStrategy(e, log, algorithms.DefaultSpikeFadeConfig())
 		},
+		"buythedip": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewBuyTheDipStrategy(e, log, algorithms.DefaultBuyTheDipConfig())
+		},
 		"fadelongshot-itf": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			cfg := algorithms.DefaultFadeLongshotConfig()
 			cfg.Label = "fadelongshot-itf"

@@ -47,6 +47,7 @@ emitter is wired separately inside `KalshiOrderEmitter` via `QuotaGuard`.
 | `volratio` | `VolumeRatioStrategy` | needs DB |
 | `surface-markov` | `SurfaceMarkovStrategy` | needs DB |
 | `spike-fade` | `SpikeFadeStrategy` | |
+| `buythedip` | `BuyTheDipStrategy` | first with sell-to-close (TP/SL/time exit) |
 | `fadelongshot-itf` | `FadeLongshotStrategy` | series-filtered: ITF |
 | `fadelongshot-challenger` | `FadeLongshotStrategy` | series-filtered: Challenger |
 | `fadelongshot-atp` | `FadeLongshotStrategy` | series-filtered: ATP |

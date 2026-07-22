@@ -27,6 +27,7 @@ backtest engine — one source of truth for signal logic.
 - `spike_fade.go` — spike fade strategy
 - `calibrated_markov.go` — calibrated Markov strategy
 - `surface_markov.go` — surface Markov strategy
+- `buythedip.go` — buy-the-dip strategy (first with full sell-to-close pipeline)
 
 ## Interfaces
 
@@ -167,6 +168,63 @@ Config (`ConvexPoolConfig`):
 - **No exit logic.** Buy-only. No mechanism to sell when edge reverses.
 - **No per-market cooldown.** Relies entirely on `QuotaGuard`.
 - **MaxMarketPrice=0.85 is high.** Allows buying at prices where upside is only 15 cents. May not be profitable after fees.
+
+## BuyTheDipStrategy (`buythedip.go`)
+
+Buys markets that dip sharply, then sells on recovery (take profit),
+further drop (stop loss), or time exit. **First strategy with full
+sell-to-close pipeline** — emits both `Action="buy", Side="open"` and
+`Action="sell", Side="close"` orders. Sells flow through
+`PaperPositionEmitter` → position pipeline → backtest FIFO resolver.
+
+Research (1337 finalized markets, 4438 dips):
+- 30c+ dips in 30s: n=125, +10.9c avg at 60s, Sharpe 0.465
+- Winner-market dips: +3.75c avg, Sharpe 0.327 (loser-market: catastrophic)
+- Best exit: TP at 75% recovery, SL at -10c, time exit at 300s
+- Match/set point dips are informational — don't revert. Excluded.
+
+Logic:
+1. `OnPrice` updates sliding window of price samples per market
+2. If open position exists → check exit conditions (TP/SL/time)
+3. If no position → check for dip entry:
+   - Price dropped ≥ `DipThresholdCents` in `WindowSeconds`
+   - Pre-dip price > `MinPreDipPrice` (favourite proxy = winner market)
+   - Entry price in `[MinEntryPrice, MaxEntryPrice]`
+   - NOT at match-point/set-point context
+4. Buy the dipped side, record position (entry price, dip size, entry ts)
+5. On subsequent `OnPrice`:
+   - TP: price ≥ entry + `TakeProfitFrac` × dip_size → sell
+   - SL: price ≤ entry - `StopLossCents`/100 → sell
+   - Time: `MaxHoldSeconds` elapsed → sell at current price
+6. Fallback: hold to settlement (position pipeline settles)
+
+Config (`BuyTheDipConfig`):
+- `DipThresholdCents` — minimum drop to trigger (default 30)
+- `WindowSeconds` — lookback for dip detection (default 30)
+- `MinEntryPrice` — don't buy below (default 0.15)
+- `MaxEntryPrice` — don't buy above (default 0.80)
+- `MinPreDipPrice` — pre-dip price must exceed this (default 0.50, favourite proxy)
+- `TakeProfitFrac` — fraction of dip to recover (default 0.75)
+- `StopLossCents` — exit if drops below entry by this (default 10)
+- `MaxHoldSeconds` — time exit (default 300)
+- `BaseSize` — order size in dollars (default 10)
+- `Label` — strategy label (default "buythedip")
+
+Implements `ScoreObserver` for match/set point context filtering.
+Implements `PreMatchGated` — only fires after match starts.
+
+One open position per market. No stacking. After exit (TP/SL/time),
+can re-enter on a new dip.
+
+**Gaps:**
+- ConvProb uses pre-dip price as fair value proxy. Could use Markov model
+  for more accurate fair value, but pre-dip price is simpler and the
+  research supports it (winner-market dips recover).
+- No per-event cooldown. Could re-enter immediately after exit if a new
+  dip is detected. QuotaGuard provides global throttling.
+- No stale price guard on sell (unlike adout which checks priceStaleTTL).
+  If WS disconnects mid-position, time exit will fire on next price
+  update. If no update arrives, position settles at market close.
 
 ## MultiStrategyRuntime (`multi.go`)
 

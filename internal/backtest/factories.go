@@ -90,6 +90,9 @@ func DefaultFactories() map[string]StrategyFactory {
 		"spike-fade": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewSpikeFadeStrategy(em, log, algorithms.DefaultSpikeFadeConfig())
 		},
+		"buythedip": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewBuyTheDipStrategy(em, log, algorithms.DefaultBuyTheDipConfig())
+		},
 		// RQ3: series-tier stratification of fadelongshot
 		"fadelongshot-itf": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			cfg := algorithms.DefaultFadeLongshotConfig()
