@@ -72,6 +72,9 @@ func DefaultFactories() map[string]StrategyFactory {
 		"cross-arb": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewCrossArbStrategy(em, log, algorithms.DefaultCrossArbConfig())
 		},
+		"cross-arb-favorite": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewCrossArbFavoriteStrategy(em, log, algorithms.DefaultCrossArbFavoriteConfig())
+		},
 		"tiebreak-server": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewTiebreakServerStrategy(em, log, algorithms.DefaultTiebreakServerConfig())
 		},

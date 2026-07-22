@@ -97,6 +97,9 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 		"cross-arb": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewCrossArbStrategy(e, log, algorithms.DefaultCrossArbConfig())
 		},
+		"cross-arb-favorite": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewCrossArbFavoriteStrategy(e, log, algorithms.DefaultCrossArbFavoriteConfig())
+		},
 		"tiebreak-server": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewTiebreakServerStrategy(e, log, algorithms.DefaultTiebreakServerConfig())
 		},
