@@ -1,13 +1,12 @@
 #!/bin/bash
 # Deploy ghost-trader to mint box.
-# Builds backend locally, scp's to remote, pulls code, restarts services.
-# Dashboard runs via Vite dev server on mint — no build needed, just pull code.
-# Usage: ./deploy/deploy.sh [host] [branch]
-# Defaults: host=mint, branch=main
+# Builds backend locally, scp's binary + dashboard source to remote, restarts services.
+# No git operations on remote — artifacts shipped directly.
+# Usage: ./deploy/deploy.sh [host]
+# Defaults: host=mint
 set -euo pipefail
 
 HOST="${1:-mint}"
-BRANCH="${2:-main}"
 REMOTE_DIR="/home/fahad/kalshi-ghost-trader"
 OUT="deploy/out"
 
@@ -23,8 +22,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$OUT/ghost-t
 echo "==> Copying service file..."
 cp deploy/ghost-trader.service "$OUT/"
 
-echo "==> Uploading backend..."
+echo "==> Stopping backend..."
 ssh "$HOST" 'sudo -n systemctl stop kalshi-ghost-trader'
+
+echo "==> Uploading backend..."
 scp "$OUT/ghost-trader" "$HOST:$REMOTE_DIR/ghost-trader"
 ssh "$HOST" "chmod +x $REMOTE_DIR/ghost-trader"
 
@@ -32,8 +33,13 @@ echo "==> Syncing service file..."
 scp "$OUT/ghost-trader.service" "$HOST:/tmp/kalshi-ghost-trader.service"
 ssh "$HOST" 'diff -q /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service 2>/dev/null || sudo -n bash -c "cp /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service && systemctl daemon-reload" && echo "service file synced"'
 
-echo "==> Pulling latest code..."
-ssh "$HOST" "cd $REMOTE_DIR && git fetch origin && git checkout $BRANCH && git pull --ff-only origin $BRANCH"
+echo "==> Syncing dashboard source..."
+rsync -az --delete \
+  --exclude 'node_modules' \
+  --exclude 'build' \
+  --exclude '.svelte-kit' \
+  --exclude 'vite.config.js.timestamp-*' \
+  dashboard/ "$HOST:$REMOTE_DIR/dashboard/"
 
 echo "==> Restarting backend..."
 ssh "$HOST" 'sudo -n systemctl restart kalshi-ghost-trader'
