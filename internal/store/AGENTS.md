@@ -16,6 +16,9 @@ PostgreSQL layer. Single-writer architecture via TickWriter.
 - `janitor.go` — CleanOrphans, AdoptOrphans
 - `tickwriter.go` — TickWriter goroutine (batched writes across 4 channels)
 - `appconfig.go` — app_config KV store, app_config_history (change tracking), liquidity_pool, strategy_config, trigger_ranges
+- `backtest.go` — SaveBacktestResult, GetAllBacktestResults, GetBacktestRunTS, GetLastFinalizedSettlementTS
+- `pricebands.go` — GetComputedDays, SavePriceBandDay, GetAllPriceBandResults, GetPriceBandRunTS
+- `simulation.go` — GetComputedInsightDays, SaveSimulationInsightDay, GetAllSimulationInsights, GetSimulationInsightRunTS
 - `migrations.go` — embedded SQL migration runner (files in `migrations/*.sql`, applied in order)
 
 ## Connection settings

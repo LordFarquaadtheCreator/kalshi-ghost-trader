@@ -33,6 +33,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/dashboardapi"
+	"github.com/farquaad/kalshi-ghost-trader/internal/dashboarddata"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiAuth"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
@@ -199,20 +200,28 @@ func main() {
 	g, ctx := errgroup.WithContext(ctx)
 
 	// Backtest engine for dashboard strategy API
-	btEngine, err := backtest.NewEngine(log)
+	btEngine, err := backtest.NewEngineFromDSN(log, appCfg.DBDSN)
 	if err != nil {
 		log.Error("backtest engine init failed", "err", err)
 		os.Exit(1)
 	}
 	defer btEngine.Close()
 
+	// Dashboard live-query store (separate from backtest replay engine)
+	liveStore, err := dashboarddata.NewLiveStore(db.GormDB(), log)
+	if err != nil {
+		log.Error("dashboard live store init failed", "err", err)
+		os.Exit(1)
+	}
+
 	// pprof + runtime metrics + strategy API server
 	if config.Cfg.MetricsAddr != "" {
 		apiSrv := dashboardapi.NewServer(dashboardapi.Deps{
-			Tracker: tr,
-			Engine:  btEngine,
-			DB:      db,
-			Log:     log,
+			Tracker:   tr,
+			Engine:    btEngine,
+			LiveStore: liveStore,
+			DB:        db,
+			Log:       log,
 		})
 		metricsSrv := &http.Server{
 			Addr:         config.Cfg.MetricsAddr,
@@ -310,17 +319,20 @@ func main() {
 		}
 	})
 
-	// 8. Price bands cron — compute missing days daily, persist to DB
+	// 8. Price bands cron — compute missing days daily, persist to DB.
+	// Also computes simulation_insights (derived per-band metrics) alongside.
 	g.Go(func() error {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
-		pricebands.ComputeMissingDays(db, log) // initial run at startup
+		pricebands.ComputeMissingDays(db, log)        // initial run at startup
+		pricebands.ComputeMissingInsights(db, log)     // initial run at startup
 		for {
 			select {
 			case <-ctx.Done():
 				return nil
 			case <-ticker.C:
 				pricebands.ComputeMissingDays(db, log)
+				pricebands.ComputeMissingInsights(db, log)
 			}
 		}
 	})

@@ -3,6 +3,7 @@ package backtest
 import (
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
@@ -48,12 +49,18 @@ func RecomputeIfNeeded(engine *Engine, db *store.DB, log *slog.Logger) (bool, er
 			log.Error("backtest: marshal orders", "strategy", res.Name, "err", err)
 			continue
 		}
+		cumPnLJSON, err := json.Marshal(cumulativePnLSeries(res.Orders))
+		if err != nil {
+			log.Error("backtest: marshal cum_pnl", "strategy", res.Name, "err", err)
+			continue
+		}
 		row := store.BacktestResultRow{
 			Strategy:    res.Name,
 			RunTS:       now,
 			MatchCount:  res.MatchCount,
 			SummaryJSON: string(summaryJSON),
 			OrdersJSON:  string(ordersJSON),
+			CumPnLJSON:  string(cumPnLJSON),
 		}
 		if err := db.SaveBacktestResult(row); err != nil {
 			log.Error("backtest: save result", "strategy", res.Name, "err", err)
@@ -66,9 +73,29 @@ func RecomputeIfNeeded(engine *Engine, db *store.DB, log *slog.Logger) (bool, er
 	return true, nil
 }
 
-// ForceRecompute runs all strategies and persists results to DB, ignoring
-// the "new data" check. Used by the manual recompute button.
-func ForceRecompute(engine *Engine, db *store.DB, log *slog.Logger) error {
-	_, err := RecomputeIfNeeded(engine, db, log)
-	return err
+// CumPnLPoint is one point in a cumulative P&L series.
+type CumPnLPoint struct {
+	TS  int64   `json:"ts"`
+	PnL float64 `json:"pnl"`
+}
+
+// cumulativePnLSeries returns ordered [ts, cum_pnl] pairs from orders,
+// sorted by timestamp. Used for the cumulative P&L chart on /simulation.
+func cumulativePnLSeries(orders []Order) []CumPnLPoint {
+	sorted := make([]Order, len(orders))
+	copy(sorted, orders)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].TS < sorted[j].TS
+	})
+	pts := make([]CumPnLPoint, len(sorted))
+	var cum float64
+	for i, o := range sorted {
+		cum += o.PnL
+		pts[i] = CumPnLPoint{TS: o.TS, PnL: mathRound(cum)}
+	}
+	return pts
+}
+
+func mathRound(v float64) float64 {
+	return float64(int64(v*100+0.5)) / 100
 }

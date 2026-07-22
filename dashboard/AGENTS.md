@@ -45,5 +45,5 @@ npm run preview  # preview production build
 | `/matches` | Tracked matches table, links to match detail |
 | `/matches/[event_ticker]` | Match detail: price chart, market cards, sim orders |
 | `/orders` | Paper orders: open positions + settled trades, filters, summary |
-| `/strategies` | Simulated outcomes: backtest results, charts, per-strategy order tables |
+| `/simulation` | Pre-computed backtest insights: strategy summaries, cumulative P&L, band performance, peaks |
 | `/system` | System metrics: Go runtime stats, memory/GC charts (singleton store) |

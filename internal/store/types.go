@@ -268,7 +268,7 @@ type PriceBandResultRow struct {
 func (PriceBandResultRow) TableName() string { return "price_band_results" }
 
 // BacktestResultRow persists a single strategy's backtest result.
-// One row per strategy — summary + orders stored as JSON.
+// One row per strategy — summary + orders + cumulative P&L series stored as JSON.
 type BacktestResultRow struct {
 	ID          int64  `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	Strategy    string `gorm:"uniqueIndex;column:strategy" json:"strategy"`
@@ -276,10 +276,38 @@ type BacktestResultRow struct {
 	MatchCount  int    `gorm:"column:match_count" json:"match_count"`
 	SummaryJSON string `gorm:"column:summary_json" json:"summary_json"`
 	OrdersJSON  string `gorm:"column:orders_json" json:"orders_json"`
+	CumPnLJSON  string `gorm:"column:cum_pnl_json" json:"cum_pnl_json"`
 	UpdatedAt   int64  `gorm:"column:updated_at" json:"updated_at"`
 }
 
 func (BacktestResultRow) TableName() string { return "backtest_results" }
+
+// SimulationInsightRow is one row in simulation_insights.
+// Per strategy × day × fixed price band, with derived metrics + peak flag.
+// Populated by the pricebands cron. Read by /api/simulation endpoint.
+type SimulationInsightRow struct {
+	ID           int64   `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	RunTS        int64   `gorm:"column:run_ts" json:"run_ts"`
+	Day          string  `gorm:"column:day;index:idx_sim_insights_day" json:"day"`
+	Strategy     string  `gorm:"column:strategy;index:idx_sim_insights_strategy" json:"strategy"`
+	BandLabel    string  `gorm:"column:band_label" json:"band_label"`
+	BandLo       float64 `gorm:"column:band_lo" json:"band_lo"`
+	BandHi       float64 `gorm:"column:band_hi" json:"band_hi"`
+	N            int     `gorm:"column:n" json:"n"`
+	Wins         int     `gorm:"column:wins" json:"wins"`
+	WinRate      float64 `gorm:"column:win_rate" json:"win_rate"`
+	NetPnL       float64 `gorm:"column:net_pnl" json:"net_pnl"`
+	Invested     float64 `gorm:"column:invested" json:"invested"`
+	ROI          float64 `gorm:"column:roi" json:"roi"`
+	AvgEdge      float64 `gorm:"column:avg_edge" json:"avg_edge"`
+	Sharpe       float64 `gorm:"column:sharpe" json:"sharpe"`
+	ProfitFactor float64 `gorm:"column:profit_factor" json:"profit_factor"`
+	MaxDrawdown  float64 `gorm:"column:max_drawdown" json:"max_drawdown"`
+	Score        float64 `gorm:"column:score" json:"score"`
+	Peak         bool    `gorm:"column:peak" json:"peak"`
+}
+
+func (SimulationInsightRow) TableName() string { return "simulation_insights" }
 
 // SchemaMigration tracks applied SQL migrations.
 type SchemaMigration struct {

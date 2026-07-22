@@ -8,11 +8,10 @@ import (
 	_ "net/http/pprof"
 	"runtime"
 	"strconv"
-	"strings"
-	"sync"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
+	"github.com/farquaad/kalshi-ghost-trader/internal/dashboarddata"
 	"github.com/farquaad/kalshi-ghost-trader/internal/liquiditypool"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 	"github.com/farquaad/kalshi-ghost-trader/internal/strategyconfig"
@@ -21,15 +20,15 @@ import (
 )
 
 type Deps struct {
-	Tracker *tracker.Tracker
-	Engine  *backtest.Engine
-	DB      *store.DB
-	Log     *slog.Logger
+	Tracker   *tracker.Tracker
+	Engine    *backtest.Engine
+	LiveStore *dashboarddata.LiveStore
+	DB        *store.DB
+	Log       *slog.Logger
 }
 
 type Server struct {
 	deps Deps
-	mu   sync.Mutex
 }
 
 func NewServer(deps Deps) *Server {
@@ -41,9 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/metrics", s.metricsHandler)
 	mux.HandleFunc("/api/tracked", s.trackedHandler)
 	mux.HandleFunc("/api/strategies", corsHandler(s.strategyListHandler))
-	mux.HandleFunc("/api/backtest", corsHandler(s.backtestHandler))
-	mux.HandleFunc("/api/price-bands", corsHandler(s.priceBandsHandler))
-	mux.HandleFunc("/api/price-bands-snapshot", corsHandler(s.priceBandsSnapshotHandler))
+	mux.HandleFunc("/api/simulation", corsHandler(s.simulationHandler))
 	mux.HandleFunc("/api/ticks", corsHandler(s.ticksHandler))
 	mux.HandleFunc("/api/orders", corsHandler(s.ordersHandler))
 	mux.HandleFunc("/api/order-counts", corsHandler(s.orderCountsHandler))
@@ -113,12 +110,12 @@ func (s *Server) trackedHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=2")
 	subs := s.deps.Tracker.ActiveSubs()
 	for i := range subs {
-		subs[i].Title = s.deps.Engine.EventTitle(subs[i].EventTicker)
+		subs[i].Title = s.deps.LiveStore.EventTitle(subs[i].EventTicker)
 	}
 	events := s.deps.Tracker.ActiveEvents()
-	scores, _ := s.deps.Engine.LatestScores(r.Context(), events)
-	occTS, _ := s.deps.Engine.EventOccurrenceTS(r.Context(), events)
-	tickTS, _ := s.deps.Engine.LatestTickTS(r.Context(), events)
+	scores, _ := s.deps.LiveStore.LatestScores(r.Context(), events)
+	occTS, _ := s.deps.LiveStore.EventOccurrenceTS(r.Context(), events)
+	tickTS, _ := s.deps.LiveStore.LatestTickTS(r.Context(), events)
 	for i := range subs {
 		subs[i].OccurrenceTS = occTS[subs[i].EventTicker]
 		subs[i].LatestTickTS = tickTS[subs[i].EventTicker]
@@ -140,70 +137,64 @@ func (s *Server) strategyListHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) backtestHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) simulationHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=300")
 
-	strategiesParam := r.URL.Query().Get("strategies")
-	force := r.URL.Query().Get("force") == "1"
-
-	var selected []string
-	if strategiesParam == "" || strategiesParam == "all" {
-		selected = s.deps.Engine.AvailableStrategies()
-	} else {
-		selected = strings.Split(strategiesParam, ",")
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Force recompute: run all strategies, persist to DB, return fresh results
-	if force {
-		if err := backtest.ForceRecompute(s.deps.Engine, s.deps.DB, s.deps.Log); err != nil {
-			s.deps.Log.Error("force recompute", "err", err)
-		}
-	}
-
-	// Read from DB
-	rows, err := s.deps.DB.GetAllBacktestResults()
+	// Per-strategy summaries + cumulative P&L series from backtest_results.
+	btRows, err := s.deps.DB.GetAllBacktestResults()
 	if err != nil {
-		s.deps.Log.Error("get backtest results", "err", err)
+		s.deps.Log.Error("simulation: get backtest results", "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
 
-	// Build lookup by strategy name
-	rowMap := make(map[string]*store.BacktestResultRow, len(rows))
-	for i := range rows {
-		rowMap[rows[i].Strategy] = &rows[i]
+	type strategySummary struct {
+		Name       string             `json:"name"`
+		MatchCount int                `json:"match_count"`
+		RunTS      int64              `json:"run_ts"`
+		Summary    backtest.Summary   `json:"summary"`
+		CumPnL     []backtest.CumPnLPoint `json:"cum_pnl"`
 	}
 
-	results := make([]*backtest.StrategyResult, 0, len(selected))
-	for _, name := range selected {
-		row, ok := rowMap[name]
-		if !ok {
-			continue
-		}
+	summaries := make([]strategySummary, 0, len(btRows))
+	for _, row := range btRows {
 		var summary backtest.Summary
 		if err := json.Unmarshal([]byte(row.SummaryJSON), &summary); err != nil {
-			s.deps.Log.Error("unmarshal summary", "strategy", name, "err", err)
+			s.deps.Log.Error("simulation: unmarshal summary", "strategy", row.Strategy, "err", err)
 			continue
 		}
-		var orders []backtest.Order
-		if err := json.Unmarshal([]byte(row.OrdersJSON), &orders); err != nil {
-			s.deps.Log.Error("unmarshal orders", "strategy", name, "err", err)
-			continue
+		var cumPnL []backtest.CumPnLPoint
+		if row.CumPnLJSON != "" {
+			if err := json.Unmarshal([]byte(row.CumPnLJSON), &cumPnL); err != nil {
+				s.deps.Log.Error("simulation: unmarshal cum_pnl", "strategy", row.Strategy, "err", err)
+			}
 		}
-		results = append(results, &backtest.StrategyResult{
-			Name:       name,
-			Orders:     orders,
+		summaries = append(summaries, strategySummary{
+			Name:       row.Strategy,
 			MatchCount: row.MatchCount,
+			RunTS:      row.RunTS,
 			Summary:    summary,
+			CumPnL:     cumPnL,
 		})
 	}
 
+	// Per-strategy × per-day × per-band rows from simulation_insights.
+	insightRows, err := s.deps.DB.GetAllSimulationInsights()
+	if err != nil {
+		s.deps.Log.Error("simulation: get insights", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	insightRunTS, _ := s.deps.DB.GetSimulationInsightRunTS()
+
 	json.NewEncoder(w).Encode(map[string]any{
-		"results": results,
+		"summaries":     summaries,
+		"bands":         insightRows,
+		"insight_run_ts": insightRunTS,
 	})
 }
 
@@ -218,7 +209,7 @@ func (s *Server) ticksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := s.deps.Engine.GetEventTickPrices(r.Context(), eventTicker)
+	data, err := s.deps.LiveStore.GetEventTickPrices(r.Context(), eventTicker)
 	if err != nil {
 		s.deps.Log.Error("get event ticks", "event", eventTicker, "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -239,17 +230,17 @@ func (s *Server) ordersHandler(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	var cursor *backtest.PaperOrderCursor
+	var cursor *dashboarddata.PaperOrderCursor
 	if tsStr := r.URL.Query().Get("cursor_ts"); tsStr != "" {
 		ts, err := strconv.ParseInt(tsStr, 10, 64)
 		if err == nil {
 			idStr := r.URL.Query().Get("cursor_id")
 			id, _ := strconv.ParseInt(idStr, 10, 64)
-			cursor = &backtest.PaperOrderCursor{TS: ts, ID: id}
+			cursor = &dashboarddata.PaperOrderCursor{TS: ts, ID: id}
 		}
 	}
 
-	orders, hasMore, next, err := s.deps.Engine.GetPaperOrdersPage(r.Context(), cursor, limit)
+	orders, hasMore, next, err := s.deps.LiveStore.GetPaperOrdersPage(r.Context(), cursor, limit)
 	if err != nil {
 		s.deps.Log.Error("get paper orders page", "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -257,7 +248,7 @@ func (s *Server) ordersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary, err := s.deps.Engine.GetPaperOrderSummary(r.Context())
+	summary, err := s.deps.LiveStore.GetPaperOrderSummary(r.Context())
 	if err != nil {
 		s.deps.Log.Error("get paper order summary", "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -265,7 +256,7 @@ func (s *Server) ordersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	strategies, err := s.deps.Engine.GetPaperOrderStrategies(r.Context())
+	strategies, err := s.deps.LiveStore.GetPaperOrderStrategies(r.Context())
 	if err != nil {
 		s.deps.Log.Error("get paper order strategies", "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -273,7 +264,7 @@ func (s *Server) ordersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(backtest.PaperOrderResponse{
+	json.NewEncoder(w).Encode(dashboarddata.PaperOrderResponse{
 		Orders:     orders,
 		Summary:    summary,
 		Strategies: strategies,
@@ -286,7 +277,7 @@ func (s *Server) orderCountsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=5")
 
-	counts, err := s.deps.Engine.GetOrderCountsByEvent(r.Context())
+	counts, err := s.deps.LiveStore.GetOrderCountsByEvent(r.Context())
 	if err != nil {
 		s.deps.Log.Error("get order counts", "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -301,7 +292,7 @@ func (s *Server) pendingOrderCountsHandler(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=5")
 
-	counts, err := s.deps.Engine.GetPendingOrderCountsByEvent(r.Context())
+	counts, err := s.deps.LiveStore.GetPendingOrderCountsByEvent(r.Context())
 	if err != nil {
 		s.deps.Log.Error("get pending order counts", "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -321,7 +312,7 @@ func (s *Server) passedMatchesHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Sscanf(v, "%d", &limit)
 	}
 
-	matches, err := s.deps.Engine.GetPassedMatches(r.Context(), limit)
+	matches, err := s.deps.LiveStore.GetPassedMatches(r.Context(), limit)
 	if err != nil {
 		s.deps.Log.Error("get passed matches", "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -330,65 +321,6 @@ func (s *Server) passedMatchesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{"matches": matches})
-}
-
-func (s *Server) priceBandsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	strategiesParam := r.URL.Query().Get("strategies")
-	metricName := r.URL.Query().Get("metric")
-	if metricName == "" {
-		metricName = "winrate"
-	}
-	minSamples := 5
-	if v := r.URL.Query().Get("min_samples"); v != "" {
-		fmt.Sscanf(v, "%d", &minSamples)
-	}
-
-	var selected []string
-	if strategiesParam == "" || strategiesParam == "all" {
-		selected = s.deps.Engine.AvailableStrategies()
-	} else {
-		selected = strings.Split(strategiesParam, ",")
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	results := make(map[string]*backtest.PriceBandResult)
-	for _, name := range selected {
-		res, err := s.deps.Engine.ComputePriceBands(name, metricName, minSamples)
-		if err != nil {
-			s.deps.Log.Error("compute price bands", "name", name, "err", err)
-			continue
-		}
-		results[name] = res
-	}
-
-	json.NewEncoder(w).Encode(map[string]any{
-		"metric":  metricName,
-		"results": results,
-	})
-}
-
-func (s *Server) priceBandsSnapshotHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "public, max-age=300")
-
-	rows, err := s.deps.DB.GetAllPriceBandResults()
-	if err != nil {
-		s.deps.Log.Error("get price band results", "err", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-
-	runTS, _ := s.deps.DB.GetPriceBandRunTS()
-
-	json.NewEncoder(w).Encode(map[string]any{
-		"run_ts":  runTS,
-		"results": rows,
-	})
 }
 
 func (s *Server) realOrdersHandler(w http.ResponseWriter, r *http.Request) {

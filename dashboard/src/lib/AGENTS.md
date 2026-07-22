@@ -4,7 +4,7 @@ Shared utilities, API client, stores, and components used across all pages.
 
 ## Files
 
-- `api.js` — API client with caching. Methods: `getMetrics`, `getTracked`, `getOrders`, `getOrderCounts`, `getTicks`, `getStrategies`, `runBacktest`. Base URLs: `:6060` for ghost-trader, `:6060` for strategy-api.
+- `api.js` — API client with caching. Methods: `getMetrics`, `getTracked`, `getOrders`, `getOrderCounts`, `getTicks`, `getStrategies`, `getSimulation`. Base URLs: `:6060` for ghost-trader, `:6060` for strategy-api.
 - `poll.js` — Generic polling store (`createPoll`) and legacy `createMetricsPoll`. Uses Svelte `readable` store. Pauses on tab hidden, exponential backoff on error.
 - `system-store.js` — Module-level singleton for system metrics polling. Persists across navigation — imported in `+layout.svelte` so polling starts on app load. 1s interval, 120 sample rolling window.
 - `chart-init.js` — Chart.js singleton loader. Lazy-loads chart.js on first call, registers controllers. Returns Chart constructor or null (SSR).

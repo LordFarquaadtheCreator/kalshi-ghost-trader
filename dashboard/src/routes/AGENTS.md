@@ -18,9 +18,9 @@ File-based routing. Each route directory has `+page.svelte` (component) and `+pa
 ### `/orders`
 - `+page.svelte` — Paper orders. Polls `getOrders()` (5s). Filters: strategy, result (won/lost/pending). Summary bar computed from filtered orders (`filteredSummary`). Two `CollapsibleSection` tables: Open Positions (pending) + Settled Trades. No `+page.js` — uses client-side polling only.
 
-### `/strategies`
+### `/simulation`
 - `+page.js` — Disables SSR, initial load of strategy list.
-- `+page.svelte` — Simulated outcomes. Strategy toggle buttons + min price filter. `runBacktest()` on load + recompute button. Summary cards per strategy. Three Chart.js charts: cumulative P&L, win/loss bars, price distribution. Per-strategy order tables in `CollapsibleSection` with match/result filters.
+- `+page.svelte` — Pre-computed simulation insights. Single `getSimulation()` call (5-min poll). Strategy toggles + day filter + chart metric selector. Summary cards per strategy (from `backtest_results.summary_json`). Four Chart.js charts: cumulative P&L (from pre-computed `cum_pnl_json`), win/loss bars, band performance, signal count per band. Peak band cards + cross-strategy band totals + best bands table + per-strategy per-band detail table. No live recompute — all data from `simulation_insights` + `backtest_results` tables.
 
 ### `/system`
 - `+page.js` — Disables SSR, initial load of metrics.
@@ -28,7 +28,7 @@ File-based routing. Each route directory has `+page.svelte` (component) and `+pa
 
 ## Layout
 
-- `+layout.svelte` — Nav bar (Matches, Paper Orders, Simulated Outcomes, System). Imports `systemStore` to start metrics polling on app load. Global CSS imports.
+- `+layout.svelte` — Nav bar (Matches, Paper Orders, Real Orders, Simulation, Config, System). Imports `systemStore` to start metrics polling on app load. Global CSS imports.
 
 ## Conventions
 

@@ -1,7 +1,7 @@
 # /orders — Paper Orders
 
 Simulated paper trading orders split into pending (open positions) and settled trades.
-Filter surface mirrors `/strategies` (simulated outcomes) for parity.
+Filter surface mirrors `/simulation` (simulation insights) for parity.
 
 ## Files
 
@@ -28,7 +28,7 @@ Filter surface mirrors `/strategies` (simulated outcomes) for parity.
 
 - `.layout` flex: `.main-content` (left, flex:1) + `.filter-sidebar` (right, 240px sticky)
 - Sidebar groups: Strategies (toggle-all + per-strategy toggle buttons) + Filters (min price, match, result)
-- Mirrors `/strategies` page sidebar structure for visual parity
+- Mirrors `/simulation` page sidebar structure for visual parity
 
 ## UI
 
@@ -36,7 +36,7 @@ Filter surface mirrors `/strategies` (simulated outcomes) for parity.
 - Filter count line above main content
 - Open Positions table: `CollapsibleSection`, pending orders only, no P&L column
 - Settled Trades table: `CollapsibleSection`, resolved orders with WON/LOST badge + P&L
-- Strategy toggles reuse `strategyColors` map from `/strategies` page; fallback `vibrantColor(name)`
+- Strategy toggles reuse `strategyColors` map from `/simulation` page; fallback `vibrantColor(name)`
 
 ## Charts
 
@@ -52,4 +52,4 @@ Six Chart.js charts in Analysis `CollapsibleSection`:
 
 ## Chart Colors
 
-Same `strategyColors` map as `/strategies` page: matchpoint=#60a5fa, matchpoint-aggro=#a78bfa, setpoint=#34d399, setpoint-serve=#fbbf24, setpoint-cheap=#f472b0, fadelongshot=#f87171.
+Same `strategyColors` map as `/simulation` page: matchpoint=#60a5fa, matchpoint-aggro=#a78bfa, setpoint=#34d399, setpoint-serve=#fbbf24, setpoint-cheap=#f472b0, fadelongshot=#f87171.

@@ -58,7 +58,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `main.go` — entrypoint, signal handling, errgroup wiring
 - `cmd/backtest/` — replay historical data through trading strategies
 - `cmd/backfill-orders/` — one-shot CLI: backfill stale real order status + resolve markets with results but unresolved orders
-- `internal/pricebands/` — fixed-band price analysis cron (computes missing days, persists to DB)
+- `internal/pricebands/` — fixed-band price analysis cron (computes missing days, persists to `price_band_results` + `simulation_insights`)
 - `internal/config/` — YAML config loading (legacy, superseded by app_config table)
 - `internal/kalshiAuth/` — RSA-PSS-SHA256 request signing (PKCS#8 + PKCS#1)
 - `internal/kalshiclient/` — REST client (events, markets, pagination, rate limit)
@@ -69,7 +69,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `internal/scheduler/` — schedules tracking at occurrence_datetime - lead
 - `internal/reconciler/` — resolves market results, settles orders
 - `internal/schedulechecker/` — validates scheduled match tracking
-- `internal/backtest/` — backtest engine, result cache (5min TTL), price band analysis
+- `internal/backtest/` — backtest engine, result persistence, cumulative P&L series
 - `internal/apitennis/` — API-Tennis WebSocket real-time scraper (optional, primary score source)
 - `internal/kalshilivedata/` — Kalshi live-data REST poller (optional, backup score source)
 - `internal/algorithms/` — pluggable trading strategies (match-point detection, order emission)
@@ -86,7 +86,7 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - One API-Tennis goroutine (if enabled): WS read loop, per-match dispatch
 - One goroutine per active match (if Kalshi live-data enabled): REST poll loop
 - One goroutine per scheduled match: waits until start time, then subscribes
-- One pricebands cron goroutine: computes missing days daily, persists to price_band_results
+- One pricebands cron goroutine: computes missing days daily, persists to `price_band_results` + `simulation_insights` (derived per-band metrics: sharpe, profit_factor, max_drawdown, score, peak)
 
 ## SQLite Schema
 
@@ -98,6 +98,9 @@ Each package has its own `AGENTS.md` with package-specific gotchas.
 - `event_lifecycle_events` — event_lifecycle WS messages (event creation announcements).
 - `kalshi_scores` — live score snapshots from Kalshi /live_data (backup score source).
 - `scan_runs` — scan audit log.
+- `backtest_results` — per-strategy backtest summary + orders + cumulative P&L series (JSON). One row per strategy.
+- `price_band_results` — per-day per-strategy per-fixed-band aggregates. Populated by pricebands cron.
+- `simulation_insights` — per-day per-strategy per-fixed-band derived metrics (sharpe, profit_factor, max_drawdown, score, peak). Populated by pricebands cron alongside `price_band_results`.
 
 Cascade deletes use flattened triggers (not recursive FK chains):
 - `trg_markets_delete_cascade` — cleans ticks, orderbook, lifecycle on market delete.
@@ -238,11 +241,17 @@ go run ./cmd/backtest -strategy matchpoint -debug   # log filter reasons
 Strategies register in `strategies` map in `cmd/backtest/main.go`.
 Must implement `replayStrategy` (Strategy + `SetReplayTime` + `OnPriceAt`).
 
-## Price Band Analysis
+## Price Band Analysis + Simulation Insights
 
 Cron goroutine in `internal/pricebands/` runs daily, computes days not
-yet in `price_band_results` table, persists per-day per-strategy per-band
-aggregates. Dashboard `/price-bands` page displays results with charts + filters.
+yet in `price_band_results` + `simulation_insights` tables, persists:
+
+- `price_band_results` — per-day per-strategy per-fixed-band aggregates (n, wins, win_rate, net_pnl, invested, roi, avg_edge)
+- `simulation_insights` — same grouping + derived metrics (sharpe, profit_factor, max_drawdown, score, peak flag)
+
+Dashboard `/simulation` page reads pre-computed data from both tables +
+`backtest_results` (summary + cumulative P&L series). No live recompute
+on page load — all data served from persisted cron output.
 
 Only missing days are computed — most runs find 0-1 new days.
 

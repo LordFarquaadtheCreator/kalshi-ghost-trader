@@ -20,8 +20,7 @@ const TTL = {
   orders: 5_000,
   ticks: 3_000,
   strategies: 300_000,
-  backtest: 30_000,
-  priceBands: 30_000,
+  simulation: 300_000,
   passedMatches: 10_000,
 };
 
@@ -141,28 +140,8 @@ export const api = {
     return cachedFetch(`${STRATEGY_API_URL}/api/strategies`, TTL.strategies);
   },
 
-  async runBacktest(/** @type {string[]} */ strategies, /** @type {number} */ minPrice, /** @type {boolean} */ force = false) {
-    const params = new URLSearchParams({ strategies: strategies.join(',') });
-    if (minPrice > 0) params.set('min_price', String(minPrice));
-    if (force) {
-      params.set('force', '1');
-      // bypass client cache on force
-      return fetch(`${STRATEGY_API_URL}/api/backtest?${params}`).then((r) => r.json());
-    }
-    return cachedFetch(`${STRATEGY_API_URL}/api/backtest?${params}`, TTL.backtest);
-  },
-
-  async getPriceBands(/** @type {string[]} */ strategies, /** @type {string} */ metric, /** @type {number} */ minSamples) {
-    const params = new URLSearchParams({
-      strategies: strategies.join(','),
-      metric,
-      min_samples: String(minSamples),
-    });
-    return cachedFetch(`${STRATEGY_API_URL}/api/price-bands?${params}`, TTL.priceBands);
-  },
-
-  async getPriceBandsSnapshot() {
-    return cachedFetch(`${GHOST_TRADER_URL}/api/price-bands-snapshot`, 300_000);
+  async getSimulation() {
+    return cachedFetch(`${STRATEGY_API_URL}/api/simulation`, TTL.simulation);
   },
 
   async getRealOrders() {
