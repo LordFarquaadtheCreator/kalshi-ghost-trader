@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 	"gorm.io/driver/sqlite"
@@ -108,7 +109,8 @@ func TestLatestScoresFromPoints(t *testing.T) {
 	s := testLiveStore(t, func(db *gorm.DB) {
 		seedDashboardData(db)
 		db.Create(&store.Point{
-			MatchTicker: "E1", TS: 1699990050, SetNumber: 1, GameNumber: 1,
+			MatchTicker: "E1", TS: 1699990050, RecvTS: time.Now().UnixMilli(),
+			SetNumber: 1, GameNumber: 1,
 			PointNumber: 1, Server: 1, HomePoints: "15", AwayPoints: "0",
 			HomeGames: 0, AwayGames: 0,
 		})
@@ -123,6 +125,28 @@ func TestLatestScoresFromPoints(t *testing.T) {
 	}
 	if sc.HomePoints != "15" {
 		t.Errorf("HomePoints = %q, want \"15\"", sc.HomePoints)
+	}
+}
+
+// TestLatestScoresRejectsStale verifies the recency filter: a point older
+// than scoreRecencyWindow must not be returned. Guards against finished
+// matches staying falsely marked "live" in the dashboard.
+func TestLatestScoresRejectsStale(t *testing.T) {
+	staleMs := time.Now().Add(-scoreRecencyWindow - time.Minute).UnixMilli()
+	s := testLiveStore(t, func(db *gorm.DB) {
+		seedDashboardData(db)
+		db.Create(&store.Point{
+			MatchTicker: "E1", TS: staleMs, RecvTS: staleMs,
+			SetNumber: 1, GameNumber: 1, PointNumber: 1,
+			Server: 1, HomePoints: "15", AwayPoints: "0",
+		})
+	})
+	scores, err := s.LatestScores(context.Background(), []string{"E1"})
+	if err != nil {
+		t.Fatalf("LatestScores: %v", err)
+	}
+	if _, ok := scores["E1"]; ok {
+		t.Fatal("stale score returned; recency filter not applied")
 	}
 }
 

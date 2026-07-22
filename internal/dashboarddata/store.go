@@ -8,9 +8,17 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"time"
 
 	"gorm.io/gorm"
 )
+
+// scoreRecencyWindow bounds how old a score row can be while still counting
+// as "live". Matches finished on court but not yet settled on Kalshi stay
+// subscribed; without this filter their last point/score row keeps them
+// falsely marked live forever. 10 min covers between-sets breaks and short
+// rain delays without dropping a genuinely live match mid-game.
+const scoreRecencyWindow = 10 * time.Minute
 
 // LiveStore serves dashboard queries directly from the PostgreSQL DB.
 // It caches event titles (loaded once at construction) for cheap lookup
@@ -126,10 +134,15 @@ type LiveScore struct {
 // LatestScores returns the most recent point for each given event ticker.
 // API-Tennis (points table) is the primary source. For events with no
 // API-Tennis data, Kalshi live-data scores (kalshi_scores table) fill the gap.
+//
+// Only scores fresher than scoreRecencyWindow are returned. Stale rows from
+// matches that finished on court but haven't settled on Kalshi yet would
+// otherwise keep the dashboard falsely marking them "live".
 func (s *LiveStore) LatestScores(ctx context.Context, eventTickers []string) (map[string]*LiveScore, error) {
 	if len(eventTickers) == 0 {
 		return nil, nil
 	}
+	cutoffMs := time.Now().Add(-scoreRecencyWindow).UnixMilli()
 	var apiScores []LiveScore
 	err := s.db.WithContext(ctx).Raw(`
 		SELECT match_ticker as event_ticker, set_number, game_number, point_number,
@@ -143,9 +156,9 @@ func (s *LiveStore) LatestScores(ctx context.Context, eventTickers []string) (ma
 				ORDER BY ts_ms DESC, set_number DESC, game_number DESC, point_number DESC
 			) as rn
 			FROM points
-			WHERE match_ticker IN ?
+			WHERE match_ticker IN ? AND recv_ts >= ?
 		) WHERE rn = 1
-	`, eventTickers).Scan(&apiScores).Error
+	`, eventTickers, cutoffMs).Scan(&apiScores).Error
 	if err != nil {
 		return nil, fmt.Errorf("latest scores: %w", err)
 	}
@@ -170,8 +183,8 @@ func (s *LiveStore) LatestScores(ctx context.Context, eventTickers []string) (ma
 	err = s.db.WithContext(ctx).Raw(`
 		SELECT event_ticker, status, sets_home, sets_away, games_home, games_away,
 		       points_home, points_away, server, completed_rounds
-		FROM kalshi_scores WHERE event_ticker IN ?
-	`, eventTickers).Scan(&kalshiScores).Error
+		FROM kalshi_scores WHERE event_ticker IN ? AND updated_ts >= ?
+	`, eventTickers, cutoffMs).Scan(&kalshiScores).Error
 	if err != nil {
 		// Non-fatal — return API-Tennis scores only.
 		return out, nil
