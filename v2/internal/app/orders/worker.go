@@ -22,6 +22,8 @@ type Worker struct {
 	exchange  ports.Exchange
 	repo      ports.OrderRepo
 	featureRepo ports.FeatureRepo
+	bookLookup ports.BookLookup
+	paperFill PaperFillModel
 	log       *slog.Logger
 	bankroll  int64 // current bankroll in cents (for sizing)
 	kellyFrac float64
@@ -51,12 +53,25 @@ func NewWorker(
 		exchange:           exchange,
 		repo:               repo,
 		featureRepo:        featureRepo,
+		paperFill:          NewRealisticPaperFill(1, 0), // default: 1 cent slippage, 0 fee
 		log:                log,
 		bankroll:           bankrollCents,
 		kellyFrac:          kellyFraction,
 		legacySizing:       legacySizing,
 		perStrategyFraction: make(map[string]float64),
 	}
+}
+
+// SetPaperFillModel overrides the paper fill model.
+func (w *Worker) SetPaperFillModel(m PaperFillModel) {
+	if m != nil {
+		w.paperFill = m
+	}
+}
+
+// SetBookLookup sets the orderbook lookup for realistic paper fills.
+func (w *Worker) SetBookLookup(bl ports.BookLookup) {
+	w.bookLookup = bl
 }
 
 // Submit is the loop's sink. Non-blocking enqueue; drops+counts if full.
@@ -154,11 +169,26 @@ func (w *Worker) processIntent(ctx context.Context, i match.Intent) error {
 	w.gates.OnOrderAccepted(i.MarketTicker)
 
 	if isPaper {
-		// Paper path: accepted → filled at intent price.
+		// Paper path: realistic fill against the book (A.8).
+		bestAsk := i.PriceCents // fallback to intent price if no book
+		displayedSize := contracts
+
+		if w.bookLookup != nil {
+			if book, err := w.bookLookup.Lookup(ctx, i.MarketTicker); err == nil && book != nil {
+				if book.BestAskCents > 0 {
+					bestAsk = book.BestAskCents
+				}
+				if book.BestAskSize > 0 {
+					displayedSize = book.BestAskSize
+				}
+			}
+		}
+
+		fillPrice, fillCount, _ := w.paperFill.FillPrice(bestAsk, contracts, displayedSize)
 		w.gates.OnOrderTerminal(i.Strategy, i.MarketTicker, true, now)
 		return w.repo.UpdateStatus(ctx, id, StatusFilled, ports.UpdateOpts{
-			FillCount:      contracts,
-			FillPriceCents: i.PriceCents,
+			FillCount:      fillCount,
+			FillPriceCents: fillPrice,
 		})
 	}
 

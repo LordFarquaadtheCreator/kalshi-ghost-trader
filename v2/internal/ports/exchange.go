@@ -113,6 +113,20 @@ type FeatureRepo interface {
 	LogFeatures(ctx context.Context, orderID int64, fl FeatureLog) error
 }
 
+// BookSnapshot is the top-of-book state at a point in time.
+type BookSnapshot struct {
+	BestBidCents int
+	BestAskCents int
+	BestBidSize  int
+	BestAskSize  int
+}
+
+// BookLookup provides top-of-book state for a market at the current instant.
+// Used by the realistic paper fill model (A.8).
+type BookLookup interface {
+	Lookup(ctx context.Context, marketTicker string) (*BookSnapshot, error)
+}
+
 // IntentFromMatch converts a match.Intent to an OrderRecord seed.
 func IntentFromMatch(i match.Intent, eventTicker string, isPaper bool) OrderRecord {
 	return OrderRecord{
