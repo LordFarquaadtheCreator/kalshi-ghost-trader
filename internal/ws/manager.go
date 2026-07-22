@@ -145,7 +145,6 @@ func (m *Manager) Run(ctx context.Context) error {
 			backoff = m.nextBackoff(backoff)
 			continue
 		}
-		backoff = m.minBackoff
 		m.log.Info("ws connected")
 
 		m.mu.Lock()
@@ -161,12 +160,22 @@ func (m *Manager) Run(ctx context.Context) error {
 		m.lastSeq = make(map[int64]int64)
 		m.seqMu.Unlock()
 
-		// Replay subscriptions after (re)connect
+		// Replay subscriptions after (re)connect. On failure, drop the conn
+		// and back off before retrying — without the backoff this was a hot
+		// dial loop that hammered Kalshi when resubscribe kept failing.
 		if err := m.replaySubscriptions(ctx); err != nil {
-			m.log.Warn("resubscribe failed", "err", err)
+			m.log.Warn("resubscribe failed", "err", err, "backoff", backoff)
 			m.dropConn()
+			if waitErr := m.sleep(ctx, backoff); waitErr != nil {
+				m.clearSubs()
+				return waitErr
+			}
+			backoff = m.nextBackoff(backoff)
 			continue
 		}
+		// Successful replay resets the backoff — the next failure starts
+		// fresh from min, not from wherever the dial-backoff left it.
+		backoff = m.minBackoff
 
 		// Heartbeat watchdog — detects half-open connections where Kalshi
 		// stops sending frames (including pings). conn.Read blocks forever

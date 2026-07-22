@@ -128,63 +128,71 @@ func (w *TickWriter) IngestOrder(o Order) bool {
 }
 
 // Run is the writer goroutine. Cancel ctx to stop; flushes remainder.
+//
+// The flush cadence uses a plain time.Ticker (no Stop/Reset choreography —
+// the previous NewTimer + Stop/Reset pattern was a known Go footgun and the
+// precision difference is irrelevant at these flush timeouts). The terminal
+// flush on ctx cancellation uses a detached context (context.WithoutCancel
+// with a 5s deadline) so the final batch lands even after the parent ctx is
+// cancelled — the previous code wrote the final batch with an already-
+// cancelled ctx, silently dropping it.
 func (w *TickWriter) Run(ctx context.Context) error {
 	batch := make([]Tick, 0, w.batchSize)
 	obBatch := make([]OrderbookEvent, 0, w.batchSize)
 	ordBatch := make([]Order, 0, 16)
 	ptBatch := make([]Point, 0, 16)
-	timer := time.NewTimer(w.flushTimeout)
-	defer timer.Stop()
+	ticker := time.NewTicker(w.flushTimeout)
+	defer ticker.Stop()
 
-	flush := func() {
+	flush := func(fctx context.Context) {
 		if len(batch) == 0 {
 			return
 		}
-		if err := w.db.InsertTickBatch(ctx, batch); err != nil {
+		if err := w.db.InsertTickBatch(fctx, batch); err != nil {
 			w.log.Error("write tick batch failed", "err", err, "n", len(batch))
 		}
 		batch = batch[:0]
 	}
 
-	flushOrderbook := func() {
+	flushOrderbook := func(fctx context.Context) {
 		if len(obBatch) == 0 {
 			return
 		}
-		if err := w.db.InsertOrderbookBatch(ctx, obBatch); err != nil {
+		if err := w.db.InsertOrderbookBatch(fctx, obBatch); err != nil {
 			w.log.Error("write orderbook batch failed", "err", err, "n", len(obBatch))
 		}
 		obBatch = obBatch[:0]
 	}
 
-	flushOrders := func() {
+	flushOrders := func(fctx context.Context) {
 		if len(ordBatch) == 0 {
 			return
 		}
-		if err := w.db.InsertOrdersBatch(ctx, ordBatch); err != nil {
+		if err := w.db.InsertOrdersBatch(fctx, ordBatch); err != nil {
 			w.log.Error("write orders batch failed", "err", err, "n", len(ordBatch))
 		}
 		ordBatch = ordBatch[:0]
 	}
 
-	flushPoints := func() {
+	flushPoints := func(fctx context.Context) {
 		if len(ptBatch) == 0 {
 			return
 		}
-		if err := w.db.InsertPointBatch(ctx, ptBatch); err != nil {
+		if err := w.db.InsertPointBatch(fctx, ptBatch); err != nil {
 			w.log.Error("write points batch failed", "err", err, "n", len(ptBatch))
 		}
 		ptBatch = ptBatch[:0]
 	}
 
-	flushLifecycle := func() {
+	flushLifecycle := func(fctx context.Context) {
 		for {
 			select {
 			case le := <-w.lifecycleIn:
-				if err := w.db.InsertLifecycleEvent(ctx, le); err != nil {
+				if err := w.db.InsertLifecycleEvent(fctx, le); err != nil {
 					w.log.Error("write lifecycle failed", "err", err, "market", le.MarketTicker)
 					continue
 				}
-				if err := w.db.ApplyLifecycleEvent(ctx, le); err != nil {
+				if err := w.db.ApplyLifecycleEvent(fctx, le); err != nil {
 					w.log.Error("apply lifecycle failed", "err", err, "market", le.MarketTicker, "type", le.EventType)
 				}
 			default:
@@ -193,17 +201,26 @@ func (w *TickWriter) Run(ctx context.Context) error {
 		}
 	}
 
-	flushEventLifecycle := func() {
+	flushEventLifecycle := func(fctx context.Context) {
 		for {
 			select {
 			case el := <-w.eventLifecycleIn:
-				if err := w.db.InsertEventLifecycleEvent(ctx, el); err != nil {
+				if err := w.db.InsertEventLifecycleEvent(fctx, el); err != nil {
 					w.log.Error("write event lifecycle failed", "err", err, "event", el.EventTicker)
 				}
 			default:
 				return
 			}
 		}
+	}
+
+	flushAll := func(fctx context.Context) {
+		flush(fctx)
+		flushOrderbook(fctx)
+		flushOrders(fctx)
+		flushPoints(fctx)
+		flushLifecycle(fctx)
+		flushEventLifecycle(fctx)
 	}
 
 	for {
@@ -222,12 +239,11 @@ func (w *TickWriter) Run(ctx context.Context) error {
 				case p := <-w.pointsIn:
 					ptBatch = append(ptBatch, p)
 				default:
-					flush()
-					flushOrderbook()
-					flushOrders()
-					flushPoints()
-					flushLifecycle()
-					flushEventLifecycle()
+					// Terminal flush: detached ctx so the final batch lands
+					// even though the parent ctx is cancelled.
+					flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+					flushAll(flushCtx)
+					cancel()
 					return ctx.Err()
 				}
 			}
@@ -235,73 +251,43 @@ func (w *TickWriter) Run(ctx context.Context) error {
 		case t := <-w.in:
 			batch = append(batch, t)
 			if len(batch) >= w.batchSize {
-				flush()
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(w.flushTimeout)
+				flush(ctx)
 			}
 
 		case oe := <-w.orderbookIn:
 			obBatch = append(obBatch, oe)
 			if len(obBatch) >= w.batchSize {
-				flushOrderbook()
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(w.flushTimeout)
+				flushOrderbook(ctx)
 			}
 
 		case o := <-w.ordersIn:
 			ordBatch = append(ordBatch, o)
 			if len(ordBatch) >= 16 {
-				flushOrders()
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(w.flushTimeout)
+				flushOrders(ctx)
 			}
 
 		case p := <-w.pointsIn:
 			ptBatch = append(ptBatch, p)
 			if len(ptBatch) >= 16 {
-				flushPoints()
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(w.flushTimeout)
+				flushPoints(ctx)
 			}
 
 		case le := <-w.lifecycleIn:
-			flush()
+			flush(ctx)
 			if err := w.db.InsertLifecycleEvent(ctx, le); err != nil {
 				w.log.Error("write lifecycle failed", "err", err, "market", le.MarketTicker)
 			} else if err := w.db.ApplyLifecycleEvent(ctx, le); err != nil {
 				w.log.Error("apply lifecycle failed", "err", err, "market", le.MarketTicker, "type", le.EventType)
 			}
-			if !timer.Stop() {
-				<-timer.C
-			}
-			timer.Reset(w.flushTimeout)
 
 		case el := <-w.eventLifecycleIn:
-			flush()
+			flush(ctx)
 			if err := w.db.InsertEventLifecycleEvent(ctx, el); err != nil {
 				w.log.Error("write event lifecycle failed", "err", err, "event", el.EventTicker)
 			}
-			if !timer.Stop() {
-				<-timer.C
-			}
-			timer.Reset(w.flushTimeout)
 
-		case <-timer.C:
-			flush()
-			flushOrderbook()
-			flushOrders()
-			flushPoints()
-			flushLifecycle()
-			flushEventLifecycle()
-			timer.Reset(w.flushTimeout)
+		case <-ticker.C:
+			flushAll(ctx)
 		}
 	}
 }
