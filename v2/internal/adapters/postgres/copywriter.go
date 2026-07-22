@@ -11,13 +11,17 @@ import (
 
 // TickRow is a flat tick record for COPY insertion into ticks_v2.
 type TickRow struct {
-	MarketTicker string
-	TS           int64
-	PriceCents   int
-	YesBidCents  *int
-	YesAskCents  *int
-	Volume       *int
-	Raw          []byte // nullable jsonb
+	MarketTicker  string
+	TS            int64
+	PriceCents    int
+	YesBidCents   *int
+	YesAskCents   *int
+	Volume        *int
+	Raw           []byte // nullable jsonb
+	BestBidCents  *int   // top-of-book depth (A.2.3)
+	BestAskCents  *int
+	BestBidSize   *int
+	BestAskSize   *int
 }
 
 // OrderbookRow is a flat orderbook record for COPY insertion into orderbook_v2.
@@ -47,10 +51,12 @@ func (w *CopyWriter) CopyTicks(ctx context.Context, rows []TickRow) error {
 		return nil
 	}
 	return w.copyFrom(ctx, pgx.Identifier{"ticks_v2"},
-		[]string{"market_ticker", "ts", "price_cents", "yes_bid_cents", "yes_ask_cents", "volume", "raw"},
+		[]string{"market_ticker", "ts", "price_cents", "yes_bid_cents", "yes_ask_cents", "volume", "raw",
+			"best_bid_cents", "best_ask_cents", "best_bid_size", "best_ask_size"},
 		len(rows), func(i int) []any {
 			r := rows[i]
-			return []any{r.MarketTicker, r.TS, r.PriceCents, r.YesBidCents, r.YesAskCents, r.Volume, r.Raw}
+			return []any{r.MarketTicker, r.TS, r.PriceCents, r.YesBidCents, r.YesAskCents, r.Volume, r.Raw,
+				r.BestBidCents, r.BestAskCents, r.BestBidSize, r.BestAskSize}
 		})
 }
 

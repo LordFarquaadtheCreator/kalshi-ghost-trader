@@ -21,6 +21,7 @@ type Worker struct {
 	ledger    ports.LedgerRepo
 	exchange  ports.Exchange
 	repo      ports.OrderRepo
+	featureRepo ports.FeatureRepo
 	log       *slog.Logger
 	bankroll  int64 // current bankroll in cents (for sizing)
 	kellyFrac float64
@@ -37,6 +38,7 @@ func NewWorker(
 	ledger ports.LedgerRepo,
 	exchange ports.Exchange,
 	repo ports.OrderRepo,
+	featureRepo ports.FeatureRepo,
 	log *slog.Logger,
 	bankrollCents int64,
 	kellyFraction float64,
@@ -48,6 +50,7 @@ func NewWorker(
 		ledger:             ledger,
 		exchange:           exchange,
 		repo:               repo,
+		featureRepo:        featureRepo,
 		log:                log,
 		bankroll:           bankrollCents,
 		kellyFrac:          kellyFraction,
@@ -114,6 +117,18 @@ func (w *Worker) processIntent(ctx context.Context, i match.Intent) error {
 	id, err := w.repo.Insert(ctx, rec)
 	if err != nil {
 		return err
+	}
+
+	// Log features for every intent — including gated ones (A.2.1).
+	if w.featureRepo != nil && i.FeatureHash != "" {
+		if err := w.featureRepo.LogFeatures(ctx, id, ports.FeatureLog{
+			FeatureHash: i.FeatureHash,
+			Features:    i.Features,
+			ModelID:     i.ModelID,
+			Propensity:  i.Propensity,
+		}); err != nil {
+			w.log.Error("orders: log features failed", "order_id", id, "err", err)
+		}
 	}
 
 	// Evaluate gates.

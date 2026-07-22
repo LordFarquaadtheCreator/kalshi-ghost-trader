@@ -223,7 +223,7 @@ func TestWorkerPaperHappyPath(t *testing.T) {
 	gates := NewGateCache(GateConfig{StrategyEnabled: map[string]bool{"test": true}, QuotaRemaining: 1000})
 	ledger := newFakeLedger(100000)
 
-	w := NewWorker(gates, ledger, nil, repo, slog.Default(), 100000, 0.25, false)
+	w := NewWorker(gates, ledger, nil, repo, nil, slog.Default(), 100000, 0.25, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = w.Run(ctx) }()
@@ -263,7 +263,7 @@ func TestWorkerRealHappyPath(t *testing.T) {
 	ledger := newFakeLedger(100000)
 	exchange := newFakeExchange()
 
-	w := NewWorker(gates, ledger, exchange, repo, slog.Default(), 100000, 0.25, false)
+	w := NewWorker(gates, ledger, exchange, repo, nil, slog.Default(), 100000, 0.25, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = w.Run(ctx) }()
@@ -302,7 +302,7 @@ func TestWorkerGateRejection(t *testing.T) {
 	ledger := newFakeLedger(100000)
 	exchange := newFakeExchange()
 
-	w := NewWorker(gates, ledger, exchange, repo, slog.Default(), 100000, 0.25, false)
+	w := NewWorker(gates, ledger, exchange, repo, nil, slog.Default(), 100000, 0.25, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = w.Run(ctx) }()
@@ -338,7 +338,7 @@ func TestWorkerInsufficientBalance(t *testing.T) {
 	ledger := newFakeLedger(10) // very low balance
 	exchange := newFakeExchange()
 
-	w := NewWorker(gates, ledger, exchange, repo, slog.Default(), 10, 0.25, false)
+	w := NewWorker(gates, ledger, exchange, repo, nil, slog.Default(), 10, 0.25, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = w.Run(ctx) }()
@@ -373,7 +373,7 @@ func TestWorkerExchangeError(t *testing.T) {
 	exchange := newFakeExchange()
 	exchange.setError(errExchangeDown)
 
-	w := NewWorker(gates, ledger, exchange, repo, slog.Default(), 100000, 0.25, false)
+	w := NewWorker(gates, ledger, exchange, repo, nil, slog.Default(), 100000, 0.25, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = w.Run(ctx) }()
@@ -410,7 +410,7 @@ func TestWorkerPartialFill(t *testing.T) {
 	// Partial fill — 5 of N contracts filled.
 	exchange := &partialExchange{fillCount: 5, fillPrice: 50}
 
-	w := NewWorker(gates, ledger, exchange, repo, slog.Default(), 100000, 0.25, false)
+	w := NewWorker(gates, ledger, exchange, repo, nil, slog.Default(), 100000, 0.25, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = w.Run(ctx) }()
@@ -544,7 +544,7 @@ func TestWorkerDroppedCount(t *testing.T) {
 	gates := NewGateCache(GateConfig{StrategyEnabled: map[string]bool{"test": true}, QuotaRemaining: 1000})
 	ledger := newFakeLedger(100000)
 
-	w := NewWorker(gates, ledger, nil, repo, slog.Default(), 100000, 0.25, false)
+	w := NewWorker(gates, ledger, nil, repo, nil, slog.Default(), 100000, 0.25, false)
 
 	// Don't run the worker — fill the queue.
 	for i := 0; i < 1024; i++ {

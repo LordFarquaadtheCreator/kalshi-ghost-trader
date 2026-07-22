@@ -15,6 +15,12 @@ type Intent struct {
 	PriceCents   int
 	ConvProbBps  int    // model probability in basis points
 	Reason       string // human-readable trigger description
+
+	// Feature logging (Addendum A.2.1, A.2.2). Nil for hand-written strategies.
+	FeatureHash string                // hash of the feature-name list
+	Features    map[string]float64    // name → value, exactly what the strategy saw
+	ModelID     *int64                // null for hand-written strategies
+	Propensity  *float64              // null for deterministic; action probability for learned paper mode
 }
 
 // Handler processes events for a single match. Implemented by the strategy

@@ -165,13 +165,35 @@ func TestLoopDeterministic(t *testing.T) {
 				t.Errorf("run 1: got %d intents, want %d (same as run 0)", len(intents), len(run1Intents))
 			}
 			for i, intent := range intents {
-				if i < len(run1Intents) && intent != run1Intents[i] {
+				if i < len(run1Intents) && !intentsEqual(intent, run1Intents[i]) {
 					t.Errorf("run 1 intent %d = %+v, want %+v", i, intent, run1Intents[i])
 				}
 			}
 		}
 		mu.Unlock()
 	}
+}
+
+// intentsEqual compares two Intents field-by-field (maps can't use ==).
+func intentsEqual(a, b Intent) bool {
+	if a.MarketTicker != b.MarketTicker || a.Strategy != b.Strategy || a.Action != b.Action {
+		return false
+	}
+	if a.PriceCents != b.PriceCents || a.ConvProbBps != b.ConvProbBps || a.Reason != b.Reason {
+		return false
+	}
+	if a.FeatureHash != b.FeatureHash {
+		return false
+	}
+	if len(a.Features) != len(b.Features) {
+		return false
+	}
+	for k, v := range a.Features {
+		if b.Features[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 type deterministicHandler struct{}

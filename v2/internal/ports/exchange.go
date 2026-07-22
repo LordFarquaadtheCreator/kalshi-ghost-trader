@@ -100,6 +100,19 @@ type LedgerRepo interface {
 	CheckInvariants(ctx context.Context) error
 }
 
+// FeatureLog is the feature vector + model identity written alongside every intent.
+type FeatureLog struct {
+	FeatureHash string
+	Features    map[string]float64
+	ModelID     *int64
+	Propensity  *float64
+}
+
+// FeatureRepo persists intent feature logs.
+type FeatureRepo interface {
+	LogFeatures(ctx context.Context, orderID int64, fl FeatureLog) error
+}
+
 // IntentFromMatch converts a match.Intent to an OrderRecord seed.
 func IntentFromMatch(i match.Intent, eventTicker string, isPaper bool) OrderRecord {
 	return OrderRecord{
