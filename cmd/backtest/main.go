@@ -69,7 +69,32 @@ func main() {
 		selected = []string{*strategyName}
 	}
 
+	// Fast path: -strategy all uses RunAll (single-pass broadcast, parallel
+	// across matches). Avoids O(strategies × matches) sequential replay.
 	var allOrders []backtest.Order
+	if *strategyName == "all" {
+		results, err := engine.RunAll(0)
+		if err != nil {
+			log.Error("run all strategies", "err", err)
+			os.Exit(1)
+		}
+		for _, res := range results {
+			fmt.Printf("\n%s\n", strings.Repeat("=", 80))
+			fmt.Printf("STRATEGY: %s\n", res.Name)
+			fmt.Printf("%s\n", strings.Repeat("=", 80))
+			filtered := filterOrders(res.Orders, *minPrice, *maxPrice)
+			printSummary(res.Name, filtered, res.MatchCount)
+			allOrders = append(allOrders, filtered...)
+		}
+		if len(results) > 1 {
+			fmt.Printf("\n%s\n", strings.Repeat("=", 80))
+			fmt.Printf("AGGREGATE — ALL STRATEGIES\n")
+			fmt.Printf("%s\n", strings.Repeat("=", 80))
+			printAggregate(allOrders)
+		}
+		return
+	}
+
 	for _, name := range selected {
 		fmt.Printf("\n%s\n", strings.Repeat("=", 80))
 		fmt.Printf("STRATEGY: %s\n", name)

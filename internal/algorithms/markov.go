@@ -11,25 +11,53 @@ import (
 // Parameter: pServe = probability that the server wins a point.
 // Default 0.64 (ATP tour average). For WTA use ~0.62.
 //
-// State space is small enough for exact computation via recursion with memoization.
-// Levels: game (points), set (games + tiebreak), match (sets).
+// State space is small enough for exact computation via recursion with
+// memoization. Levels: game (points), set (games + tiebreak), match (sets).
+//
+// All recursive functions are memoized per-model. Since each strategy
+// creates its own model and uses it single-threaded, no locks needed.
 
 const defaultPServe = 0.64
 
-// MarkovModel holds the server win probability and precomputed caches.
+// MarkovModel holds the server win probability and memoized recursion caches.
 type MarkovModel struct {
 	pServe  float64 // probability server wins a point
 	pReturn float64 // probability returner wins a point (= 1 - pServe)
+
+	// Lazy memoization maps. Populated on first call, reused after.
+	// Key layouts:
+	//   gameMemo:  [3]int{h, a, pIsServe}   — h, a ∈ [0,4], pIsServe ∈ {0,1}
+	//   setMemo:   [4]int{gamesH, gamesA, serverIdx, pIsServe}
+	//   matchMemo: [2]int{sH, sA}
+	//   tbMemo:    [3]int{h, a, homeServingIdx}
+	gameMemo  map[[3]int]float64
+	setMemo   map[[4]int]float64
+	matchMemo map[[2]int]float64
+	tbMemo    map[[3]int]float64
 }
 
 // NewMarkovModel creates a Markov chain model with default ATP serve probability.
 func NewMarkovModel() *MarkovModel {
-	return &MarkovModel{pServe: defaultPServe, pReturn: 1 - defaultPServe}
+	return &MarkovModel{
+		pServe:    defaultPServe,
+		pReturn:   1 - defaultPServe,
+		gameMemo:  make(map[[3]int]float64, 50),
+		setMemo:   make(map[[4]int]float64, 256),
+		matchMemo: make(map[[2]int]float64, 9),
+		tbMemo:    make(map[[3]int]float64, 200),
+	}
 }
 
 // NewMarkovModelWithProb creates a model with a custom serve point probability.
 func NewMarkovModelWithProb(pServe float64) *MarkovModel {
-	return &MarkovModel{pServe: pServe, pReturn: 1 - pServe}
+	return &MarkovModel{
+		pServe:    pServe,
+		pReturn:   1 - pServe,
+		gameMemo:  make(map[[3]int]float64, 50),
+		setMemo:   make(map[[4]int]float64, 256),
+		matchMemo: make(map[[2]int]float64, 9),
+		tbMemo:    make(map[[3]int]float64, 200),
+	}
 }
 
 // WinProbability returns the probability that the home player wins the match
@@ -70,11 +98,18 @@ func (m *MarkovModel) matchWinProbFromSetScore(sH, sA int) float64 {
 	if sA >= setsToWin {
 		return 0.0
 	}
-	// P(win a fresh set) — average of serving first or returning first
-	pSet := 0.5*m.setWinProb(0, 0, m.gameWinProb("0", "0", true, false), 1, false) +
-		0.5*m.setWinProb(0, 0, m.gameWinProb("0", "0", false, false), 2, false)
+	key := [2]int{sH, sA}
+	if v, ok := m.matchMemo[key]; ok {
+		return v
+	}
 
-	return pSet*m.matchWinProbFromSetScore(sH+1, sA) + (1-pSet)*m.matchWinProbFromSetScore(sH, sA+1)
+	// P(win a fresh set) — average of serving first or returning first
+	pSet := 0.5*m.setWinProbCached(0, 0, 1, true) +
+		0.5*m.setWinProbCached(0, 0, 2, false)
+
+	result := pSet*m.matchWinProbFromSetScore(sH+1, sA) + (1-pSet)*m.matchWinProbFromSetScore(sH, sA+1)
+	m.matchMemo[key] = result
+	return result
 }
 
 // gameWinProb returns probability that home wins the current game.
@@ -88,12 +123,24 @@ func (m *MarkovModel) gameWinProb(homePoints, awayPoints string, homeServing boo
 	h := pointValueMarkov(homePoints)
 	a := pointValueMarkov(awayPoints)
 
+	pIsServe := homeServing
+	return m.gameWinProbMemoized(h, a, pIsServe)
+}
+
+// gameWinProbMemoized returns P(home wins game) from point scores h, a
+// with memoization. pIsServe selects pServe (true) or pReturn (false).
+func (m *MarkovModel) gameWinProbMemoized(h, a int, pIsServe bool) float64 {
+	key := [3]int{h, a, boolToInt(pIsServe)}
+	if v, ok := m.gameMemo[key]; ok {
+		return v
+	}
 	p := m.pServe
-	if !homeServing {
+	if !pIsServe {
 		p = m.pReturn
 	}
-
-	return gameWinProbRecursive(h, a, p)
+	result := gameWinProbRecursive(h, a, p)
+	m.gameMemo[key] = result
+	return result
 }
 
 // gameWinProbRecursive computes P(home wins game) from point scores h, a.
@@ -135,6 +182,10 @@ func gameWinProbRecursive(h, a int, p float64) float64 {
 // pHomeGame: probability home wins a game when home serves.
 // server: who serves first in this set (1=home, 2=away).
 // isTiebreak: if current game is tiebreak (6-6).
+//
+// The first call may use an arbitrary pHomeGame (from current point score).
+// All recursive calls use pServe or pReturn, which are memoized via
+// setWinProbCached.
 func (m *MarkovModel) setWinProb(gamesHome, gamesAway int, pHomeGame float64, server int, isTiebreak bool) float64 {
 	// Set ends at 6 games with 2-point lead, or 7-6 (tiebreak)
 	if gamesHome >= 6 && gamesHome-gamesAway >= 2 {
@@ -161,15 +212,53 @@ func (m *MarkovModel) setWinProb(gamesHome, gamesAway int, pHomeGame float64, se
 	}
 
 	nextHomeServes := nextServer == 1
-	nextPHomeGame := m.pServe
-	if !nextHomeServes {
-		nextPHomeGame = m.pReturn
-	}
+	nextPIsServe := nextHomeServes
 
-	pWinGame := pHomeGame * m.setWinProb(gamesHome+1, gamesAway, nextPHomeGame, nextServer, false)
-	pLoseGame := (1 - pHomeGame) * m.setWinProb(gamesHome, gamesAway+1, nextPHomeGame, nextServer, false)
+	// Recursive calls use fixed pServe/pReturn — hit the memoized cache.
+	pWinGame := pHomeGame * m.setWinProbCached(gamesHome+1, gamesAway, nextServer, nextPIsServe)
+	pLoseGame := (1 - pHomeGame) * m.setWinProbCached(gamesHome, gamesAway+1, nextServer, nextPIsServe)
 
 	return pWinGame + pLoseGame
+}
+
+// setWinProbCached returns setWinProb where pHomeGame is pServe (pIsServe=true)
+// or pReturn (pIsServe=false). All recursive calls from setWinProb go through
+// here, so the memo cache covers the entire recursion tree.
+func (m *MarkovModel) setWinProbCached(gamesHome, gamesAway, server int, pIsServe bool) float64 {
+	// Terminal cases
+	if gamesHome >= 6 && gamesHome-gamesAway >= 2 {
+		return 1.0
+	}
+	if gamesAway >= 6 && gamesAway-gamesHome >= 2 {
+		return 0.0
+	}
+	if gamesHome >= 6 && gamesAway >= 6 && gamesHome == gamesAway {
+		return m.tiebreakWinProb("0", "0", server == 1)
+	}
+
+	key := [4]int{gamesHome, gamesAway, server - 1, boolToInt(pIsServe)}
+	if v, ok := m.setMemo[key]; ok {
+		return v
+	}
+
+	pHomeGame := m.pServe
+	if !pIsServe {
+		pHomeGame = m.pReturn
+	}
+
+	nextServer := 2
+	if server == 2 {
+		nextServer = 1
+	}
+	nextHomeServes := nextServer == 1
+	nextPIsServe := nextHomeServes
+
+	pWinGame := pHomeGame * m.setWinProbCached(gamesHome+1, gamesAway, nextServer, nextPIsServe)
+	pLoseGame := (1 - pHomeGame) * m.setWinProbCached(gamesHome, gamesAway+1, nextServer, nextPIsServe)
+
+	result := pWinGame + pLoseGame
+	m.setMemo[key] = result
+	return result
 }
 
 // tiebreakWinProb computes probability home wins tiebreak from current score.
@@ -186,13 +275,12 @@ func (m *MarkovModel) tiebreakWinProb(homePoints, awayPoints string, homeServing
 		p = m.pReturn
 	}
 
-	return m.tbWinProbRecursive(h, a, p, homeServing, h+a)
+	return m.tbWinProbMemoized(h, a, p, homeServing, h+a)
 }
 
-// tbWinProbRecursive computes P(home wins tiebreak) from TB score h, a.
-// p = P(home wins next point). homeServing = who serves next.
-// totalPoints = total points played (for serve alternation).
-func (m *MarkovModel) tbWinProbRecursive(h, a int, p float64, homeServing bool, totalPoints int) float64 {
+// tbWinProbMemoized computes P(home wins tiebreak) with memoization.
+// State: (h, a, homeServing). totalPoints = h+a (redundant but kept for clarity).
+func (m *MarkovModel) tbWinProbMemoized(h, a int, p float64, homeServing bool, totalPoints int) float64 {
 	if h >= 7 && h-a >= 2 {
 		return 1.0
 	}
@@ -207,6 +295,11 @@ func (m *MarkovModel) tbWinProbRecursive(h, a int, p float64, homeServing bool, 
 		p2 := pAvg * pAvg
 		q2 := (1 - pAvg) * (1 - pAvg)
 		return p2 / (p2 + q2)
+	}
+
+	key := [3]int{h, a, boolToInt(homeServing)}
+	if v, ok := m.tbMemo[key]; ok {
+		return v
 	}
 
 	// Serve alternation: 1,2,2,1,1,2,2,1,...
@@ -227,8 +320,18 @@ func (m *MarkovModel) tbWinProbRecursive(h, a int, p float64, homeServing bool, 
 		nextP = m.pReturn
 	}
 
-	return p*m.tbWinProbRecursive(h+1, a, nextP, nextHomeServing, totalPoints+1) +
-		(1-p)*m.tbWinProbRecursive(h, a+1, nextP, nextHomeServing, totalPoints+1)
+	result := p*m.tbWinProbMemoized(h+1, a, nextP, nextHomeServing, totalPoints+1) +
+		(1-p)*m.tbWinProbMemoized(h, a+1, nextP, nextHomeServing, totalPoints+1)
+	m.tbMemo[key] = result
+	return result
+}
+
+// boolToInt converts bool to int for use as map key component.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // pointValueMarkov converts tennis point string to numeric value.
