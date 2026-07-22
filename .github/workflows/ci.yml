@@ -47,3 +47,50 @@ jobs:
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
           staticcheck ./...
+
+  test-v2:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kalshi
+          POSTGRES_PASSWORD: kalshi_dev
+          POSTGRES_DB: kalshi_tennis_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kalshi -d kalshi_tennis_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DB_DSN: host=localhost user=kalshi password=kalshi_dev dbname=kalshi_tennis_test port=5432 sslmode=disable
+
+    defaults:
+      run:
+        working-directory: v2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: v2
+          args: --timeout 5m
