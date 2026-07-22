@@ -11,7 +11,7 @@ func (db *DB) SaveBacktestResult(row BacktestResultRow) error {
 	row.UpdatedAt = time.Now().UnixMilli()
 	return db.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "strategy"}},
-		DoUpdates: clause.AssignmentColumns([]string{"run_ts", "match_count", "summary_json", "orders_json", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"run_ts", "match_count", "summary_json", "orders_json", "cum_pnl_json", "updated_at"}),
 	}).Create(&row).Error
 }
 
