@@ -304,16 +304,17 @@ func main() {
 		return multi.RunTimer(ctx)
 	})
 
-	// 7. Backtest recompute cron — recompute only when new finalized markets appear
+	// 7. Backtest recompute cron — daily at midnight UTC.
+	// Recomputes only when new finalized markets appeared since last run.
 	g.Go(func() error {
-		ticker := time.NewTicker(10 * time.Minute)
-		defer ticker.Stop()
 		backtest.RecomputeIfNeeded(btEngine, db, log) // initial run at startup
 		for {
+			now := time.Now().UTC()
+			next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
 			select {
 			case <-ctx.Done():
 				return nil
-			case <-ticker.C:
+			case <-time.After(next.Sub(now)):
 				backtest.RecomputeIfNeeded(btEngine, db, log)
 			}
 		}
