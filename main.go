@@ -356,6 +356,31 @@ func main() {
 		}
 	})
 
+	// 10. Duplicate paper orders janitor — daily drop of paper orders sharing
+	// the same (ts, action, strategy, suggested_size, market_price) tuple.
+	// Keeps lowest id. Paper only — real orders touch liquidity pool.
+	g.Go(func() error {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		if n, err := db.DropDuplicatePaperOrders(ctx); err != nil {
+			log.Error("drop duplicate paper orders failed", "err", err)
+		} else if n > 0 {
+			log.Info("dropped duplicate paper orders", "count", n)
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				if n, err := db.DropDuplicatePaperOrders(ctx); err != nil {
+					log.Error("drop duplicate paper orders failed", "err", err)
+				} else if n > 0 {
+					log.Info("dropped duplicate paper orders", "count", n)
+				}
+			}
+		}
+	})
+
 	log.Info("ghost trader running", "scan_interval", time.Duration(config.Cfg.ScanIntervalHours)*time.Hour, "lead_minutes", config.Cfg.TrackLeadMinutes)
 
 	// Wait for shutdown signal or critical failure

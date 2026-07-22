@@ -248,6 +248,25 @@ func (d *DB) UpdateRealOrderStatus(ctx context.Context, orderID int64, fillCount
 	})
 }
 
+// DropDuplicatePaperOrders removes paper orders (is_real=false) that share the
+// same (ts, action, strategy, suggested_size, market_price) tuple. Keeps the
+// row with the lowest id (first inserted). Called daily by cron in main.go.
+func (d *DB) DropDuplicatePaperOrders(ctx context.Context) (int64, error) {
+	res := d.db.WithContext(ctx).Exec(`
+DELETE FROM orders
+WHERE id IN (
+    SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+            PARTITION BY ts, action, strategy, suggested_size, market_price
+            ORDER BY id
+        ) AS rn
+        FROM orders
+        WHERE is_real = false
+    ) WHERE rn > 1
+)`)
+	return res.RowsAffected, res.Error
+}
+
 // refundUnfilled refunds the unfilled portion of an order to the liquidity pool
 // within the given transaction. Idempotent: only refunds the delta between
 // total unfilled cost and what's already been refunded. Mutates o.UnfilledRefundedCents.
