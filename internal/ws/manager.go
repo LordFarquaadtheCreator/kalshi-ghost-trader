@@ -168,8 +168,16 @@ func (m *Manager) Run(ctx context.Context) error {
 			continue
 		}
 
+		// Heartbeat watchdog — detects half-open connections where Kalshi
+		// stops sending frames (including pings). conn.Read blocks forever
+		// in that state without this. Ping every 30s; if pong doesn't return
+		// in 15s, close conn to unblock Read.
+		hbCtx, hbCancel := context.WithCancel(ctx)
+		go m.heartbeat(hbCtx, conn)
+
 		// Read loop — returns on error/close
 		readErr := m.readLoop(ctx, conn)
+		hbCancel()
 		m.dropConn()
 		m.log.Info("ws read loop ended", "err", readErr)
 
@@ -214,6 +222,29 @@ func (m *Manager) dropConn() {
 		m.conn = nil
 	}
 	m.mu.Unlock()
+}
+
+// heartbeat sends periodic pings to detect half-open connections.
+// Kalshi normally pings every 10s; if our ping's pong doesn't arrive
+// in 15s, the connection is dead. Closing the conn unblocks Read.
+func (m *Manager) heartbeat(ctx context.Context, conn *websocket.Conn) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			if err := conn.Ping(pingCtx); err != nil {
+				cancel()
+				m.log.Warn("ws heartbeat timeout, forcing reconnect", "err", err)
+				conn.Close(websocket.StatusPolicyViolation, "heartbeat timeout")
+				return
+			}
+			cancel()
+		}
+	}
 }
 
 func (m *Manager) clearSubs() {
