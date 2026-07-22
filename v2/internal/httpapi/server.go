@@ -13,16 +13,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LordFarquaadtheCreator/kalshi-ghost-trader/v2/internal/adapters/postgres"
 	"gorm.io/gorm"
 )
 
 // Server is the HTTP API server.
 type Server struct {
-	db      *gorm.DB
-	log     *slog.Logger
-	token   string
-	mux     *http.ServeMux
-	sse     *sseHub
+	db        *gorm.DB
+	log       *slog.Logger
+	token     string
+	mux       *http.ServeMux
+	sse       *sseHub
+	modelRepo *postgres.ModelRepo
 }
 
 // NewServer creates an HTTP API server. Token comes from env API_TOKEN.
@@ -33,6 +35,9 @@ func NewServer(db *gorm.DB, log *slog.Logger) *Server {
 		log:   log,
 		token: token,
 		sse:   newSSEHub(),
+	}
+	if db != nil {
+		s.modelRepo = postgres.NewModelRepo(db)
 	}
 	s.mux = s.buildMux()
 	return s
@@ -54,6 +59,9 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/ledger", s.auth(s.handleLedger))
 	mux.HandleFunc("GET /api/v1/config", s.auth(s.handleGetConfig))
 	mux.HandleFunc("PUT /api/v1/config", s.auth(s.handlePutConfig))
+	mux.HandleFunc("GET /api/v1/models", s.auth(s.handleModels))
+	mux.HandleFunc("POST /api/v1/models", s.auth(s.handleModels))
+	mux.HandleFunc("POST /api/v1/models/{id}/status", s.auth(s.handleModelStatus))
 	mux.HandleFunc("GET /api/v1/stream", s.auth(s.handleStream))
 
 	return mux
