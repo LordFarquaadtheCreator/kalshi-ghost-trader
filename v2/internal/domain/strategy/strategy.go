@@ -38,6 +38,7 @@ type MatchView struct {
 	EventTicker   string
 	MarketTickers []string // [home_ticker, away_ticker]
 	OccurrenceTS  int64    // unix ms
+	CloseTS       int64    // market close time, unix ms
 
 	// Prices: market_ticker -> latest price in cents (1..99)
 	Prices map[string]int
