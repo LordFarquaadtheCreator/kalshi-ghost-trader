@@ -306,6 +306,11 @@ func (w *matchPoller) poll() (stop bool) {
 	}
 
 	p := synthesizePoint(w.eventTicker, w.milestoneID, score, currentSet)
+	// Persist to points table so HasPoints works for the real order gate.
+	// Without this, kalshi-only matches are invisible to match-started detection.
+	if w.tickWriter != nil {
+		w.tickWriter.IngestPoint(p)
+	}
 	if w.scoreObs != nil {
 		w.scoreObs.OnPoint(w.eventTicker, p)
 	}

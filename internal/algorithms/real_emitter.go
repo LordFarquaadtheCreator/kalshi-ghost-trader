@@ -2,6 +2,7 @@ package algorithms
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -17,6 +18,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/strategyconfig"
 	"github.com/farquaad/kalshi-ghost-trader/internal/triggerranges"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // sizeRealOrder converts a raw Kelly float size into a whole-contract count
@@ -170,9 +172,25 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		return false
 	}
 	if mkt.OccurrenceTS > 0 && time.Now().UnixMilli() < mkt.OccurrenceTS {
-		started, _ := e.db.GetKalshiScore(ctx, mkt.EventTicker)
-		hasPts, _ := e.db.HasPoints(ctx, mkt.EventTicker)
-		liveStarted := started.Status == "started" || hasPts
+		started, err := e.db.GetKalshiScore(ctx, mkt.EventTicker)
+		liveStarted := false
+		if err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				e.log.Error("real: failed to look up kalshi score",
+					"market", o.MarketTicker, "error", err)
+			}
+			// not-found or error: no snapshot yet, fall through to HasPoints
+		} else {
+			liveStarted = started.Status == "started"
+		}
+		if !liveStarted {
+			hasPts, perr := e.db.HasPoints(ctx, mkt.EventTicker)
+			if perr != nil {
+				e.log.Error("real: failed to check points",
+					"market", o.MarketTicker, "error", perr)
+			}
+			liveStarted = hasPts
+		}
 		if !liveStarted {
 			e.log.Warn("real: match not started yet, skipping",
 				"market", o.MarketTicker, "occurrence_ts", mkt.OccurrenceTS)
@@ -182,7 +200,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 			"market", o.MarketTicker,
 			"occurrence_ts", mkt.OccurrenceTS,
 			"kalshi_status", started.Status,
-			"has_points", hasPts)
+			"has_points", liveStarted)
 	}
 
 	// Populate human-readable fields for the orders table
@@ -443,9 +461,24 @@ func (e *KalshiOrderEmitter) emitBuyNO(o store.Order) bool {
 		return false
 	}
 	if mkt.OccurrenceTS > 0 && time.Now().UnixMilli() < mkt.OccurrenceTS {
-		started, _ := e.db.GetKalshiScore(ctx, mkt.EventTicker)
-		hasPts, _ := e.db.HasPoints(ctx, mkt.EventTicker)
-		liveStarted := started.Status == "started" || hasPts
+		started, err := e.db.GetKalshiScore(ctx, mkt.EventTicker)
+		liveStarted := false
+		if err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				e.log.Error("real: buy_no failed to look up kalshi score",
+					"market", o.MarketTicker, "error", err)
+			}
+		} else {
+			liveStarted = started.Status == "started"
+		}
+		if !liveStarted {
+			hasPts, perr := e.db.HasPoints(ctx, mkt.EventTicker)
+			if perr != nil {
+				e.log.Error("real: buy_no failed to check points",
+					"market", o.MarketTicker, "error", perr)
+			}
+			liveStarted = hasPts
+		}
 		if !liveStarted {
 			e.log.Warn("real: buy_no match not started, skipping",
 				"market", o.MarketTicker, "occurrence_ts", mkt.OccurrenceTS)
