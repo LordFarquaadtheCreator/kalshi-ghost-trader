@@ -72,3 +72,4 @@ pricebands_output.txt
 
 # Temp stash (editor)
 .tmp-stash/
+backups/
