@@ -171,6 +171,10 @@ type Order struct {
 	PositionID             *int64  `gorm:"column:position_id"`
 	Result                 string  `gorm:"column:result"`
 	SettledTS              int64   `gorm:"column:settled_ts"`
+
+	// EmitTS stamps when the order was emitted by a strategy (unix ms).
+	// Not persisted — used for hop2 latency measurement (strategy-done → order-persisted).
+	EmitTS int64 `gorm:"-"`
 }
 
 // Position aggregates buys + sells for one (market, strategy, is_real).

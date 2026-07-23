@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync/atomic"
 	"time"
+
+	"github.com/farquaad/kalshi-ghost-trader/internal/perf"
 )
 
 const (
@@ -45,6 +47,9 @@ type TickWriter struct {
 	EvtLifecycleDrops atomic.Int64
 	OrdersDrops       atomic.Int64
 	PointsDrops       atomic.Int64
+
+	// hop2 measures strategy-done (emit) → order-persisted (flush).
+	hop2 *perf.Histogram
 }
 
 // NewTickWriter creates a batched tick writer.
@@ -127,6 +132,11 @@ func (w *TickWriter) IngestOrder(o Order) bool {
 	}
 }
 
+// SetHop2Histogram wires the strategy-done → order-persisted latency histogram.
+func (w *TickWriter) SetHop2Histogram(h *perf.Histogram) {
+	w.hop2 = h
+}
+
 // Run is the writer goroutine. Cancel ctx to stop; flushes remainder.
 //
 // The flush cadence uses a plain time.Ticker (no Stop/Reset choreography —
@@ -170,6 +180,15 @@ func (w *TickWriter) Run(ctx context.Context) error {
 		}
 		if err := w.db.InsertOrdersBatch(fctx, ordBatch); err != nil {
 			w.log.Error("write orders batch failed", "err", err, "n", len(ordBatch))
+		}
+		// hop2: record latency from oldest emit_ts in batch to now (persisted).
+		if w.hop2 != nil {
+			now := time.Now().UnixMilli()
+			for _, o := range ordBatch {
+				if o.EmitTS > 0 {
+					w.hop2.Record(float64(now - o.EmitTS))
+				}
+			}
 		}
 		ordBatch = ordBatch[:0]
 	}

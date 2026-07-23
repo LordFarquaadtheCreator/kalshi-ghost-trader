@@ -58,6 +58,10 @@ func (m *Manager) handleTicker(sid int64, msg json.RawMessage, raw []byte) {
 
 	if m.priceUpd != nil && tick.Price > 0 {
 		m.priceUpd.OnPrice(t.MarketTicker, tick.Price)
+		// hop1: t_recv → strategy-done. Measured only when strategies ran.
+		if m.hop1 != nil {
+			m.hop1.Record(float64(time.Now().UnixMilli() - recvTs))
+		}
 	}
 }
 

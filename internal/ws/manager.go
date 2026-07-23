@@ -35,6 +35,7 @@ import (
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiAuth"
+	"github.com/farquaad/kalshi-ghost-trader/internal/perf"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -92,6 +93,9 @@ type Manager struct {
 	tickWriter  *store.TickWriter
 	priceUpd    PriceUpdater // nil if no signal generator
 	disableSave bool         // skip persisting WS data to DB
+
+	// hop1 measures t_recv → strategy-done on the ticker hot path.
+	hop1 *perf.Histogram
 }
 
 // NewManager creates a WebSocket manager. Config values are read from config.Cfg.
@@ -123,6 +127,11 @@ func NewManager(signer *kalshiAuth.Signer, tw *store.TickWriter, log *slog.Logge
 // market price updates from WS ticker messages.
 func (m *Manager) SetPriceUpdater(pu PriceUpdater) {
 	m.priceUpd = pu
+}
+
+// SetHop1Histogram wires the t_recv → strategy-done latency histogram.
+func (m *Manager) SetHop1Histogram(h *perf.Histogram) {
+	m.hop1 = h
 }
 
 // Run maintains the connection until ctx is cancelled.

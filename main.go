@@ -39,6 +39,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
 	"github.com/farquaad/kalshi-ghost-trader/internal/orderbackfill"
 	"github.com/farquaad/kalshi-ghost-trader/internal/paperorderinsights"
+	"github.com/farquaad/kalshi-ghost-trader/internal/perf"
 	"github.com/farquaad/kalshi-ghost-trader/internal/positions"
 	"github.com/farquaad/kalshi-ghost-trader/internal/pricebands"
 	"github.com/farquaad/kalshi-ghost-trader/internal/reconciler"
@@ -120,6 +121,12 @@ func main() {
 	// Tick writer (single writer goroutine for batch inserts)
 	tickWriter := db.NewTickWriter(config.Cfg.BatchSize, config.Cfg.FlushTimeoutMS, log)
 
+	// Per-hop latency histograms: t_recv → strategy-done (hop1),
+	// strategy-done → order-persisted (hop2). slog p50/p99 every 60s.
+	hop1 := perf.New("ws_recv_to_strategy_done")
+	hop2 := perf.New("strategy_done_to_order_persisted")
+	tickWriter.SetHop2Histogram(hop2)
+
 	// REST client — shared by scanner, livedata pollers, tracker.
 	restClient := kalshiclient.NewClient(signer, log)
 
@@ -162,6 +169,7 @@ func main() {
 	// WebSocket manager
 	wsMgr := wsclient.NewManager(signer, tickWriter, log)
 	wsMgr.SetPriceUpdater(multi)
+	wsMgr.SetHop1Histogram(hop1)
 
 	// API-Tennis scraper (mandatory — WebSocket real-time push, primary score source)
 	atScraper := apitennis.New(db, multi, tickWriter, log)
@@ -262,6 +270,16 @@ func main() {
 	// 1. Tick writer (single DB writer)
 	g.Go(func() error {
 		return tickWriter.Run(ctx)
+	})
+
+	// 1b. Per-hop latency reporters — slog p50/p99 every 60s.
+	g.Go(func() error {
+		hop1.Run(ctx, log, 60*time.Second)
+		return nil
+	})
+	g.Go(func() error {
+		hop2.Run(ctx, log, 60*time.Second)
+		return nil
 	})
 
 	// 2. WebSocket manager (auto-reconnect, dispatch)

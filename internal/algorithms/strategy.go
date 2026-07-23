@@ -74,6 +74,9 @@ func NewTickWriterEmitter(tw *store.TickWriter) *TickWriterEmitter {
 }
 
 func (e *TickWriterEmitter) EmitOrder(o store.Order) bool {
+	if o.EmitTS == 0 {
+		o.EmitTS = time.Now().UnixMilli()
+	}
 	return e.tw.IngestOrder(o)
 }
 
