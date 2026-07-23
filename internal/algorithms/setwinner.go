@@ -105,6 +105,12 @@ func NewSetWinnerStrategy(emitter OrderEmitter, log *slog.Logger, cfg SetWinnerC
 	}
 }
 
+// SetSharedMarkovModel replaces the per-strategy model with a shared one.
+// Memoization then works across strategies with identical pServe.
+func (s *SetWinnerStrategy) SetSharedMarkovModel(m *MarkovModel) {
+	s.model = m
+}
+
 func (s *SetWinnerStrategy) RegisterMarkets(eventTicker string, marketTickers []string) {
 	s.mu.Lock()
 	s.markets[eventTicker] = marketTickers

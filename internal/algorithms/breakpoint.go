@@ -68,6 +68,13 @@ func NewBreakPointStrategy(emitter OrderEmitter, log *slog.Logger, cfg BreakPoin
 	}
 }
 
+// SetSharedMarkovModel replaces the per-strategy model with a shared one.
+// Used when multiple strategies share the same pServe — memoization then
+// works across strategies, avoiding redundant recursion for the same state.
+func (s *BreakPointStrategy) SetSharedMarkovModel(m *MarkovModel) {
+	s.model = m
+}
+
 func (s *BreakPointStrategy) OnPrice(marketTicker string, price float64) {
 	s.mu.Lock()
 	s.prices[marketTicker] = price

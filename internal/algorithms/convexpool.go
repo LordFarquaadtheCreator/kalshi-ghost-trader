@@ -83,6 +83,12 @@ func NewConvexPoolStrategy(emitter OrderEmitter, log *slog.Logger, cfg ConvexPoo
 	}
 }
 
+// SetSharedMarkovModel replaces the per-strategy model with a shared one.
+// Memoization then works across strategies with identical pServe.
+func (s *ConvexPoolStrategy) SetSharedMarkovModel(m *MarkovModel) {
+	s.model = m
+}
+
 // SetSeriesTicker maps event_ticker to series_ticker for series filtering.
 // Implements SeriesSetter — called by backtest engine or live wiring.
 func (s *ConvexPoolStrategy) SetSeriesTicker(eventTicker, seriesTicker string) {

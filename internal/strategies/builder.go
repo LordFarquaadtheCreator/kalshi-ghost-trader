@@ -18,6 +18,19 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 	noFade := algorithms.NewNoFadeStrategyWithDB(emitter, db, log,
 		algorithms.DefaultNoFadeConfig())
 
+	// R.8: One shared Markov model for all strategies using pServe=0.64.
+	// Memoization works across strategies — same score state computed once
+	// instead of N times. Model is mutex-guarded; safe for concurrent use.
+	// Strategies with different pServe (calibrated-markov, surface-markov)
+	// keep their own per-call models.
+	sharedMarkov := algorithms.NewMarkovModel()
+
+	// Capture Markov-using strategies to inject the shared model after
+	// the factory map builds them.
+	var bp *algorithms.BreakPointStrategy
+	var cp, cpWTA *algorithms.ConvexPoolStrategy
+	var sw, swAggro, swNoAdj *algorithms.SetWinnerStrategy
+
 	multi := algorithms.NewMultiStrategyFromFactories(emitter, log, map[string]algorithms.StrategyFactoryFn{
 		"matchpoint": func(e algorithms.OrderEmitter) algorithms.Strategy { return matchPoint },
 		"matchpoint-aggro": func(e algorithms.OrderEmitter) algorithms.Strategy {
@@ -80,13 +93,15 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 			return algorithms.NewTiebreakStrategy(e, log, algorithms.DefaultTiebreakConfig())
 		},
 		"breakpoint": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewBreakPointStrategy(e, log, algorithms.DefaultBreakPointConfig())
+			bp = algorithms.NewBreakPointStrategy(e, log, algorithms.DefaultBreakPointConfig())
+			return bp
 		},
 		"adout": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewAdOutStrategy(e, log, algorithms.DefaultAdOutConfig())
 		},
 		"convexpool": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewConvexPoolStrategy(e, log, algorithms.DefaultConvexPoolConfig())
+			cp = algorithms.NewConvexPoolStrategy(e, log, algorithms.DefaultConvexPoolConfig())
+			return cp
 		},
 		"comeback040": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewComeback040Strategy(e, log, algorithms.DefaultComeback040Config())
@@ -198,7 +213,8 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 			cfg := algorithms.DefaultConvexPoolConfig()
 			cfg.Label = "convexpool-wta"
 			cfg.SeriesFilter = []string{"KXWTAMATCH"}
-			return algorithms.NewConvexPoolStrategyWithDB(e, db, log, cfg)
+			cpWTA = algorithms.NewConvexPoolStrategyWithDB(e, db, log, cfg)
+			return cpWTA
 		},
 		"doublebreak": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewDoubleBreakStrategy(e, log, algorithms.DefaultDoubleBreakConfig())
@@ -242,7 +258,8 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 			return algorithms.NewBookPressureStrategy(e, log, cfg)
 		},
 		"setwinner": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSetWinnerStrategy(e, log, algorithms.DefaultSetWinnerConfig())
+			sw = algorithms.NewSetWinnerStrategy(e, log, algorithms.DefaultSetWinnerConfig())
+			return sw
 		},
 		"setwinner-aggro": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			cfg := algorithms.DefaultSetWinnerConfig()
@@ -250,19 +267,42 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 			cfg.MaxMarketPrice = 0.95
 			cfg.CooldownPoints = 1
 			cfg.Label = "setwinner-aggro"
-			return algorithms.NewSetWinnerStrategy(e, log, cfg)
+			swAggro = algorithms.NewSetWinnerStrategy(e, log, cfg)
+			return swAggro
 		},
 		"setwinner-noadjust": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			cfg := algorithms.DefaultSetWinnerConfig()
 			cfg.ReversalPenalty = 0
 			cfg.DecidingSetBoost = 0
 			cfg.Label = "setwinner-noadjust"
-			return algorithms.NewSetWinnerStrategy(e, log, cfg)
+			swNoAdj = algorithms.NewSetWinnerStrategy(e, log, cfg)
+			return swNoAdj
 		},
 		"close_timer": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return sigpkg.NewCloseTimer(db, matchPoint, e, log)
 		},
 	})
+
+	// R.8: Inject shared Markov model into all pServe=0.64 strategies.
+	if bp != nil {
+		bp.SetSharedMarkovModel(sharedMarkov)
+	}
+	if cp != nil {
+		cp.SetSharedMarkovModel(sharedMarkov)
+	}
+	if cpWTA != nil {
+		cpWTA.SetSharedMarkovModel(sharedMarkov)
+	}
+	if sw != nil {
+		sw.SetSharedMarkovModel(sharedMarkov)
+	}
+	if swAggro != nil {
+		swAggro.SetSharedMarkovModel(sharedMarkov)
+	}
+	if swNoAdj != nil {
+		swNoAdj.SetSharedMarkovModel(sharedMarkov)
+	}
+
 	multi.SetDB(db)
 
 	return multi

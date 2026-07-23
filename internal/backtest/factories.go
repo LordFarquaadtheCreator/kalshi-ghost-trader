@@ -9,6 +9,12 @@ import (
 // DefaultFactories returns the standard set of strategy factories used by
 // both the backtest CLI and the strategy API server.
 func DefaultFactories() map[string]StrategyFactory {
+	// R.8: shared Markov model for all pServe=0.64 strategies. Memoization
+	// works across strategies — same score state computed once. Model is
+	// mutex-guarded; safe for concurrent use across parallel replay goroutines.
+	// calibrated-markov + surface-markov keep per-call models (different pServe).
+	sharedMarkov := algorithms.NewMarkovModel()
+
 	return map[string]StrategyFactory{
 		"matchpoint": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewMatchPointStrategy(em, log)
@@ -58,10 +64,14 @@ func DefaultFactories() map[string]StrategyFactory {
 			return algorithms.NewTiebreakStrategy(em, log, algorithms.DefaultTiebreakConfig())
 		},
 		"breakpoint": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
-			return algorithms.NewBreakPointStrategy(em, log, algorithms.DefaultBreakPointConfig())
+			s := algorithms.NewBreakPointStrategy(em, log, algorithms.DefaultBreakPointConfig())
+			s.SetSharedMarkovModel(sharedMarkov)
+			return s
 		},
 		"convexpool": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
-			return algorithms.NewConvexPoolStrategy(em, log, algorithms.DefaultConvexPoolConfig())
+			s := algorithms.NewConvexPoolStrategy(em, log, algorithms.DefaultConvexPoolConfig())
+			s.SetSharedMarkovModel(sharedMarkov)
+			return s
 		},
 		"comeback040": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewComeback040Strategy(em, log, algorithms.DefaultComeback040Config())
@@ -176,7 +186,9 @@ func DefaultFactories() map[string]StrategyFactory {
 		},
 		// Set-winner prediction: Markov match-win prob + per-set psychological adjustment
 		"setwinner": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
-			return algorithms.NewSetWinnerStrategy(em, log, algorithms.DefaultSetWinnerConfig())
+			s := algorithms.NewSetWinnerStrategy(em, log, algorithms.DefaultSetWinnerConfig())
+			s.SetSharedMarkovModel(sharedMarkov)
+			return s
 		},
 		"setwinner-aggro": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			cfg := algorithms.DefaultSetWinnerConfig()
@@ -184,7 +196,9 @@ func DefaultFactories() map[string]StrategyFactory {
 			cfg.MaxMarketPrice = 0.95
 			cfg.CooldownPoints = 1
 			cfg.Label = "setwinner-aggro"
-			return algorithms.NewSetWinnerStrategy(em, log, cfg)
+			s := algorithms.NewSetWinnerStrategy(em, log, cfg)
+			s.SetSharedMarkovModel(sharedMarkov)
+			return s
 		},
 		// Ablation: pure Markov, no per-set adjustment
 		"setwinner-noadjust": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
@@ -192,7 +206,9 @@ func DefaultFactories() map[string]StrategyFactory {
 			cfg.ReversalPenalty = 0
 			cfg.DecidingSetBoost = 0
 			cfg.Label = "setwinner-noadjust"
-			return algorithms.NewSetWinnerStrategy(em, log, cfg)
+			s := algorithms.NewSetWinnerStrategy(em, log, cfg)
+			s.SetSharedMarkovModel(sharedMarkov)
+			return s
 		},
 	// DEEP_RESEARCH_2: setdown filtered to positive-P&L series only.
 	"setdown-series": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
@@ -243,7 +259,9 @@ func DefaultFactories() map[string]StrategyFactory {
 		cfg := algorithms.DefaultConvexPoolConfig()
 		cfg.Label = "convexpool-wta"
 		cfg.SeriesFilter = []string{"KXWTAMATCH"}
-		return algorithms.NewConvexPoolStrategy(em, log, cfg)
+		s := algorithms.NewConvexPoolStrategy(em, log, cfg)
+		s.SetSharedMarkovModel(sharedMarkov)
+		return s
 	},
 	}
 }
