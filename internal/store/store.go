@@ -67,6 +67,30 @@ func New(ctx context.Context, dsn string, log *slog.Logger) (*DB, error) {
 	return &DB{db: db, log: log}, nil
 }
 
+// NewDashboardDB opens a dedicated PostgreSQL pool for dashboard reads.
+// statement_timeout=5s prevents slow queries from blocking the pool;
+// MaxOpenConns=5 keeps the dashboard from starving the writer pool.
+// The dashboard queries pre-computed data — no recompute on page load.
+func NewDashboardDB(ctx context.Context, dsn string, log *slog.Logger) (*DB, error) {
+	// Quote the options value — the space between -c and statement_timeout=5s
+	// would break the key=value DSN parser without single quotes.
+	dashboardDSN := dsn + " options='-c statement_timeout=5s'"
+	db, err := gorm.Open(postgres.Open(dashboardDSN), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open dashboard postgres: %w", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("get underlying dashboard sql.DB: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(5)
+	sqlDB.SetMaxIdleConns(2)
+	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
+	return &DB{db: db, log: log}, nil
+}
+
 // Close closes the database.
 func (d *DB) Close() error {
 	sqlDB, err := d.db.DB()

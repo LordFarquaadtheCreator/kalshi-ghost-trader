@@ -1,6 +1,7 @@
 package dashboardapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,8 @@ import (
 	_ "net/http/pprof"
 	"runtime"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/backtest"
 	"github.com/farquaad/kalshi-ghost-trader/internal/config"
@@ -44,6 +47,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/paper-orders-insights", corsHandler(s.paperOrdersInsightsHandler))
 	mux.HandleFunc("/api/ticks", corsHandler(s.ticksHandler))
 	mux.HandleFunc("/api/orders", corsHandler(s.ordersHandler))
+	mux.HandleFunc("/api/paper-orders/meta", corsHandler(s.paperOrdersMetaHandler))
+	mux.HandleFunc("/api/paper-orders/summary", corsHandler(s.paperOrdersSummaryHandler))
+	mux.HandleFunc("/api/paper-orders", corsHandler(s.paperOrdersHandler))
 	mux.HandleFunc("/api/order-counts", corsHandler(s.orderCountsHandler))
 	mux.HandleFunc("/api/pending-order-counts", corsHandler(s.pendingOrderCountsHandler))
 	mux.HandleFunc("/api/passed-matches", corsHandler(s.passedMatchesHandler))
@@ -55,7 +61,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/trigger-ranges", corsHandler(s.triggerRangesHandler))
 	mux.HandleFunc("/api/app-config", corsHandler(s.appConfigHandler))
 	mux.Handle("/debug/pprof/", http.DefaultServeMux)
-	return corsMiddleware(mux)
+	// 10s timeout for all API routes. /api/simulation reads pre-computed data
+	// (no recompute), so 10s is plenty. pprof endpoints are exempt (long captures).
+	return corsMiddleware(http.TimeoutHandler(mux, 10*time.Second, "request timeout"))
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
@@ -646,4 +654,114 @@ func (s *Server) appConfigHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// --- R.2: split paper-orders API ---
+
+// parsePaperOrderFilters reads filter params from the request URL.
+func parsePaperOrderFilters(r *http.Request) dashboarddata.PaperOrderFilters {
+	q := r.URL.Query()
+	var f dashboarddata.PaperOrderFilters
+	if s := q.Get("strategies"); s != "" {
+		f.Strategies = strings.Split(s, ",")
+	}
+	if v, err := strconv.ParseFloat(q.Get("min_price"), 64); err == nil {
+		f.MinPrice = v
+	}
+	if v, err := strconv.ParseFloat(q.Get("max_price"), 64); err == nil {
+		f.MaxPrice = v
+	}
+	f.Match = q.Get("match")
+	f.Result = q.Get("result")
+	return f
+}
+
+func (s *Server) paperOrdersMetaHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=60")
+
+	strategies, err := s.deps.LiveStore.GetPaperOrdersMeta(ctx)
+	if err != nil {
+		s.deps.Log.Error("paper-orders meta: get strategies", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"strategies": strategies})
+}
+
+func (s *Server) paperOrdersSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=15")
+
+	filters := parsePaperOrderFilters(r)
+	summary, err := s.deps.LiveStore.GetPaperOrdersSummaryFiltered(ctx, filters)
+	if err != nil {
+		s.deps.Log.Error("paper-orders summary: query", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(summary)
+}
+
+func (s *Server) paperOrdersHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=5")
+
+	filters := parsePaperOrderFilters(r)
+
+	// Delta mode: after_ts param present → return new rows only.
+	if afterStr := r.URL.Query().Get("after_ts"); afterStr != "" {
+		afterTS, err := strconv.ParseInt(afterStr, 10, 64)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid after_ts"})
+			return
+		}
+		orders, err := s.deps.LiveStore.GetPaperOrdersDelta(ctx, afterTS, filters)
+		if err != nil {
+			s.deps.Log.Error("paper-orders delta: query", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"orders": orders})
+		return
+	}
+
+	// Page mode: cursor-based pagination.
+	limit := 200
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	var cursor *dashboarddata.PaperOrderCursor
+	if tsStr := r.URL.Query().Get("cursor_ts"); tsStr != "" {
+		ts, err := strconv.ParseInt(tsStr, 10, 64)
+		if err == nil {
+			idStr := r.URL.Query().Get("cursor_id")
+			id, _ := strconv.ParseInt(idStr, 10, 64)
+			cursor = &dashboarddata.PaperOrderCursor{TS: ts, ID: id}
+		}
+	}
+
+	resp, err := s.deps.LiveStore.GetPaperOrdersPageFiltered(ctx, filters, cursor, limit)
+	if err != nil {
+		s.deps.Log.Error("paper-orders page: query", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(resp)
 }

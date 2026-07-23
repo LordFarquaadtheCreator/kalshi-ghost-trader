@@ -213,8 +213,16 @@ func main() {
 	}
 	defer btEngine.Close()
 
-	// Dashboard live-query store (separate from backtest replay engine)
-	liveStore, err := dashboarddata.NewLiveStore(db.GormDB(), log)
+	// Dashboard live-query store (separate from backtest replay engine).
+	// Uses a dedicated read pool with statement_timeout=5s so slow dashboard
+	// queries can't block the writer pool.
+	dashboardDB, err := store.NewDashboardDB(ctx, appCfg.DBDSN, log)
+	if err != nil {
+		log.Error("dashboard db init failed", "err", err)
+		os.Exit(1)
+	}
+	defer dashboardDB.Close()
+	liveStore, err := dashboarddata.NewLiveStore(dashboardDB.GormDB(), log)
 	if err != nil {
 		log.Error("dashboard live store init failed", "err", err)
 		os.Exit(1)

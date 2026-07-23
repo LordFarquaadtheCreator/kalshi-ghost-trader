@@ -356,3 +356,178 @@ func TestGetEventTickPricesEmptyEvent(t *testing.T) {
 		t.Errorf("Markets = %d, want 0 for unknown event", len(data.Markets))
 	}
 }
+
+// --- R.2: filter helper + summary tests ---
+
+func TestPaperOrderFiltersWhereClause(t *testing.T) {
+	tests := []struct {
+		name   string
+		f      PaperOrderFilters
+		want   string
+		argCnt int
+	}{
+		{"empty", PaperOrderFilters{}, "", 0},
+		{"strategies only", PaperOrderFilters{Strategies: []string{"a", "b"}},
+			"strategy IN (?)", 1},
+		{"min_price only", PaperOrderFilters{MinPrice: 0.5}, "market_price >= ?", 1},
+		{"max_price only", PaperOrderFilters{MaxPrice: 0.9}, "market_price <= ?", 1},
+		{"match only", PaperOrderFilters{Match: "KXATP"}, "match_ticker LIKE '%'||?||'%'", 1},
+		{"result=yes", PaperOrderFilters{Result: "yes"}, "result = 'yes'", 0},
+		{"result=no", PaperOrderFilters{Result: "no"},
+			"result IS NOT NULL AND result <> '' AND result <> 'yes'", 0},
+		{"result=pending", PaperOrderFilters{Result: "pending"},
+			"(result IS NULL OR result = '')", 0},
+		{"result=invalid (no clause)", PaperOrderFilters{Result: "xyz"}, "", 0},
+		{"all combined", PaperOrderFilters{
+			Strategies: []string{"a"}, MinPrice: 0.3, MaxPrice: 0.7,
+			Match: "KX", Result: "yes",
+		}, "strategy IN (?) AND market_price >= ? AND market_price <= ? AND match_ticker LIKE '%'||?||'%' AND result = 'yes'", 4},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, args := tc.f.WhereClause()
+			if got != tc.want {
+				t.Errorf("WhereClause() = %q, want %q", got, tc.want)
+			}
+			if len(args) != tc.argCnt {
+				t.Errorf("args count = %d, want %d", len(args), tc.argCnt)
+			}
+		})
+	}
+}
+
+func TestGetPaperOrdersSummaryFilteredAll(t *testing.T) {
+	s := testLiveStore(t, func(db *gorm.DB) {
+		seedDashboardData(db)
+		// Set result on orders directly (denormalized — R.1).
+		db.Model(&store.Order{}).Where("market_ticker = ?", "M1").Update("result", "yes")
+		db.Model(&store.Order{}).Where("market_ticker = ?", "M2").Update("result", "no")
+	})
+	resp, err := s.GetPaperOrdersSummaryFiltered(context.Background(), PaperOrderFilters{})
+	if err != nil {
+		t.Fatalf("GetPaperOrdersSummaryFiltered: %v", err)
+	}
+	if resp.Total.TotalOrders != 2 {
+		t.Errorf("total orders = %d, want 2", resp.Total.TotalOrders)
+	}
+	if resp.Total.Resolved != 2 {
+		t.Errorf("resolved = %d, want 2", resp.Total.Resolved)
+	}
+	if resp.Total.Wins != 1 {
+		t.Errorf("wins = %d, want 1", resp.Total.Wins)
+	}
+	if resp.Total.Losses != 1 {
+		t.Errorf("losses = %d, want 1", resp.Total.Losses)
+	}
+	if len(resp.Strategies) != 1 {
+		t.Fatalf("strategies = %d, want 1", len(resp.Strategies))
+	}
+	if resp.Strategies[0].Strategy != "matchpoint" {
+		t.Errorf("strategy = %q, want matchpoint", resp.Strategies[0].Strategy)
+	}
+}
+
+func TestGetPaperOrdersSummaryFilteredByStrategy(t *testing.T) {
+	s := testLiveStore(t, func(db *gorm.DB) {
+		seedDashboardData(db)
+		db.Model(&store.Order{}).Where("market_ticker = ?", "M1").Update("result", "yes")
+		db.Model(&store.Order{}).Where("market_ticker = ?", "M2").Update("result", "no")
+		// Add a setpoint order
+		db.Create(&store.Order{
+			TS: 1699990200, MatchTicker: "E1", MarketTicker: "M1",
+			Strategy: "setpoint", Action: "buy", Side: "open",
+			MarketPrice: 0.30, SuggestedSize: 5, Result: "yes",
+		})
+	})
+	// Filter by matchpoint only
+	resp, err := s.GetPaperOrdersSummaryFiltered(context.Background(), PaperOrderFilters{
+		Strategies: []string{"matchpoint"},
+	})
+	if err != nil {
+		t.Fatalf("GetPaperOrdersSummaryFiltered: %v", err)
+	}
+	if resp.Total.TotalOrders != 2 {
+		t.Errorf("total orders = %d, want 2 (matchpoint only)", resp.Total.TotalOrders)
+	}
+	if len(resp.Strategies) != 1 {
+		t.Errorf("strategies = %d, want 1", len(resp.Strategies))
+	}
+	if resp.Strategies[0].Strategy != "matchpoint" {
+		t.Errorf("strategy = %q, want matchpoint", resp.Strategies[0].Strategy)
+	}
+}
+
+func TestGetPaperOrdersPageFiltered(t *testing.T) {
+	s := testLiveStore(t, func(db *gorm.DB) {
+		seedDashboardData(db)
+		db.Model(&store.Order{}).Where("market_ticker = ?", "M1").Update("result", "yes")
+		db.Model(&store.Order{}).Where("market_ticker = ?", "M2").Update("result", "no")
+	})
+	resp, err := s.GetPaperOrdersPageFiltered(context.Background(), PaperOrderFilters{}, nil, 10)
+	if err != nil {
+		t.Fatalf("GetPaperOrdersPageFiltered: %v", err)
+	}
+	if len(resp.Orders) != 2 {
+		t.Fatalf("orders = %d, want 2", len(resp.Orders))
+	}
+	if resp.HasMore {
+		t.Error("HasMore = true, want false")
+	}
+	// Newest first
+	if resp.Orders[0].TS != 1699990100 {
+		t.Errorf("orders[0].TS = %d, want 1699990100", resp.Orders[0].TS)
+	}
+	// Result denormalized
+	for _, o := range resp.Orders {
+		if o.MarketTicker == "M1" && o.Result != "yes" {
+			t.Errorf("M1 result = %q, want yes", o.Result)
+		}
+		if o.MarketTicker == "M2" && o.Result != "no" {
+			t.Errorf("M2 result = %q, want no", o.Result)
+		}
+	}
+}
+
+func TestGetPaperOrdersPageFilteredByStrategy(t *testing.T) {
+	s := testLiveStore(t, func(db *gorm.DB) {
+		seedDashboardData(db)
+		db.Create(&store.Order{
+			TS: 1699990200, MatchTicker: "E1", MarketTicker: "M1",
+			Strategy: "setpoint", Action: "buy", Side: "open",
+			MarketPrice: 0.30, SuggestedSize: 5,
+		})
+	})
+	resp, err := s.GetPaperOrdersPageFiltered(context.Background(),
+		PaperOrderFilters{Strategies: []string{"setpoint"}}, nil, 10)
+	if err != nil {
+		t.Fatalf("GetPaperOrdersPageFiltered: %v", err)
+	}
+	if len(resp.Orders) != 1 {
+		t.Fatalf("orders = %d, want 1 (setpoint only)", len(resp.Orders))
+	}
+	if resp.Orders[0].Strategy != "setpoint" {
+		t.Errorf("strategy = %q, want setpoint", resp.Orders[0].Strategy)
+	}
+}
+
+func TestGetPaperOrdersDelta(t *testing.T) {
+	s := testLiveStore(t, func(db *gorm.DB) {
+		seedDashboardData(db)
+	})
+	// afterTS before all orders → get both
+	orders, err := s.GetPaperOrdersDelta(context.Background(), 1699980000, PaperOrderFilters{})
+	if err != nil {
+		t.Fatalf("GetPaperOrdersDelta: %v", err)
+	}
+	if len(orders) != 2 {
+		t.Fatalf("delta = %d, want 2", len(orders))
+	}
+	// afterTS after all orders → get none
+	orders, err = s.GetPaperOrdersDelta(context.Background(), 1700000000, PaperOrderFilters{})
+	if err != nil {
+		t.Fatalf("GetPaperOrdersDelta: %v", err)
+	}
+	if len(orders) != 0 {
+		t.Fatalf("delta = %d, want 0", len(orders))
+	}
+}

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -24,9 +26,10 @@ const scoreRecencyWindow = 10 * time.Minute
 // It caches event titles (loaded once at construction) for cheap lookup
 // in hot paths like the tracked-matches handler.
 type LiveStore struct {
-	db           *gorm.DB
-	log          *slog.Logger
-	eventTitles  map[string]string
+	db          *gorm.DB
+	log         *slog.Logger
+	eventTitles map[string]string
+	metaCache   metaCache
 }
 
 // NewLiveStore creates a LiveStore over an existing gorm DB handle.
@@ -664,5 +667,252 @@ GROUP BY o.match_ticker`, tickers).Scan(&orderAggs).Error
 			out[i].NetPnL = oa.NetPnL
 		}
 	}
+	return out, nil
+}
+
+// --- R.2: split paper-orders API with server-side filtering ---
+
+// PaperOrderFilters holds the filter parameters for the paper-orders route.
+// All fields are optional — zero values mean "no filter on this field".
+type PaperOrderFilters struct {
+	Strategies []string
+	MinPrice   float64
+	MaxPrice   float64
+	Match      string
+	Result     string // "yes", "no", "pending", ""
+}
+
+// WhereClause returns a SQL WHERE clause (without the leading keyword) and
+// the bind args for the filters. Returns ("", nil) when no filters are set.
+func (f PaperOrderFilters) WhereClause() (string, []any) {
+	var clauses []string
+	var args []any
+	if len(f.Strategies) > 0 {
+		clauses = append(clauses, "strategy IN (?)")
+		args = append(args, f.Strategies)
+	}
+	if f.MinPrice > 0 {
+		clauses = append(clauses, "market_price >= ?")
+		args = append(args, f.MinPrice)
+	}
+	if f.MaxPrice > 0 {
+		clauses = append(clauses, "market_price <= ?")
+		args = append(args, f.MaxPrice)
+	}
+	if f.Match != "" {
+		clauses = append(clauses, "match_ticker LIKE '%'||?||'%'")
+		args = append(args, f.Match)
+	}
+	switch f.Result {
+	case "yes":
+		clauses = append(clauses, "result = 'yes'")
+	case "no":
+		clauses = append(clauses, "result IS NOT NULL AND result <> '' AND result <> 'yes'")
+	case "pending":
+		clauses = append(clauses, "(result IS NULL OR result = '')")
+	}
+	if len(clauses) == 0 {
+		return "", nil
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
+// PaperOrderStrategySummary is one row in the per-strategy GROUP BY summary.
+type PaperOrderStrategySummary struct {
+	Strategy      string  `json:"strategy" gorm:"column:strategy"`
+	TotalOrders   int     `json:"total_orders" gorm:"column:total_orders"`
+	Resolved      int     `json:"resolved" gorm:"column:resolved"`
+	Wins          int     `json:"wins" gorm:"column:wins"`
+	Losses        int     `json:"losses" gorm:"column:losses"`
+	Pending       int     `json:"pending" gorm:"column:pending"`
+	TotalInvested float64 `json:"total_invested" gorm:"column:total_invested"`
+	NetPnL        float64 `json:"net_pnl" gorm:"column:net_pnl"`
+}
+
+// PaperOrderSummaryResponse is the full summary response: per-strategy rows
+// plus a total row (strategy = "").
+type PaperOrderSummaryResponse struct {
+	Strategies []PaperOrderStrategySummary `json:"strategies"`
+	Total      PaperOrderStrategySummary   `json:"total"`
+}
+
+// GetPaperOrdersSummaryFiltered computes per-strategy + total aggregates in
+// one GROUP BY pass over the denormalized orders table. No join needed —
+// result lives on orders directly (R.1).
+func (s *LiveStore) GetPaperOrdersSummaryFiltered(ctx context.Context, f PaperOrderFilters) (*PaperOrderSummaryResponse, error) {
+	where, args := f.WhereClause()
+
+	baseSelect := `
+SELECT
+  COUNT(*) as total_orders,
+  SUM(CASE WHEN result IS NOT NULL AND result <> '' THEN 1 ELSE 0 END) as resolved,
+  SUM(CASE WHEN result = 'yes' THEN 1 ELSE 0 END) as wins,
+  SUM(CASE WHEN result IS NOT NULL AND result <> '' AND result <> 'yes' THEN 1 ELSE 0 END) as losses,
+  SUM(CASE WHEN result IS NULL OR result = '' THEN 1 ELSE 0 END) as pending,
+  COALESCE(SUM(suggested_size * market_price), 0) as total_invested,
+  COALESCE(SUM(CASE WHEN result = 'yes' THEN suggested_size * (1.0 - market_price)
+                    WHEN result IS NOT NULL AND result <> '' THEN -suggested_size * market_price
+                    ELSE 0 END), 0) as net_pnl`
+
+	// Per-strategy rows
+	perStrategySQL := baseSelect + ", strategy FROM orders"
+	if where != "" {
+		perStrategySQL += " WHERE " + where
+	}
+	perStrategySQL += " GROUP BY strategy ORDER BY strategy"
+
+	var rows []PaperOrderStrategySummary
+	if err := s.db.WithContext(ctx).Raw(perStrategySQL, args...).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("query paper order summary per-strategy: %w", err)
+	}
+
+	// Total row
+	totalSQL := baseSelect + " FROM orders"
+	if where != "" {
+		totalSQL += " WHERE " + where
+	}
+	var total PaperOrderStrategySummary
+	if err := s.db.WithContext(ctx).Raw(totalSQL, args...).Scan(&total).Error; err != nil {
+		return nil, fmt.Errorf("query paper order summary total: %w", err)
+	}
+	total.Strategy = ""
+
+	return &PaperOrderSummaryResponse{Strategies: rows, Total: total}, nil
+}
+
+// PaperOrderPageRow is one row in the paginated paper-orders response.
+type PaperOrderPageRow struct {
+	ID            int64   `json:"id" gorm:"column:id"`
+	TS            int64   `json:"ts" gorm:"column:ts"`
+	MatchTicker   string  `json:"match_ticker" gorm:"column:match_ticker"`
+	MarketTicker  string  `json:"market_ticker" gorm:"column:market_ticker"`
+	PlayerName    string  `json:"player_name" gorm:"column:player_name"`
+	Context       string  `json:"context" gorm:"column:context"`
+	MarketPrice   float64 `json:"market_price" gorm:"column:market_price"`
+	EdgeCents     int     `json:"edge_cents" gorm:"column:edge_cents"`
+	SuggestedSize float64 `json:"suggested_size" gorm:"column:suggested_size"`
+	Strategy      string  `json:"strategy" gorm:"column:strategy"`
+	Result        string  `json:"result" gorm:"column:result"`
+	SettledTS     int64   `json:"settled_ts" gorm:"column:settled_ts"`
+}
+
+// PaperOrderPageResponse is the paginated response for /api/paper-orders.
+type PaperOrderPageResponse struct {
+	Orders     []PaperOrderPageRow `json:"orders"`
+	HasMore    bool                `json:"has_more"`
+	NextCursor *PaperOrderCursor   `json:"next_cursor,omitempty"`
+}
+
+// GetPaperOrdersPageFiltered returns one keyset-paginated page of paper orders
+// with server-side filters applied. cursor is the (ts, id) of the last row
+// from the previous page; nil for the first page. limit is clamped to [1, 1000].
+func (s *LiveStore) GetPaperOrdersPageFiltered(ctx context.Context, f PaperOrderFilters, cursor *PaperOrderCursor, limit int) (*PaperOrderPageResponse, error) {
+	if limit < 1 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	where, args := f.WhereClause()
+
+	var clauses []string
+	if where != "" {
+		clauses = append(clauses, where)
+	}
+	if cursor != nil {
+		clauses = append(clauses, "(o.ts, o.id) < (?, ?)")
+		args = append(args, cursor.TS, cursor.ID)
+	}
+
+	whereSQL := ""
+	if len(clauses) > 0 {
+		whereSQL = "WHERE " + strings.Join(clauses, " AND ")
+	}
+
+	query := `
+SELECT o.ts, o.id, o.match_ticker, o.market_ticker, o.context,
+       o.market_price, o.edge_cents, o.suggested_size, o.strategy,
+       o.result, o.settled_ts,
+       m.player_name
+FROM orders o
+LEFT JOIN markets m ON o.market_ticker = m.market_ticker
+` + whereSQL + `
+ORDER BY o.ts DESC, o.id DESC
+LIMIT ?`
+	args = append(args, limit+1)
+
+	var orders []PaperOrderPageRow
+	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&orders).Error; err != nil {
+		return nil, fmt.Errorf("query paper orders page filtered: %w", err)
+	}
+
+	hasMore := len(orders) > limit
+	if hasMore {
+		orders = orders[:limit]
+	}
+	var next *PaperOrderCursor
+	if hasMore {
+		last := orders[len(orders)-1]
+		next = &PaperOrderCursor{TS: last.TS, ID: last.ID}
+	}
+	return &PaperOrderPageResponse{Orders: orders, HasMore: hasMore, NextCursor: next}, nil
+}
+
+// GetPaperOrdersDelta returns orders newer than afterTS with filters applied.
+// Used by the frontend polling loop — prepends new rows to the existing list.
+// Capped at 500 rows.
+func (s *LiveStore) GetPaperOrdersDelta(ctx context.Context, afterTS int64, f PaperOrderFilters) ([]PaperOrderPageRow, error) {
+	where, args := f.WhereClause()
+
+	var clauses []string
+	clauses = append(clauses, "o.ts > ?")
+	args = append(args, afterTS)
+	if where != "" {
+		clauses = append(clauses, where)
+	}
+
+	query := `
+SELECT o.ts, o.id, o.match_ticker, o.market_ticker, o.context,
+       o.market_price, o.edge_cents, o.suggested_size, o.strategy,
+       o.result, o.settled_ts,
+       m.player_name
+FROM orders o
+LEFT JOIN markets m ON o.market_ticker = m.market_ticker
+WHERE ` + strings.Join(clauses, " AND ") + `
+ORDER BY o.ts DESC, o.id DESC
+LIMIT 500`
+
+	var orders []PaperOrderPageRow
+	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&orders).Error; err != nil {
+		return nil, fmt.Errorf("query paper orders delta: %w", err)
+	}
+	return orders, nil
+}
+
+// metaCache holds the strategy list for the /meta endpoint with a 60s TTL.
+type metaCache struct {
+	mu         sync.Mutex
+	strategies []string
+	expiry     time.Time
+}
+
+// GetPaperOrdersMeta returns the list of distinct strategies that have fired
+// at least one order. Cached for 60 seconds — the list rarely changes.
+func (s *LiveStore) GetPaperOrdersMeta(ctx context.Context) ([]string, error) {
+	s.metaCache.mu.Lock()
+	defer s.metaCache.mu.Unlock()
+	if time.Now().Before(s.metaCache.expiry) && s.metaCache.strategies != nil {
+		return s.metaCache.strategies, nil
+	}
+	var out []string
+	err := s.db.WithContext(ctx).Raw(`
+SELECT DISTINCT strategy FROM orders
+WHERE strategy <> '' ORDER BY strategy`).Scan(&out).Error
+	if err != nil {
+		return nil, fmt.Errorf("query paper order strategies: %w", err)
+	}
+	s.metaCache.strategies = out
+	s.metaCache.expiry = time.Now().Add(60 * time.Second)
 	return out, nil
 }
