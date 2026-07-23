@@ -31,7 +31,11 @@ All under `http.ServeMux`. CORS-enabled routes wrapped in `corsHandler`.
 | GET | `/api/simulation` | Pre-computed simulation insights + backtest summaries + cum P&L |
 | GET | `/api/paper-orders-insights` | Pre-computed paper order insights + summaries |
 | GET | `/api/ticks?event=` | Tick prices + orders for an event (chart data) |
-| GET | `/api/orders?limit=&cursor_ts=&cursor_id=` | Paper orders page (cursor pagination) |
+| GET | `/api/orders?limit=&cursor_ts=&cursor_id=` | Paper orders page (cursor pagination) — legacy, replaced by `/api/paper-orders` |
+| GET | `/api/paper-orders/meta` | Distinct strategy list (60s cache) |
+| GET | `/api/paper-orders/summary?strategies=&min_price=&max_price=&match=&result=` | Per-strategy + total aggregates (server-side GROUP BY) |
+| GET | `/api/paper-orders?strategies=&...&cursor_ts=&cursor_id=&limit=` | Paper orders page with server-side filtering + cursor pagination |
+| GET | `/api/paper-orders?after_ts=&...` | Delta mode: new orders since afterTS (for polling) |
 | GET | `/api/order-counts` | Sim order counts per event |
 | GET | `/api/pending-order-counts` | Pending sim order counts per event |
 | GET | `/api/passed-matches?limit=` | Recently finalized matches |
@@ -58,5 +62,7 @@ pprof endpoints (`/debug/pprof/*`) registered via blank import of `net/http/ppro
 ## Gotchas
 
 - `WriteTimeout` is 120s on the outer `http.Server` — long-running backtest recompute on `/api/simulation` first call can take a while.
+- `TimeoutHandler` wraps the mux with a 10s deadline. pprof endpoints are registered on the raw mux (exempt). All API routes get 10s — plenty for pre-computed data.
 - `Engine` is the backtest replay engine; `LiveStore` is the dashboard's live DB query layer. Don't add live queries to `Engine` — put them in `dashboarddata`.
 - `corsHandler` wraps mutation endpoints so the dashboard (port 5173) can call the API (port 6060) without proxy config.
+- Dashboard reads use a dedicated `NewDashboardDB` pool (`statement_timeout=5s`, `MaxOpenConns=5`) so slow queries can't block the writer pool.

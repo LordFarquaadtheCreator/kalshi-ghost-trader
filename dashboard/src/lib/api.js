@@ -92,6 +92,32 @@ async function mutate(/** @type {string} */ url, /** @type {string} */ method, /
   return res.json();
 }
 
+// paperOrderFilterParams builds a query string from filter fields for the
+// split paper-orders API. Skips empty/zero values so the URL is clean.
+/** @param {{strategies?: string[], min_price?: number, max_price?: number, match?: string, result?: string, after_ts?: number, cursor_ts?: number, cursor_id?: number, limit?: number}} filters */
+function paperOrderFilterParams(filters) {
+  const params = new URLSearchParams();
+  if (filters?.strategies && filters.strategies.length > 0) {
+    params.set('strategies', filters.strategies.join(','));
+  }
+  if (filters?.min_price && filters.min_price > 0) {
+    params.set('min_price', String(filters.min_price));
+  }
+  if (filters?.max_price && filters.max_price > 0) {
+    params.set('max_price', String(filters.max_price));
+  }
+  if (filters?.match) params.set('match', filters.match);
+  if (filters?.result) params.set('result', filters.result);
+  if (filters?.after_ts !== undefined) params.set('after_ts', String(filters.after_ts));
+  if (filters?.cursor_ts !== undefined) {
+    params.set('cursor_ts', String(filters.cursor_ts));
+    params.set('cursor_id', String(filters.cursor_id ?? 0));
+  }
+  if (filters?.limit) params.set('limit', String(filters.limit));
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
 export const api = {
   get metricsUrl() { return `${GHOST_TRADER_URL}/metrics`; },
 
@@ -127,6 +153,30 @@ export const api = {
     // Bypass cache for paginated cursors — each page is distinct.
     if (opts?.cursor_ts !== undefined) return rawFetch(url);
     return cachedFetch(url, TTL.orders);
+  },
+
+  // --- R.2/R.3: split paper-orders API ---
+
+  async getPaperOrdersMeta() {
+    return cachedFetch(`${STRATEGY_API_URL}/api/paper-orders/meta`, 60_000);
+  },
+
+  /** @param {{strategies?: string[], min_price?: number, max_price?: number, match?: string, result?: string}} [filters] */
+  async getPaperOrdersSummary(filters = {}) {
+    const qs = paperOrderFilterParams(filters);
+    return rawFetch(`${STRATEGY_API_URL}/api/paper-orders/summary${qs}`);
+  },
+
+  /** @param {{strategies?: string[], min_price?: number, max_price?: number, match?: string, result?: string, cursor_ts?: number, cursor_id?: number, limit?: number}} [filters] */
+  async getPaperOrdersPage(filters = {}) {
+    const qs = paperOrderFilterParams(filters);
+    return rawFetch(`${STRATEGY_API_URL}/api/paper-orders${qs}`);
+  },
+
+  /** @param {number} afterTS @param {{strategies?: string[], min_price?: number, max_price?: number, match?: string, result?: string}} [filters] */
+  async getPaperOrdersDelta(afterTS, filters = {}) {
+    const qs = paperOrderFilterParams({ ...filters, after_ts: afterTS });
+    return rawFetch(`${STRATEGY_API_URL}/api/paper-orders${qs}`);
   },
 
   async getTicks(/** @type {string} */ eventTicker) {
