@@ -25,33 +25,41 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/tracker"
 )
 
+// pendingEntry tracks a scheduled goroutine so it can be cancelled when the
+// schedule changes (occurrence_ts moved earlier or later by schedulechecker).
+type pendingEntry struct {
+	startAt time.Time
+	cancel  context.CancelFunc
+}
+
 // Scheduler starts tracking markets at occurrence_datetime - leadMinutes.
 // Periodically re-scans for new matches and schedules them.
 type Scheduler struct {
 	db      *store.DB
 	tracker *tracker.Tracker
-	lead    time.Duration
 	log     *slog.Logger
 
 	mu      sync.Mutex
-	pending map[string]time.Time // market_ticker -> scheduled start time
+	pending map[string]*pendingEntry // market_ticker -> scheduled entry
 }
 
-// New creates a scheduler. leadMinutes is read from config.Cfg.TrackLeadMinutes.
+// New creates a scheduler. leadMinutes and poll interval are read live from
+// config.Cfg each pass so dashboard updates take effect without restart.
 func New(db *store.DB, tr *tracker.Tracker, log *slog.Logger) *Scheduler {
 	return &Scheduler{
 		db:      db,
 		tracker: tr,
-		lead:    time.Duration(config.Cfg.TrackLeadMinutes) * time.Minute,
 		log:     log,
-		pending: make(map[string]time.Time),
+		pending: make(map[string]*pendingEntry),
 	}
 }
 
 // Run periodically polls the DB for active markets and schedules tracking
-// for those whose occurrence_datetime is approaching.
+// for those whose occurrence_datetime is approaching. Poll interval is read
+// live from config — ticker is recreated when the value changes.
 func (s *Scheduler) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(config.Cfg.SchedulerPollSecs) * time.Second)
+	interval := s.pollInterval()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	// Run immediately
@@ -62,9 +70,24 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			// Recreate ticker if poll interval changed via dashboard
+			if newInterval := s.pollInterval(); newInterval != interval {
+				interval = newInterval
+				ticker.Reset(interval)
+			}
 			s.scheduleDue(ctx)
 		}
 	}
+}
+
+// pollInterval reads SchedulerPollSecs live from config.
+func (s *Scheduler) pollInterval() time.Duration {
+	return time.Duration(config.Cfg.SchedulerPollSecs) * time.Second
+}
+
+// lead reads TrackLeadMinutes live from config.
+func (s *Scheduler) lead() time.Duration {
+	return time.Duration(config.Cfg.TrackLeadMinutes) * time.Minute
 }
 
 // scheduleDue queries active markets, starts tracking those due soon,
@@ -92,6 +115,7 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 	}
 
 	now := time.Now()
+	lead := s.lead()
 	// Sort by occurrence time so we log in order
 	sort.Slice(markets, func(i, j int) bool {
 		return markets[i].OccurrenceTS < markets[j].OccurrenceTS
@@ -127,7 +151,7 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 		}
 
 		occurrence := time.UnixMilli(m.OccurrenceTS)
-		startAt := occurrence.Add(-s.lead)
+		startAt := occurrence.Add(-lead)
 
 		// Already tracking?
 		if trackingSet[m.MarketTicker] {
@@ -136,15 +160,32 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 
 		// Already pending?
 		s.mu.Lock()
-		_, pending := s.pending[m.MarketTicker]
+		entry, pending := s.pending[m.MarketTicker]
 		s.mu.Unlock()
 		if pending {
-			// Schedule checker may have moved occurrence_ts earlier.
-			// Re-check with fresh DB value — if new start time is past, track now.
-			// The scheduled goroutine will fire later and be a no-op (StartMatch is idempotent).
-			freshStart := time.UnixMilli(m.OccurrenceTS).Add(-s.lead)
-			if now.After(freshStart) {
+			// Schedule checker may have moved occurrence_ts (rain delay resolved,
+			// match moved up, or live-detection moved it to now). Re-evaluate
+			// against the fresh DB value.
+			freshStart := time.UnixMilli(m.OccurrenceTS).Add(-lead)
+			if now.After(freshStart) || liveEvents[m.EventTicker] {
+				// Due now — cancel the waiting goroutine and track immediately.
+				entry.cancel()
+				s.mu.Lock()
+				delete(s.pending, m.MarketTicker)
+				s.mu.Unlock()
 				s.startTracking(ctx, m.MarketTicker, m.EventTicker)
+			} else if !freshStart.Equal(entry.startAt) {
+				// Schedule shifted (earlier or later) but still in the future.
+				// Cancel the stale goroutine and reschedule with the new time.
+				entry.cancel()
+				s.mu.Lock()
+				delete(s.pending, m.MarketTicker)
+				s.mu.Unlock()
+				s.scheduleLater(ctx, m.MarketTicker, m.EventTicker, freshStart)
+				scheduled++
+				s.log.Info("rescheduled match", "market", m.MarketTicker,
+					"old_start", entry.startAt.Format(time.RFC3339),
+					"new_start", freshStart.Format(time.RFC3339))
 			}
 			continue
 		}
@@ -160,12 +201,7 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 			s.startTracking(ctx, m.MarketTicker, m.EventTicker)
 			scheduled++
 		} else {
-			// Schedule a goroutine that waits until startAt
-			s.mu.Lock()
-			s.pending[m.MarketTicker] = startAt
-			s.mu.Unlock()
-
-			go s.scheduleOne(ctx, m.MarketTicker, m.EventTicker, startAt)
+			s.scheduleLater(ctx, m.MarketTicker, m.EventTicker, startAt)
 			scheduled++
 			s.log.Info("scheduled match", "market", m.MarketTicker, "start_at", startAt.Format(time.RFC3339))
 		}
@@ -176,7 +212,21 @@ func (s *Scheduler) scheduleDue(ctx context.Context) {
 	}
 }
 
-// scheduleOne waits until the scheduled time, then starts tracking.
+// scheduleLater spawns a goroutine that waits until startAt, then tracks the
+// market. Registers a cancellable entry in the pending map so scheduleDue can
+// cancel it if the schedule changes before it fires.
+func (s *Scheduler) scheduleLater(ctx context.Context, market, eventTicker string, startAt time.Time) {
+	goroutineCtx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.pending[market] = &pendingEntry{startAt: startAt, cancel: cancel}
+	s.mu.Unlock()
+	go s.scheduleOne(goroutineCtx, market, eventTicker, startAt)
+}
+
+// scheduleOne waits until the scheduled time, then starts tracking. Verifies
+// the market is still active in the DB before subscribing — a market can be
+// settled/closed (walkover, retirement) between scheduling and fire time.
+// On cancel (schedule shifted or ctx cancelled) the pending entry is removed.
 func (s *Scheduler) scheduleOne(ctx context.Context, market, eventTicker string, startAt time.Time) {
 	wait := time.Until(startAt)
 	if wait > 0 {
@@ -185,7 +235,12 @@ func (s *Scheduler) scheduleOne(ctx context.Context, market, eventTicker string,
 		case <-ctx.Done():
 			timer.Stop()
 			s.mu.Lock()
-			delete(s.pending, market)
+			// Only delete if this entry still owns the slot. A reschedule
+			// already replaced it; deleting the new entry would leak the
+			// newer goroutine.
+			if e, ok := s.pending[market]; ok && e.startAt.Equal(startAt) {
+				delete(s.pending, market)
+			}
 			s.mu.Unlock()
 			return
 		case <-timer.C:
@@ -195,6 +250,23 @@ func (s *Scheduler) scheduleOne(ctx context.Context, market, eventTicker string,
 	s.mu.Lock()
 	delete(s.pending, market)
 	s.mu.Unlock()
+
+	// Verify market is still active before subscribing. A walkover or
+	// retirement between scheduling and fire time leaves the market
+	// settled/closed — subscribing would waste a WS slot + spawn a
+	// kalshilivedata poller that never resolves.
+	m, err := s.db.GetMarket(ctx, market)
+	if err != nil {
+		s.log.Warn("scheduleOne: market lookup failed", "market", market, "err", err)
+		return
+	}
+	switch m.Status {
+	case "open", "active", "determined":
+		// still trackable
+	default:
+		s.log.Info("scheduleOne: market no longer active, skipping", "market", market, "status", m.Status)
+		return
+	}
 
 	s.startTracking(ctx, market, eventTicker)
 }
