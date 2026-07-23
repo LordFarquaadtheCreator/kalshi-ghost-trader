@@ -124,6 +124,17 @@ func (d *DB) GetUpcomingMarkets(ctx context.Context) ([]Market, error) {
 	return markets, err
 }
 
+// UpdateOccurrenceTS updates occurrence_ts for all markets in an event.
+// Used by schedule checker live-detection: when live_data confirms a match
+// started, occurrence_ts is moved to now so the scheduler tracks immediately.
+// Returns the number of rows updated.
+func (d *DB) UpdateOccurrenceTS(ctx context.Context, eventTicker string, occTS int64) (int64, error) {
+	res := d.db.WithContext(ctx).Model(&Market{}).
+		Where("event_ticker = ?", eventTicker).
+		Update("occurrence_ts", occTS)
+	return res.RowsAffected, res.Error
+}
+
 // GetMarketsClosingWithin returns active markets whose close_ts falls within
 // [now, now+withinSecs]. Used by the close-timer strategy to find markets
 // approaching their close window.

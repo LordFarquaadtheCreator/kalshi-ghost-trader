@@ -34,7 +34,7 @@ Runtime configuration from `app_config` DB table. Owns CRUD methods using `store
 - `apitennis_timezone`
 - `kalshi_livedata_enabled`, `kalshi_livedata_poll_secs`
 - `close_timer_enabled`, `close_timer_lead_min`, `close_timer_min_price`, `close_timer_poll_secs`, `close_timer_size`
-- `reconciler_interval_secs`, `schedule_checker_interval_secs`
+- `reconciler_interval_secs`, `schedule_checker_interval_secs`, `schedule_checker_live_detection`
 - `order_quota_enabled`, `order_quota_cooldown_secs`, `order_quota_max_per_sec`
 - `order_quota_budget_total`, `order_quota_budget_floor`
 - `per_strategy_cooldown_secs`

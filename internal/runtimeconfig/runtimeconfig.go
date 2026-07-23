@@ -44,6 +44,7 @@ type RuntimeConfig struct {
 	ReconcilerIntervalSecs      int
 	OrderBackfillIntervalSecs   int
 	ScheduleCheckerIntervalSecs int
+	ScheduleCheckerLiveDetection bool
 
 	APITennisTimezone string
 
@@ -170,6 +171,7 @@ func (rc *RuntimeConfig) GetAll() []store.RuntimeConfig {
 		{Key: "reconciler_interval_secs", Value: strconv.Itoa(rc.ReconcilerIntervalSecs)},
 		{Key: "order_backfill_interval_secs", Value: strconv.Itoa(rc.OrderBackfillIntervalSecs)},
 		{Key: "schedule_checker_interval_secs", Value: strconv.Itoa(rc.ScheduleCheckerIntervalSecs)},
+		{Key: "schedule_checker_live_detection", Value: strconv.FormatBool(rc.ScheduleCheckerLiveDetection)},
 		{Key: "order_quota_enabled", Value: strconv.FormatBool(rc.OrderQuotaEnabled)},
 		{Key: "order_quota_cooldown_secs", Value: strconv.Itoa(rc.OrderQuotaCooldownSecs)},
 		{Key: "order_quota_max_per_sec", Value: strconv.Itoa(rc.OrderQuotaMaxPerSec)},
@@ -316,6 +318,7 @@ func (rc *RuntimeConfig) applyFromMap(m map[string]string) {
 	rc.ReconcilerIntervalSecs = atoi(m["reconciler_interval_secs"])
 	rc.OrderBackfillIntervalSecs = atoi(m["order_backfill_interval_secs"])
 	rc.ScheduleCheckerIntervalSecs = atoi(m["schedule_checker_interval_secs"])
+	rc.ScheduleCheckerLiveDetection = atob(m["schedule_checker_live_detection"])
 
 	rc.OrderQuotaEnabled = atob(m["order_quota_enabled"])
 	rc.OrderQuotaCooldownSecs = atoi(m["order_quota_cooldown_secs"])
