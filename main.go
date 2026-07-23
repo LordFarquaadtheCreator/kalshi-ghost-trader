@@ -354,11 +354,15 @@ func main() {
 
 	// 8. Price bands cron — compute missing days daily, persist to DB.
 	// Also computes simulation_insights (derived per-band metrics) alongside.
+	// After computation, auto-adds qualifying bands (win_rate > 90%, N > 100
+	// aggregated across all days) to trigger_ranges without clobbering
+	// existing manual edits.
 	g.Go(func() error {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
-		pricebands.ComputeMissingDays(db, log)        // initial run at startup
-		pricebands.ComputeMissingInsights(db, log)     // initial run at startup
+		pricebands.ComputeMissingDays(db, log)    // initial run at startup
+		pricebands.ComputeMissingInsights(db, log) // initial run at startup
+		pricebands.UpdateAutoBands(db, log)        // initial run at startup
 		for {
 			select {
 			case <-ctx.Done():
@@ -366,6 +370,7 @@ func main() {
 			case <-ticker.C:
 				pricebands.ComputeMissingDays(db, log)
 				pricebands.ComputeMissingInsights(db, log)
+				pricebands.UpdateAutoBands(db, log)
 			}
 		}
 	})
