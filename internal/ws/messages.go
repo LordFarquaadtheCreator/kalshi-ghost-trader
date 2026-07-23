@@ -4,9 +4,20 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/config"
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshiclient"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
+
+// payload returns the raw JSON string for storage, or "" when
+// store_raw_payloads is disabled in runtime config. Checked per-message
+// so dashboard toggles take effect without restart.
+func payload(raw []byte) string {
+	if !config.Cfg.StoreRawPayloads {
+		return ""
+	}
+	return string(raw)
+}
 
 // tickerMsg maps the Kalshi WS ticker message.
 type tickerMsg struct {
@@ -48,7 +59,7 @@ func (m *Manager) handleTicker(sid int64, msg json.RawMessage, raw []byte) {
 		DollarVolume:       t.DollarVolume,
 		DollarOpenInterest: t.DollarOpenInterest,
 		LastTradeSize:      kalshiclient.ParseFP(t.LastTradeSizeFP),
-		Payload:            string(raw),
+		Payload: payload(raw),
 	}
 
 	m.trackLatency(recvTs, t.TsMs)
@@ -98,7 +109,7 @@ func (m *Manager) handleTrade(sid int64, msg json.RawMessage, raw []byte) {
 		TakerSide:        t.TakerSide,
 		TakerOutcomeSide: t.TakerOutcomeSide,
 		TakerBookSide:    t.TakerBookSide,
-		Payload:          string(raw),
+		Payload: payload(raw),
 	}
 	m.trackLatency(recvTs, t.TsMs)
 	if !m.disableSave {
@@ -154,7 +165,7 @@ func (m *Manager) handleLifecycle(msg json.RawMessage, raw []byte) {
 		DeterminationTS: lc.DeterminationTS * secondsToMillis,
 		SettledTS:       lc.SettledTS * secondsToMillis,
 		IsDeactivated:   lc.IsDeactivated,
-		Payload:         string(raw),
+		Payload: payload(raw),
 	}
 	if !m.disableSave {
 		m.tickWriter.IngestLifecycle(le)
@@ -190,7 +201,7 @@ func (m *Manager) handleEventLifecycle(msg json.RawMessage, raw []byte) {
 			SeriesTicker: el.SeriesTicker,
 			Title:        el.Title,
 			Subtitle:     el.Subtitle,
-			Payload:      string(raw),
+			Payload: payload(raw),
 		})
 	}
 }
@@ -227,7 +238,7 @@ func (m *Manager) handleOrderbookSnapshot(sid, seq int64, msg json.RawMessage, r
 			MsgType:      "orderbook_snapshot",
 			SID:          sid,
 			Seq:          seq,
-			Payload:      string(raw),
+			Payload: payload(raw),
 		})
 	}
 }
@@ -254,7 +265,7 @@ func (m *Manager) handleOrderbookDelta(sid, seq int64, msg json.RawMessage, raw 
 			Price:        kalshiclient.ParseFP(d.PriceDollars),
 			Delta:        kalshiclient.ParseFP(d.DeltaFP),
 			Side:         d.Side,
-			Payload:      string(raw),
+			Payload: payload(raw),
 		})
 	}
 }

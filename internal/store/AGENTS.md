@@ -13,7 +13,7 @@ PostgreSQL layer. Single-writer architecture via TickWriter.
 - `orderbook.go` — InsertOrderbookBatch
 - `lifecycle.go` — InsertLifecycleEvent, InsertEventLifecycleEvent, ApplyLifecycleEvent
 - `scan.go` — RecordScanRun
-- `janitor.go` — CleanOrphans, AdoptOrphans
+- `janitor.go` — CleanOrphans, AdoptOrphans, NullOldPayloads
 - `tickwriter.go` — TickWriter goroutine (batched writes across 4 channels)
 - `appconfig.go` — app_config KV store, app_config_history (change tracking), liquidity_pool, strategy_config, trigger_ranges
 - `backtest.go` — SaveBacktestResult, GetAllBacktestResults, GetBacktestRunTS, GetLastFinalizedSettlementTS

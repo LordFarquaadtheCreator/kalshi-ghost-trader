@@ -412,6 +412,30 @@ func main() {
 		}
 	})
 
+	// 11. Payload janitor — hourly null of raw JSON payloads older than
+	// payload_retention_hours. Saves disk on processed data. Hot fields
+	// remain. Skips full-coverage events (needed for backtest replay).
+	g.Go(func() error {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				h := config.Cfg.PayloadRetentionHours
+				if h <= 0 {
+					continue
+				}
+				if n, err := db.NullOldPayloads(ctx, h, log); err != nil {
+					log.Error("null old payloads failed", "err", err)
+				} else if n > 0 {
+					log.Info("nulled old payloads", "count", n)
+				}
+			}
+		}
+	})
+
 	log.Info("ghost trader running", "scan_interval", time.Duration(config.Cfg.ScanIntervalHours)*time.Hour, "lead_minutes", config.Cfg.TrackLeadMinutes)
 
 	// Wait for shutdown signal or critical failure

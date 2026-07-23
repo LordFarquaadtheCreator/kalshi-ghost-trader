@@ -118,3 +118,67 @@ AND NOT EXISTS (SELECT 1 FROM events e WHERE e.event_ticker = el.event_ticker)`,
 	}
 	return nil
 }
+
+// NullOldPayloads nulls the payload column on ticks, orderbook_events,
+// lifecycle_events, and event_lifecycle_events older than retentionHours.
+// Saves disk on data that's already been processed — hot fields remain.
+// Skips events with coverage='full' (those are kept for replay/backtest).
+func (d *DB) NullOldPayloads(ctx context.Context, retentionHours int, log *slog.Logger) (int64, error) {
+	if retentionHours <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-time.Duration(retentionHours) * time.Hour).UnixMilli()
+
+	var total int64
+
+	// ticks — skip full-coverage events (needed for backtest replay)
+	res := d.db.WithContext(ctx).Exec(`
+UPDATE ticks SET payload = NULL
+WHERE ts < ? AND payload IS NOT NULL
+  AND market_ticker NOT IN (
+    SELECT m.market_ticker FROM markets m
+    JOIN events e ON m.event_ticker = e.event_ticker
+    WHERE e.coverage = 'full'
+  )`, cutoff)
+	if res.Error != nil {
+		return total, res.Error
+	}
+	total += res.RowsAffected
+
+	// orderbook_events — same coverage guard
+	res = d.db.WithContext(ctx).Exec(`
+UPDATE orderbook_events SET payload = NULL
+WHERE ts < ? AND payload IS NOT NULL
+  AND market_ticker NOT IN (
+    SELECT m.market_ticker FROM markets m
+    JOIN events e ON m.event_ticker = e.event_ticker
+    WHERE e.coverage = 'full'
+  )`, cutoff)
+	if res.Error != nil {
+		return total, res.Error
+	}
+	total += res.RowsAffected
+
+	// lifecycle_events — no coverage concept, just age
+	res = d.db.WithContext(ctx).Exec(`
+UPDATE lifecycle_events SET payload = NULL
+WHERE ts < ? AND payload IS NOT NULL`, cutoff)
+	if res.Error != nil {
+		return total, res.Error
+	}
+	total += res.RowsAffected
+
+	// event_lifecycle_events — no coverage concept, just age
+	res = d.db.WithContext(ctx).Exec(`
+UPDATE event_lifecycle_events SET payload = NULL
+WHERE ts < ? AND payload IS NOT NULL`, cutoff)
+	if res.Error != nil {
+		return total, res.Error
+	}
+	total += res.RowsAffected
+
+	if total > 0 {
+		log.Info("nulled old payloads", "count", total, "retention_hours", retentionHours)
+	}
+	return total, nil
+}

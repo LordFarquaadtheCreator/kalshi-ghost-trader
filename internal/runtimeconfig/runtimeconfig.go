@@ -73,6 +73,16 @@ type RuntimeConfig struct {
 	RealOrderTimeInForce string
 	RealOrderTimeoutS    int
 
+	// StoreRawPayloads controls whether WS handlers keep the raw JSON in
+	// ticks/orderbook/lifecycle payload columns. When false, payload is
+	// empty string on ingest — saves disk + COPY bandwidth. Existing rows
+	// keep their payloads; janitor nulls old ones per PayloadRetentionHours.
+	StoreRawPayloads bool
+
+	// PayloadRetentionHours is the age cutoff for NullOldPayloads janitor.
+	// Rows older than this many hours get payload=NULL. 0 disables janitor.
+	PayloadRetentionHours int
+
 	db *store.DB
 	mu sync.Mutex
 }
@@ -172,6 +182,8 @@ func (rc *RuntimeConfig) GetAll() []store.RuntimeConfig {
 		{Key: "real_bankroll", Value: strconv.FormatFloat(rc.RealBankroll, 'f', -1, 64)},
 		{Key: "real_order_time_in_force", Value: rc.RealOrderTimeInForce},
 		{Key: "real_order_timeout_s", Value: strconv.Itoa(rc.RealOrderTimeoutS)},
+		{Key: "store_raw_payloads", Value: strconv.FormatBool(rc.StoreRawPayloads)},
+		{Key: "payload_retention_hours", Value: strconv.Itoa(rc.PayloadRetentionHours)},
 	}
 }
 
@@ -320,6 +332,9 @@ func (rc *RuntimeConfig) applyFromMap(m map[string]string) {
 	rc.RealBankroll = atof(m["real_bankroll"])
 	rc.RealOrderTimeInForce = m["real_order_time_in_force"]
 	rc.RealOrderTimeoutS = atoi(m["real_order_timeout_s"])
+
+	rc.StoreRawPayloads = atob(m["store_raw_payloads"])
+	rc.PayloadRetentionHours = atoi(m["payload_retention_hours"])
 }
 
 // validateKey checks cross-field constraints before writing to DB.

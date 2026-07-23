@@ -139,6 +139,7 @@ Coverage classification on events at settlement:
 - `none` — no ticks (auto-pruned on settlement by P6).
 
 Payload retention: non-`full` events have `payload` NULLed in ticks/orderbook at settlement (P7).
+Runtime config `store_raw_payloads` (default true) gates raw JSON on WS ingest. `payload_retention_hours` (default 72) controls hourly janitor that NULLs old payloads — skips `full`-coverage events (needed for backtest replay).
 Orphan janitor (`CleanOrphans`) and late-parenting sweep (`AdoptOrphans`) run after each scan cycle.
 
 ## Deployment (Linux Mint box)

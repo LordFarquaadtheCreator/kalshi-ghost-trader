@@ -40,6 +40,8 @@ Runtime configuration from `app_config` DB table. Owns CRUD methods using `store
 - `per_strategy_cooldown_secs`
 - `real_trading_enabled`, `kelly_fraction`, `paper_bankroll`, `real_bankroll`
 - `real_order_time_in_force`, `real_order_timeout_s`
+- `store_raw_payloads` (bool) — gate raw JSON payload storage on WS ingest
+- `payload_retention_hours` (int) — janitor nulls payloads older than this (0=disabled)
 
 ## Gotchas
 
