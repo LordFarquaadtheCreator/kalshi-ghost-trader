@@ -191,6 +191,7 @@
               <th class="num">Price</th>
               <th class="num">Fill</th>
               <th>Status</th>
+              <th>Context</th>
               <th>Order ID</th>
               <th class="num">P&L</th>
             </tr>
@@ -209,6 +210,7 @@
                 <td class="num">{o.MarketPrice?.toFixed(4)}</td>
                 <td class="num">{o.FillCount?.toFixed(2) ?? '-'}</td>
                 <td><span class="badge {statusClass(o.OrderStatus)}">{o.OrderStatus || 'pending'}</span></td>
+                <td class="ctx">{o.Context || '-'}</td>
                 <td class="mono">{o.KalshiOrderID || '-'}</td>
                 <td class="num">
                   {#if o.ResolvedPNLCents}
@@ -231,6 +233,7 @@
 <style>
   .win { color: var(--win); }
   .loss { color: var(--loss); }
+  .ctx { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .pool-controls {
     display: flex;
