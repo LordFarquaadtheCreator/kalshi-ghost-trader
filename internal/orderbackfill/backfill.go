@@ -95,7 +95,7 @@ func (b *Backfill) backfill(ctx context.Context) {
 
 		fillCount := parseFP(od.FillCountFP)
 
-		if err := b.db.UpdateRealOrderStatus(ctx, o.ID, fillCount, internalStatus); err != nil {
+		if err := b.db.UpdateRealOrderStatus(ctx, o.ID, fillCount, internalStatus, "backfill: kalshi status="+od.Status); err != nil {
 			b.log.Error("orderbackfill: update order failed",
 				"order_id", o.KalshiOrderID, "err", err)
 			continue

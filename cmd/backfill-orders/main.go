@@ -152,7 +152,7 @@ func backfillOrders(ctx context.Context, client *kalshiclient.Client, db *store.
 			updated++
 			continue
 		}
-		if err := db.UpdateRealOrderStatus(ctx, o.ID, fillCount, internalStatus); err != nil {
+		if err := db.UpdateRealOrderStatus(ctx, o.ID, fillCount, internalStatus, "backfill-orders: kalshi status="+od.Status); err != nil {
 			log.Error("update order failed", "order_id", o.KalshiOrderID, "err", err)
 			continue
 		}

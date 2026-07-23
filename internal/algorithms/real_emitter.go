@@ -303,7 +303,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 	if err != nil {
 		e.log.Error("real: failed to deduct liquidity pool",
 			"market", o.MarketTicker, "spend_cents", spendCents, "error", err)
-		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID); dbErr != nil {
+		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID, "pool_deduct_failed: "+err.Error()); dbErr != nil {
 			e.log.Error("real: failed to mark order as failed after pool deduction error", "error", dbErr)
 		}
 		return false
@@ -342,7 +342,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 			"side", "bid", "count", countStr, "price", priceStr,
 			"error", err)
 		// MarkRealOrderFailed handles pool refund transactionally
-		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID); dbErr != nil {
+		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID, "submit_failed: "+err.Error()); dbErr != nil {
 			e.log.Error("real: failed to mark order as failed", "order_id", o.ID, "error", dbErr)
 		}
 		return false
@@ -354,7 +354,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 			"order_id", o.ID, "server_order_id", resp.OrderID,
 			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
 			"error", err)
-		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, "unverified"); uerr != nil {
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, "unverified", "unparseable_fill_count: "+resp.FillCount); uerr != nil {
 			e.log.Error("real: failed to mark order unverified", "order_id", o.ID, "error", uerr)
 		}
 		return true
@@ -365,12 +365,13 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 			"order_id", o.ID, "server_order_id", resp.OrderID,
 			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
 			"error", err)
-		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, "unverified"); uerr != nil {
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, "unverified", "unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
 			e.log.Error("real: failed to mark order unverified", "order_id", o.ID, "error", uerr)
 		}
 		return true
 	}
 	status := "submitted"
+	cancelReason := ""
 	if remainingCount == 0 && fillCount > 0 {
 		status = "filled"
 	} else if fillCount > 0 {
@@ -378,9 +379,10 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 	} else if remainingCount == 0 {
 		// IOC with zero fill — fully canceled by Kalshi
 		status = "canceled"
+		cancelReason = "ioc_zero_fill"
 	}
 
-	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status); err != nil {
+	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status, cancelReason); err != nil {
 		e.log.Error("real: failed to update order in DB",
 			"order_id", resp.OrderID, "error", err)
 	}
@@ -521,7 +523,7 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 			"market", o.MarketTicker, "strategy", o.Strategy,
 			"side", "ask", "count", countStr, "price", priceStr,
 			"error", err)
-		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID); dbErr != nil {
+		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID, "sell_submit_failed: "+err.Error()); dbErr != nil {
 			e.log.Error("real: failed to mark sell as failed", "order_id", o.ID, "error", dbErr)
 		}
 		return false
@@ -533,7 +535,7 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 			"order_id", o.ID, "server_order_id", resp.OrderID,
 			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
 			"error", err)
-		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, "unverified"); uerr != nil {
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, "unverified", "sell_unparseable_fill_count: "+resp.FillCount); uerr != nil {
 			e.log.Error("real: failed to mark sell unverified", "order_id", o.ID, "error", uerr)
 		}
 		return true
@@ -544,21 +546,23 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 			"order_id", o.ID, "server_order_id", resp.OrderID,
 			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
 			"error", err)
-		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, "unverified"); uerr != nil {
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, "unverified", "sell_unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
 			e.log.Error("real: failed to mark sell unverified", "order_id", o.ID, "error", uerr)
 		}
 		return true
 	}
 	status := "submitted"
+	cancelReason := ""
 	if remainingCount == 0 && fillCount > 0 {
 		status = "filled"
 	} else if fillCount > 0 {
 		status = "partial"
 	} else if remainingCount == 0 {
 		status = "canceled"
+		cancelReason = "sell_ioc_zero_fill"
 	}
 
-	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status); err != nil {
+	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status, cancelReason); err != nil {
 		e.log.Error("real: failed to update sell order in DB",
 			"order_id", resp.OrderID, "error", err)
 	}

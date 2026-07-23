@@ -50,7 +50,8 @@ func (d *DB) InsertRealOrder(ctx context.Context, o Order) (int64, error) {
 // UpdateRealOrder updates an existing order row with Kalshi response fields.
 // Called by KalshiOrderEmitter after order submission. Refunds unfilled portion
 // for partial fills and zero-fill cancels so pool stays accurate at submit time.
-func (d *DB) UpdateRealOrder(ctx context.Context, orderID int64, kalshiOrderID string, fillCount float64, status string) error {
+// reason is appended to Context when status is canceled — explains why.
+func (d *DB) UpdateRealOrder(ctx context.Context, orderID int64, kalshiOrderID string, fillCount float64, status string, reason string) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var o Order
 		if err := tx.Where("id = ?", orderID).First(&o).Error; err != nil {
@@ -67,6 +68,9 @@ func (d *DB) UpdateRealOrder(ctx context.Context, orderID int64, kalshiOrderID s
 			"order_status":            status,
 			"unfilled_refunded_cents": o.UnfilledRefundedCents,
 		}
+		if status == "canceled" && reason != "" {
+			updates["context"] = appendContextReason(o.Context, reason)
+		}
 		if refunded > 0 {
 			updates["pool_balance_before_cents"] = newBalance - refunded
 			updates["pool_balance_after_cents"] = newBalance
@@ -77,7 +81,8 @@ func (d *DB) UpdateRealOrder(ctx context.Context, orderID int64, kalshiOrderID s
 
 // MarkRealOrderFailed marks an order as failed and refunds the full deducted
 // amount to the liquidity pool. Self-contained — no external refund needed.
-func (d *DB) MarkRealOrderFailed(ctx context.Context, orderID int64) error {
+// reason is appended to Context — explains why the order failed.
+func (d *DB) MarkRealOrderFailed(ctx context.Context, orderID int64, reason string) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var o Order
 		if err := tx.Where("id = ?", orderID).First(&o).Error; err != nil {
@@ -95,12 +100,25 @@ func (d *DB) MarkRealOrderFailed(ctx context.Context, orderID int64) error {
 			"order_status":            "failed",
 			"unfilled_refunded_cents": o.UnfilledRefundedCents,
 		}
+		if reason != "" {
+			updates["context"] = appendContextReason(o.Context, reason)
+		}
 		if refunded > 0 {
 			updates["pool_balance_before_cents"] = newBalance - refunded
 			updates["pool_balance_after_cents"] = newBalance
 		}
 		return tx.Model(&Order{}).Where("id = ?", orderID).Updates(updates).Error
 	})
+}
+
+// appendContextReason appends a failure/cancel reason to the existing context
+// string. Format: "original_context | reason: <reason>". If context is empty,
+// starts with "reason: <reason>".
+func appendContextReason(existing, reason string) string {
+	if existing == "" {
+		return "reason: " + reason
+	}
+	return existing + " | reason: " + reason
 }
 
 // GetRealOrders returns all real orders (is_real=1), ordered by timestamp.
@@ -246,7 +264,8 @@ func (d *DB) GetUnresolvedRealOrders(ctx context.Context) ([]UnresolvedRealOrder
 
 // UpdateRealOrderStatus updates the status and fill count of a real order
 // based on a fresh fetch from Kalshi. On canceled, refunds unfilled portion.
-func (d *DB) UpdateRealOrderStatus(ctx context.Context, orderID int64, fillCount float64, status string) error {
+// reason is appended to Context when status is canceled — explains why.
+func (d *DB) UpdateRealOrderStatus(ctx context.Context, orderID int64, fillCount float64, status string, reason string) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var o Order
 		if err := tx.Where("id = ?", orderID).First(&o).Error; err != nil {
@@ -258,6 +277,9 @@ func (d *DB) UpdateRealOrderStatus(ctx context.Context, orderID int64, fillCount
 		updates := map[string]any{
 			"fill_count":   fillCount,
 			"order_status": status,
+		}
+		if status == "canceled" && reason != "" {
+			updates["context"] = appendContextReason(o.Context, reason)
 		}
 		if status == "canceled" {
 			refunded, newBalance, err := refundUnfilled(tx, &o, fillCount)
