@@ -15,16 +15,16 @@ import (
 //
 // Isolation strategy: create a uniquely named schema, set the connection's
 // search_path to it, run migrations into that schema, and DROP SCHEMA ...
-// CASCADE in t.Cleanup. This avoids cross-test interference without a
+// CASCADE in tb.Cleanup. This avoids cross-test interference without a
 // per-test database (which the kalshi role cannot create).
 //
 // The migration runner targets the current search_path because no migration
 // SQL references an explicit schema — verified by grep at task time.
-func testDB(t *testing.T) *DB {
-	t.Helper()
+func testDB(tb testing.TB) *DB {
+	tb.Helper()
 	dsn := os.Getenv("TEST_DB_DSN")
 	if dsn == "" {
-		t.Skip("TEST_DB_DSN not set; skipping Postgres-backed store tests")
+		tb.Skip("TEST_DB_DSN not set; skipping Postgres-backed store tests")
 	}
 
 	// Unique schema name per test.
@@ -37,37 +37,38 @@ func testDB(t *testing.T) *DB {
 	{
 		db, err := openRawDB(context.Background(), dsn)
 		if err != nil {
-			t.Fatalf("open raw db for schema create: %v", err)
+			tb.Fatalf("open raw db for schema create: %v", err)
 		}
 		if _, err := db.Exec(context.Background(),
 			fmt.Sprintf("CREATE SCHEMA %s", pqIdent(schema))); err != nil {
 			db.Close(context.Background())
-			t.Fatalf("create schema %s: %v", schema, err)
+			tb.Fatalf("create schema %s: %v", schema, err)
 		}
 		db.Close(context.Background())
 	}
 
 	// Append search_path to the DSN so every pooled connection uses it.
-	schemaDSN := dsn + " search_path=" + schema
+	// Include public so database-level extensions (pg_trgm) are visible.
+	schemaDSN := dsn + " search_path=" + schema + ",public"
 
 	db, err := New(context.Background(), schemaDSN, slog.Default())
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		tb.Fatalf("New: %v", err)
 	}
 
 	if err := db.Migrate(); err != nil {
 		db.Close()
 		// Drop the schema on migration failure too.
-		dropTestSchema(t, dsn, schema)
-		t.Fatalf("Migrate: %v", err)
+		dropTestSchema(tb, dsn, schema)
+		tb.Fatalf("Migrate: %v", err)
 	}
 
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		db.Close()
 		if keepSchema := os.Getenv("TEST_KEEP_SCHEMA"); keepSchema != "" {
-			t.Logf("keeping schema %s (TEST_KEEP_SCHEMA set)", schema)
+			tb.Logf("keeping schema %s (TEST_KEEP_SCHEMA set)", schema)
 		} else {
-			dropTestSchema(t, dsn, schema)
+			dropTestSchema(tb, dsn, schema)
 		}
 	})
 
@@ -76,17 +77,17 @@ func testDB(t *testing.T) *DB {
 
 // dropTestSchema drops the per-test schema, ignoring errors so one test's
 // cleanup failure doesn't mask another's failure.
-func dropTestSchema(t *testing.T, dsn, schema string) {
-	t.Helper()
+func dropTestSchema(tb testing.TB, dsn, schema string) {
+	tb.Helper()
 	db, err := openRawDB(context.Background(), dsn)
 	if err != nil {
-		t.Logf("open raw db for schema drop: %v", err)
+		tb.Logf("open raw db for schema drop: %v", err)
 		return
 	}
 	defer db.Close(context.Background())
 	if _, err := db.Exec(context.Background(),
 		fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", pqIdent(schema))); err != nil {
-		t.Logf("drop schema %s: %v", schema, err)
+		tb.Logf("drop schema %s: %v", schema, err)
 	}
 }
 

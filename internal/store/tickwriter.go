@@ -158,7 +158,7 @@ func (w *TickWriter) Run(ctx context.Context) error {
 		if len(batch) == 0 {
 			return
 		}
-		if err := w.db.InsertTickBatch(fctx, batch); err != nil {
+		if err := w.db.CopyFromTicks(fctx, batch); err != nil {
 			w.log.Error("write tick batch failed", "err", err, "n", len(batch))
 		}
 		batch = batch[:0]
@@ -168,7 +168,7 @@ func (w *TickWriter) Run(ctx context.Context) error {
 		if len(obBatch) == 0 {
 			return
 		}
-		if err := w.db.InsertOrderbookBatch(fctx, obBatch); err != nil {
+		if err := w.db.CopyFromOrderbook(fctx, obBatch); err != nil {
 			w.log.Error("write orderbook batch failed", "err", err, "n", len(obBatch))
 		}
 		obBatch = obBatch[:0]
