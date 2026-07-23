@@ -10,28 +10,32 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
-// ConvexPoolStrategy blends Markov fair value with market price using
-// a convex combination: blended = α * markov + (1-α) * market.
+// ConvexPoolStrategy compares Markov fair value against market price.
+// Edge = fairValue - marketPrice (raw, no blend). Fires buy on the side
+// with the larger positive edge when it exceeds MinEdgeCents.
 //
-// When Markov and market agree, no edge → no trade.
-// When they diverge, the convex blend gives a tempered edge signal.
-// α controls how much weight to give the model vs market.
+// Per-series pServe overrides fix the model's serve-win assumption per
+// tour level (ITF women's hold ~52% vs default 0.64). One open signal
+// per market per cooldown window — no stacking. Skips tiebreaks (Markov
+// tiebreak model is crude 50/50).
 //
-// This strategy fires on every point update (not just break/set/match points),
-// making it a general-purpose fair-value trader.
+// Fires on every point update (not just break/set/match points), making
+// it a general-purpose fair-value trader.
 type ConvexPoolStrategy struct {
-	mu         sync.RWMutex
-	prices     map[string]float64
-	priceTimes map[string]time.Time
-	markets    map[string][]string
-	states     map[string]*cpMatchState
-	series     map[string]string // event_ticker -> series_ticker
-	emitter    OrderEmitter
-	db         *store.DB // nil in backtest mode
-	model      *MarkovModel
-	cfg        ConvexPoolConfig
-	log        *slog.Logger
-	replayNow  *time.Time
+	mu           sync.RWMutex
+	prices       map[string]float64
+	priceTimes   map[string]time.Time
+	markets      map[string][]string
+	states       map[string]*cpMatchState
+	series       map[string]string // event_ticker -> series_ticker
+	lastFire     map[string]time.Time
+	seriesModels map[string]*MarkovModel // lazily built from cfg.SeriesPServe
+	emitter      OrderEmitter
+	db           *store.DB // nil in backtest mode
+	model        *MarkovModel
+	cfg          ConvexPoolConfig
+	log          *slog.Logger
+	replayNow    *time.Time
 }
 
 type cpMatchState struct {
@@ -41,9 +45,8 @@ type cpMatchState struct {
 
 // ConvexPoolConfig configures the convex pool strategy.
 type ConvexPoolConfig struct {
-	PServe         float64 // serve point win probability
-	Alpha          float64 // model weight (0-1). 0.5 = equal blend
-	MinEdgeCents   int     // minimum edge to trigger
+	PServe         float64 // default serve point win probability
+	MinEdgeCents   int     // minimum raw Markov edge to trigger
 	MinMarketPrice float64
 	MaxMarketPrice float64 // 0 = no cap
 	Label          string
@@ -54,39 +57,81 @@ type ConvexPoolConfig struct {
 	// falls in [Start, End). Both 0 = no filter.
 	UTCHourStart int
 	UTCHourEnd   int
+	// SeriesPServe overrides pServe per series_ticker. Missing series fall
+	// back to PServe. Fixes model bias outside WTA (ITF women's hold ~52%).
+	SeriesPServe map[string]float64
+	// CooldownSeconds: min seconds between fires on the same market.
+	// 0 = no cooldown.
+	CooldownSeconds int
 }
 
 // DefaultConvexPoolConfig returns sensible defaults.
 func DefaultConvexPoolConfig() ConvexPoolConfig {
 	return ConvexPoolConfig{
-		PServe:         0.64,
-		Alpha:          0.5,
-		MinEdgeCents:   3,
-		MinMarketPrice: 0.05,
-		MaxMarketPrice: 0.95,
-		Label:          "convexpool",
+		PServe:          0.64,
+		MinEdgeCents:    6, // raw Markov edge, was 3 with α=0.5 blend (≡6c raw)
+		MinMarketPrice:  0.05,
+		MaxMarketPrice:  0.95,
+		Label:           "convexpool",
+		CooldownSeconds: 60,
+		// ITF women's: research-confirmed 52% hold. Others left at default
+		// — backtest will show if they need tuning.
+		SeriesPServe: map[string]float64{
+			"KXITFWMATCH":   0.52,
+			"KXITFWDOUBLES": 0.52,
+		},
 	}
 }
 
 // NewConvexPoolStrategy creates a convex pool strategy.
 func NewConvexPoolStrategy(emitter OrderEmitter, log *slog.Logger, cfg ConvexPoolConfig) *ConvexPoolStrategy {
 	return &ConvexPoolStrategy{
-		prices:     make(map[string]float64),
-		priceTimes: make(map[string]time.Time),
-		markets:    make(map[string][]string),
-		states:     make(map[string]*cpMatchState),
-		series:     make(map[string]string),
-		emitter:    emitter,
-		model:      NewMarkovModelWithProb(cfg.PServe),
-		cfg:        cfg,
-		log:        log,
+		prices:       make(map[string]float64),
+		priceTimes:   make(map[string]time.Time),
+		markets:      make(map[string][]string),
+		states:       make(map[string]*cpMatchState),
+		series:       make(map[string]string),
+		lastFire:     make(map[string]time.Time),
+		seriesModels: make(map[string]*MarkovModel),
+		emitter:      emitter,
+		model:        NewMarkovModelWithProb(cfg.PServe),
+		cfg:          cfg,
+		log:          log,
 	}
 }
 
 // SetSharedMarkovModel replaces the per-strategy model with a shared one.
 // Memoization then works across strategies with identical pServe.
+// Per-series overrides (cfg.SeriesPServe) still take precedence.
 func (s *ConvexPoolStrategy) SetSharedMarkovModel(m *MarkovModel) {
 	s.model = m
+}
+
+// modelForSeries returns the Markov model for the given series, falling back
+// to the shared/default model. Lazily builds per-series models from
+// cfg.SeriesPServe on first use.
+func (s *ConvexPoolStrategy) modelForSeries(series string) *MarkovModel {
+	if series == "" || len(s.cfg.SeriesPServe) == 0 {
+		return s.model
+	}
+	s.mu.RLock()
+	m, ok := s.seriesModels[series]
+	s.mu.RUnlock()
+	if ok {
+		return m
+	}
+	pServe, hasOverride := s.cfg.SeriesPServe[series]
+	if !hasOverride {
+		return s.model
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m, ok = s.seriesModels[series]; ok {
+		return m
+	}
+	m = NewMarkovModelWithProb(pServe)
+	s.seriesModels[series] = m
+	return m
 }
 
 // SetSeriesTicker maps event_ticker to series_ticker for series filtering.
@@ -166,6 +211,7 @@ func (s *ConvexPoolStrategy) UnregisterMarkets(eventTicker string) {
 	for _, mkt := range s.markets[eventTicker] {
 		delete(s.prices, mkt)
 		delete(s.priceTimes, mkt)
+		delete(s.lastFire, mkt)
 	}
 	delete(s.markets, eventTicker)
 	delete(s.states, eventTicker)
@@ -216,15 +262,23 @@ func (s *ConvexPoolStrategy) processConvex(eventTicker string, p store.Point) {
 	}
 
 	// UTC hour filter
-	if !utcHourMatches(s.now(), s.cfg.UTCHourStart, s.cfg.UTCHourEnd) {
+	now := s.now()
+	if !utcHourMatches(now, s.cfg.UTCHourStart, s.cfg.UTCHourEnd) {
+		return
+	}
+
+	// Tiebreak guard — Markov tiebreak model is crude 50/50, no edge.
+	if p.IsTiebreak {
 		return
 	}
 
 	setsHome := s.getSetsHome(eventTicker)
 	setsAway := s.getSetsAway(eventTicker)
 
+	model := s.modelForSeries(series)
+
 	// Markov fair value for home player
-	fvHome := s.model.FairValue(
+	fvHome := model.FairValue(
 		setsHome, setsAway,
 		p.HomeGames, p.AwayGames,
 		p.HomePoints, p.AwayPoints,
@@ -232,7 +286,16 @@ func (s *ConvexPoolStrategy) processConvex(eventTicker string, p store.Point) {
 	)
 	fvAway := 1.0 - fvHome
 
-	// Check both markets for edge
+	// Compute edges for both markets, fire only the larger positive one.
+	type sideEdge struct {
+		idx        int
+		mkt        string
+		price      float64
+		fv         float64
+		edgeCents  int
+	}
+	var candidates []sideEdge
+
 	for i, mkt := range mkts {
 		fv := fvHome
 		if i == 1 {
@@ -242,16 +305,21 @@ func (s *ConvexPoolStrategy) processConvex(eventTicker string, p store.Point) {
 		s.mu.RLock()
 		price := s.prices[mkt]
 		priceTime := s.priceTimes[mkt]
+		lastFire := s.lastFire[mkt]
 		s.mu.RUnlock()
 
-		if price <= 0 || s.now().Sub(priceTime) > priceStaleTTL {
+		if price <= 0 || now.Sub(priceTime) > priceStaleTTL {
 			continue
 		}
 
-		// Convex blend: tempered fair value
-		blended := s.cfg.Alpha*fv + (1-s.cfg.Alpha)*price
-		edgeCents := int((blended - price) * 100)
+		// Per-market cooldown — no stacking.
+		if s.cfg.CooldownSeconds > 0 && !lastFire.IsZero() {
+			if now.Sub(lastFire).Seconds() < float64(s.cfg.CooldownSeconds) {
+				continue
+			}
+		}
 
+		edgeCents := int((fv - price) * 100)
 		if edgeCents < s.cfg.MinEdgeCents {
 			continue
 		}
@@ -262,29 +330,47 @@ func (s *ConvexPoolStrategy) processConvex(eventTicker string, p store.Point) {
 			continue
 		}
 
-		size := kellySized(blended, price)
-
-		s.emitter.EmitOrder(store.Order{
-			TS:            s.now().UnixMilli(),
-			MatchTicker:   eventTicker,
-			MarketTicker:  mkt,
-			Action:        "buy",
-			Context:       fmt.Sprintf("convex_%s_set%d_game%d_pt%d", sideName(i+1), p.SetNumber, p.GameNumber, p.PointNumber),
-			ConvProb:      blended,
-			MarketPrice:   price,
-			EdgeCents:     edgeCents,
-			SuggestedSize: size,
-			Bankroll:      paperBankroll,
-			KellyFraction: kellyFractionP,
-			SetNumber:     p.SetNumber,
-			Strategy:      s.cfg.Label,
-		})
-
-		s.log.Debug("convex pool signal",
-			"event", eventTicker, "market", mkt,
-			"fv", fv, "blended", blended, "price", price, "edge", edgeCents,
-			"alpha", s.cfg.Alpha)
+		candidates = append(candidates, sideEdge{i, mkt, price, fv, edgeCents})
 	}
+
+	// Cross-market guard: fire only the larger edge. Prevents buying both
+	// sides when spread makes both edges positive.
+	if len(candidates) == 0 {
+		return
+	}
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.edgeCents > best.edgeCents {
+			best = c
+		}
+	}
+
+	size := kellySized(best.fv, best.price)
+
+	s.mu.Lock()
+	s.lastFire[best.mkt] = now
+	s.mu.Unlock()
+
+	s.emitter.EmitOrder(store.Order{
+		TS:            now.UnixMilli(),
+		MatchTicker:   eventTicker,
+		MarketTicker:  best.mkt,
+		Action:        "buy",
+		Context:       fmt.Sprintf("convex_%s_set%d_game%d_pt%d", sideName(best.idx+1), p.SetNumber, p.GameNumber, p.PointNumber),
+		ConvProb:      best.fv,
+		MarketPrice:   best.price,
+		EdgeCents:     best.edgeCents,
+		SuggestedSize: size,
+		Bankroll:      paperBankroll,
+		KellyFraction: kellyFractionP,
+		SetNumber:     p.SetNumber,
+		Strategy:      s.cfg.Label,
+	})
+
+	s.log.Debug("convex pool signal",
+		"event", eventTicker, "market", best.mkt,
+		"fv", best.fv, "price", best.price, "edge", best.edgeCents,
+		"series", series)
 }
 
 func (s *ConvexPoolStrategy) getSetsHome(eventTicker string) int {
