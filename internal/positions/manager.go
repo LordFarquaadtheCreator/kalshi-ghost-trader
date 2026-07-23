@@ -125,6 +125,28 @@ func (m *Manager) ApplyBuy(
 	return positionID, err
 }
 
+// ApplyBuyNO records a buy-NO fill (long NO position). Same as ApplyBuy but
+// marks the position Action="buy_no" so Settle knows to flip the win
+// condition (NO wins when result="no", not "yes").
+func (m *Manager) ApplyBuyNO(
+	ctx context.Context,
+	matchTicker, marketTicker, strategy string,
+	isReal bool,
+	fillCount, price float64,
+) (positionID int64, err error) {
+	positionID, err = m.ApplyBuy(ctx, matchTicker, marketTicker, strategy, isReal, fillCount, price)
+	if err != nil {
+		return 0, err
+	}
+	// Set Action="buy_no" on the position row.
+	if err := m.db.WithContext(ctx).Model(&store.Position{}).
+		Where("id = ?", positionID).
+		Update("action", "buy_no").Error; err != nil {
+		return positionID, fmt.Errorf("positions: set action=buy_no: %w", err)
+	}
+	return positionID, nil
+}
+
 // ApplySell records a sell fill against an open long position. Computes
 // realized PnL = (sell_price - avg_entry) * fill_count * 100. Updates
 // FilledSellCount and AvgExitPrice. When FilledSellCount == FilledBuyCount,
@@ -226,11 +248,17 @@ func (m *Manager) Settle(
 			remainingContracts = 0
 		}
 
+		// buy_no positions win when result="no" — flip the won flag.
+		effectiveWon := won
+		if p.Action == "buy_no" {
+			effectiveWon = !won
+		}
+
 		// Settlement PnL on remaining open contracts:
 		// won: payout $1/contract, cost = avg_entry * count => pnl = (1 - avg_entry) * count * 100
 		// lost: payout $0 => pnl = -avg_entry * count * 100
 		if remainingContracts > 0 {
-			if won {
+			if effectiveWon {
 				settlementPNLCents = int64((1.0-p.AvgEntryPrice)*remainingContracts*100 + 0.5)
 			} else {
 				settlementPNLCents = -int64(p.AvgEntryPrice*remainingContracts*100 + 0.5)

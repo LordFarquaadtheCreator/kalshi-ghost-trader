@@ -169,6 +169,7 @@ type Order struct {
 	PoolBalanceAfterCents  int64   `gorm:"column:pool_balance_after_cents"`
 	UnfilledRefundedCents  int64   `gorm:"column:unfilled_refunded_cents"`
 	PositionID             *int64  `gorm:"column:position_id"`
+	PairID                 string  `gorm:"column:pair_id"` // links arb legs (cross-arb); empty for single-leg orders
 	Result                 string  `gorm:"column:result"`
 	SettledTS              int64   `gorm:"column:settled_ts"`
 
@@ -188,6 +189,7 @@ type Position struct {
 	MarketTicker       string  `gorm:"column:market_ticker"`
 	Strategy           string  `gorm:"column:strategy"`
 	IsReal             bool    `gorm:"column:is_real"`
+	Action             string  `gorm:"column:action"` // "buy" (YES) or "buy_no" (NO); empty = legacy "buy"
 	FilledBuyCount     float64 `gorm:"column:filled_buy_count"`
 	FilledSellCount    float64 `gorm:"column:filled_sell_count"`
 	AvgEntryPrice      float64 `gorm:"column:avg_entry_price"`

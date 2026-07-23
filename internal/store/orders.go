@@ -165,8 +165,12 @@ func (d *DB) ResolveRealOrders(ctx context.Context, marketTicker, result string)
 		}
 		poolBalance := lp.BalanceCents
 
-		won := result == "yes"
 		for _, po := range pendingOrders {
+			// buy_no wins when result is "no", not "yes"
+			orderWon := result == "yes"
+			if po.Action == "buy_no" {
+				orderWon = result == "no"
+			}
 			// refund unfilled portion, minus what was already refunded at submit/cancel time
 			totalUnfilledCents := int64((po.SuggestedSize - po.FillCount) * po.MarketPrice * 100)
 			if totalUnfilledCents < 0 {
@@ -180,7 +184,7 @@ func (d *DB) ResolveRealOrders(ctx context.Context, marketTicker, result string)
 			// gross payout: $1 per contract if won, $0 if lost
 			var payoutCents int64
 			var pnlCents int64
-			if po.FillCount > 0 && won {
+			if po.FillCount > 0 && orderWon {
 				payoutCents = int64(po.FillCount * 100)
 				pnlCents = payoutCents - int64(po.FillCount*po.MarketPrice*100)
 			} else if po.FillCount > 0 {
@@ -227,18 +231,21 @@ UPDATE liquidity_pool SET total_pnl_cents = (
 
 // ResolveSimulatedOrders resolves all simulated orders for a settled market.
 // Assumes full fill at suggested_size. No pool adjustments — simulated money.
+// Handles buy_no: NO wins when result="no" (flipped from buy_yes).
 func (d *DB) ResolveSimulatedOrders(ctx context.Context, marketTicker, result string) error {
 	return d.db.WithContext(ctx).Exec(`
 UPDATE orders
 SET order_status = 'resolved',
     resolved_pnl_cents = CASE
+        WHEN action = 'buy_no' AND ? = 'no' THEN CAST(suggested_size * 100 AS INTEGER) - CAST(suggested_size * market_price * 100 AS INTEGER)
+        WHEN action = 'buy_no' AND ? != 'no' THEN -CAST(suggested_size * market_price * 100 AS INTEGER)
         WHEN ? = 'yes' THEN CAST(suggested_size * 100 AS INTEGER) - CAST(suggested_size * market_price * 100 AS INTEGER)
         ELSE -CAST(suggested_size * market_price * 100 AS INTEGER)
     END
 WHERE is_real = false
   AND market_ticker = ?
   AND (order_status IS NULL OR order_status NOT IN ('resolved','failed','canceled'))`,
-		result, marketTicker).Error
+		result, result, result, marketTicker).Error
 }
 
 // UnresolvedRealOrder is a real order with a Kalshi order ID that hasn't reached a terminal status.

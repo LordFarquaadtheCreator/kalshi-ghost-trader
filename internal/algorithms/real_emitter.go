@@ -146,6 +146,10 @@ func (e *KalshiOrderEmitter) EmitOrder(o store.Order) bool {
 	if o.Action == "sell" || o.Side == store.OrderSideClose {
 		return e.emitSell(o)
 	}
+	// buy_no = buy NO contracts (long NO). Kalshi V2: side="ask", reduce_only=false.
+	if o.Action == "buy_no" {
+		return e.emitBuyNO(o)
+	}
 	return e.emitBuy(o)
 }
 
@@ -413,6 +417,249 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		"environment", e.cfg.Environment,
 		"pool_balance_cents", newBalance)
 
+	// Paired orders (cross-arb): return false on zero-fill so strategy
+	// skips leg 2. Without this, leg 1 zero-fills but returns true,
+	// strategy emits leg 2, and we get naked directional risk.
+	if o.PairID != "" && fillCount == 0 {
+		return false
+	}
+	return true
+}
+
+// emitBuyNO handles the buy-NO-to-open path. Buys NO contracts (long NO)
+// via Kalshi V2 side="ask" with reduce_only=false. Deducts NO cost from
+// pool, ApplyBuy on position manager with fill count.
+//
+// Used by cross-arb NO arb path: when yesSum > 1.0, buy NO on both markets.
+// One NO always wins → guaranteed profit = yesSum - 1.0.
+func (e *KalshiOrderEmitter) emitBuyNO(o store.Order) bool {
+	ctx := context.Background()
+
+	// Same pre-match gate as emitBuy.
+	mkt, err := e.db.GetMarket(ctx, o.MarketTicker)
+	if err != nil {
+		e.log.Error("real: buy_no failed to look up market",
+			"market", o.MarketTicker, "error", err)
+		return false
+	}
+	if mkt.OccurrenceTS > 0 && time.Now().UnixMilli() < mkt.OccurrenceTS {
+		started, _ := e.db.GetKalshiScore(ctx, mkt.EventTicker)
+		hasPts, _ := e.db.HasPoints(ctx, mkt.EventTicker)
+		liveStarted := started.Status == "started" || hasPts
+		if !liveStarted {
+			e.log.Warn("real: buy_no match not started, skipping",
+				"market", o.MarketTicker, "occurrence_ts", mkt.OccurrenceTS)
+			return false
+		}
+	}
+
+	o.PlayerName = mkt.PlayerName
+	if title, err := e.db.GetEventTitle(ctx, mkt.EventTicker); err == nil {
+		o.MatchTitle = title
+	}
+
+	// Strategy enabled check.
+	enabled, err := strategyconfig.IsEnabled(ctx, e.db.GormDB(), o.Strategy)
+	if err != nil {
+		e.log.Error("real: buy_no failed to check strategy enabled",
+			"strategy", o.Strategy, "error", err)
+		return false
+	}
+	if !enabled {
+		e.log.Warn("real: buy_no strategy not enabled, skipping",
+			"strategy", o.Strategy, "market", o.MarketTicker)
+		return false
+	}
+
+	// Per-market strategy limit.
+	maxOrders, err := strategyconfig.GetLimit(ctx, e.db.GormDB(), o.Strategy)
+	if err != nil {
+		e.log.Error("real: buy_no failed to check per-market strategy limit",
+			"strategy", o.Strategy, "error", err)
+		return false
+	}
+	if maxOrders > 0 {
+		count, err := e.db.CountRealOrdersByMarketStrategy(ctx, o.MarketTicker, o.Strategy)
+		if err != nil {
+			e.log.Error("real: buy_no failed to count real orders",
+				"market", o.MarketTicker, "strategy", o.Strategy, "error", err)
+			return false
+		}
+		if count >= int64(maxOrders) {
+			e.log.Info("real: buy_no per-market limit reached, skipping",
+				"market", o.MarketTicker, "strategy", o.Strategy,
+				"count", count, "limit", maxOrders)
+			return false
+		}
+	}
+
+	// Trigger range check — NO price is o.MarketPrice (already 1-YES).
+	hasBands, err := triggerranges.Has(ctx, e.db.GormDB(), o.Strategy)
+	if err != nil {
+		e.log.Error("real: buy_no failed to check trigger ranges",
+			"strategy", o.Strategy, "error", err)
+		return false
+	}
+	if hasBands {
+		inRange, err := triggerranges.IsPriceIn(ctx, e.db.GormDB(), o.Strategy, o.MarketPrice)
+		if err != nil {
+			e.log.Error("real: buy_no failed to check price in trigger range",
+				"strategy", o.Strategy, "price", o.MarketPrice, "error", err)
+			return false
+		}
+		if !inRange {
+			e.log.Info("real: buy_no price outside trigger ranges, skipping",
+				"strategy", o.Strategy, "market", o.MarketTicker, "price", o.MarketPrice)
+			return false
+		}
+	}
+
+	// Pool balance = kelly bankroll.
+	lp, err := liquiditypool.Get(ctx, e.db.GormDB())
+	if err != nil {
+		e.log.Error("real: buy_no failed to get pool balance",
+			"market", o.MarketTicker, "error", err)
+		return false
+	}
+	if lp.BalanceCents <= 0 {
+		e.log.Warn("real: buy_no pool empty, skipping",
+			"market", o.MarketTicker, "balance_cents", lp.BalanceCents)
+		return false
+	}
+	bankrollDollars := float64(lp.BalanceCents) / 100.0
+
+	// Kelly size from live pool. ConvProb for buy_no = probability NO wins.
+	priceCents := int64(math.Round(o.MarketPrice * 100))
+	contracts, spendCents := sizeRealOrder(
+		kellySizeRaw(o.ConvProb, o.MarketPrice, bankrollDollars, kellyFractionP),
+		priceCents, lp.BalanceCents)
+	if contracts < 1 {
+		e.log.Warn("real: buy_no skipped zero-size",
+			"market", o.MarketTicker,
+			"bankroll", bankrollDollars,
+			"price_cents", priceCents,
+			"contracts", contracts)
+		return false
+	}
+
+	// Persist order to DB before submission.
+	o.IsReal = true
+	o.OrderStatus = "pending"
+	o.SuggestedSize = float64(contracts)
+	o.Action = "buy_no"
+	o.Side = store.OrderSideOpen
+	orderID, err := e.db.InsertRealOrder(ctx, o)
+	if err != nil {
+		e.log.Error("real: buy_no failed to persist order",
+			"market", o.MarketTicker, "error", err)
+		return false
+	}
+	o.ID = orderID
+
+	// Deduct NO cost from pool.
+	orderCtx, cancel := context.WithTimeout(ctx, time.Duration(e.cfg.OrderTimeoutS)*time.Second)
+	defer cancel()
+
+	newBalance, err := liquiditypool.Deduct(orderCtx, e.db.GormDB(), spendCents)
+	if err != nil {
+		e.log.Error("real: buy_no failed to deduct pool",
+			"market", o.MarketTicker, "spend_cents", spendCents, "error", err)
+		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID, "buy_no_pool_deduct_failed: "+err.Error()); dbErr != nil {
+			e.log.Error("real: buy_no failed to mark order failed", "error", dbErr)
+		}
+		return false
+	}
+
+	priceStr := fmt.Sprintf("%.4f", o.MarketPrice)
+	countStr := strconv.Itoa(contracts)
+	clientOrderID := uuid.NewString()
+
+	// Kalshi V2: side="ask" buys NO (long NO). reduce_only=false opens position.
+	req := createOrderV2Request{
+		Ticker:                  o.MarketTicker,
+		ClientOrderID:           clientOrderID,
+		Side:                    "ask",
+		Count:                   countStr,
+		Price:                   priceStr,
+		TimeInForce:             e.cfg.TimeInForce,
+		SelfTradePreventionType: "taker_at_cross",
+		ExchangeIndex:           -1,
+	}
+
+	var resp createOrderV2Response
+	err = e.client.Post(orderCtx, "/portfolio/events/orders", req, &resp)
+	if err != nil {
+		e.log.Error("real: buy_no submission FAILED",
+			"order_id", o.ID, "client_order_id", clientOrderID,
+			"market", o.MarketTicker, "strategy", o.Strategy,
+			"side", "ask", "count", countStr, "price", priceStr,
+			"error", err)
+		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID, "buy_no_submit_failed: "+err.Error()); dbErr != nil {
+			e.log.Error("real: buy_no failed to mark order failed", "error", dbErr)
+		}
+		return false
+	}
+
+	fillCount, err := strconv.ParseFloat(resp.FillCount, 64)
+	if err != nil {
+		e.log.Error("real: buy_no unparseable fill_count",
+			"order_id", o.ID, "fill_count_raw", resp.FillCount, "error", err)
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, "unverified", "buy_no_unparseable_fill_count: "+resp.FillCount); uerr != nil {
+			e.log.Error("real: buy_no failed to mark unverified", "error", uerr)
+		}
+		return true
+	}
+	remainingCount, err := strconv.ParseFloat(resp.RemainingCount, 64)
+	if err != nil {
+		e.log.Error("real: buy_no unparseable remaining_count",
+			"order_id", o.ID, "remaining_count_raw", resp.RemainingCount, "error", err)
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, "unverified", "buy_no_unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
+			e.log.Error("real: buy_no failed to mark unverified", "error", uerr)
+		}
+		return true
+	}
+	status := "submitted"
+	cancelReason := ""
+	if remainingCount == 0 && fillCount > 0 {
+		status = "filled"
+	} else if fillCount > 0 {
+		status = "partial"
+	} else if remainingCount == 0 {
+		status = "canceled"
+		cancelReason = "buy_no_ioc_zero_fill"
+	}
+
+	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status, cancelReason); err != nil {
+		e.log.Error("real: buy_no failed to update order in DB",
+			"order_id", resp.OrderID, "error", err)
+	}
+
+	if fillCount > 0 {
+		posID, perr := e.pos.ApplyBuyNO(ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, o.MarketPrice)
+		if perr != nil {
+			e.log.Error("real: buy_no ApplyBuyNO failed",
+				"market", o.MarketTicker, "strategy", o.Strategy,
+				"fill_count", fillCount, "error", perr)
+		} else {
+			_ = e.db.GormDB().Model(&store.Order{}).Where("id = ?", o.ID).
+				Update("position_id", posID).Error
+		}
+	}
+
+	e.log.Info("real: buy_no order submitted",
+		"market", o.MarketTicker, "strategy", o.Strategy,
+		"order_id", resp.OrderID, "client_order_id", clientOrderID,
+		"server_ts_ms", resp.TsMS,
+		"fill_count", resp.FillCount,
+		"remaining_count", resp.RemainingCount,
+		"count", countStr, "price", priceStr,
+		"environment", e.cfg.Environment,
+		"pool_balance_cents", newBalance)
+
+	// Paired orders: return false on zero-fill so strategy skips leg 2.
+	if o.PairID != "" && fillCount == 0 {
+		return false
+	}
 	return true
 }
 

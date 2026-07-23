@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
+	"github.com/google/uuid"
 )
 
 // CrossArbConfig controls the cross-side arbitrage strategy.
@@ -131,11 +132,13 @@ func (s *CrossArbStrategy) OnPriceAt(marketTicker string, price float64, ts time
 }
 
 func (s *CrossArbStrategy) fireBuyBothYES(eventTicker, homeMkt, awayMkt string, homePrice, awayPrice float64, edgeCents int, ts time.Time) {
+	pairID := uuid.NewString()
 	payload, _ := json.Marshal(map[string]any{
 		"home_yes": homePrice, "away_yes": awayPrice,
 		"yes_sum":    homePrice + awayPrice,
 		"edge_cents": edgeCents,
 		"side":       "buy_both_yes",
+		"pair_id":    pairID,
 	})
 
 	for _, mkt := range []string{homeMkt, awayMkt} {
@@ -148,6 +151,7 @@ func (s *CrossArbStrategy) fireBuyBothYES(eventTicker, homeMkt, awayMkt string, 
 			MatchTicker:   eventTicker,
 			MarketTicker:  mkt,
 			Action:        "buy",
+			Side:          store.OrderSideOpen,
 			Context:       fmt.Sprintf("crossarb_buy_yes_edge%dc", edgeCents),
 			ConvProb:      1.0 - price, // approx — arb doesn't need conv prob
 			MarketPrice:   price,
@@ -157,34 +161,32 @@ func (s *CrossArbStrategy) fireBuyBothYES(eventTicker, homeMkt, awayMkt string, 
 			KellyFraction: kellyFractionP,
 			Strategy:      s.cfg.Label,
 			Payload:       string(payload),
+			PairID:        pairID,
 		}
 		if !s.emitter.EmitOrder(o) {
-			s.log.Warn("cross-arb: order dropped", "match", eventTicker, "market", mkt)
+			s.log.Warn("cross-arb: leg dropped, skipping remaining legs",
+				"match", eventTicker, "market", mkt, "pair_id", pairID)
 			return
 		}
 	}
 	s.log.Info("cross-arb: buy both YES",
 		"match", eventTicker, "home", homePrice, "away", awayPrice,
-		"sum", homePrice+awayPrice, "edge_cents", edgeCents)
+		"sum", homePrice+awayPrice, "edge_cents", edgeCents, "pair_id", pairID)
 }
 
 func (s *CrossArbStrategy) fireBuyNO(eventTicker, homeMkt, awayMkt string, homePrice, awayPrice float64, edgeCents int, ts time.Time) {
+	pairID := uuid.NewString()
 	payload, _ := json.Marshal(map[string]any{
 		"home_yes": homePrice, "away_yes": awayPrice,
 		"yes_sum":    homePrice + awayPrice,
 		"edge_cents": edgeCents,
 		"side":       "buy_both_no",
+		"pair_id":    pairID,
 	})
 
-	// Buy NO = buy YES of the opposite player's market
-	// On Kalshi, each market is a YES market for one player.
-	// To bet NO on home, buy YES on away. To bet NO on away, buy YES on home.
-	// But we already have both YES markets. If yesSum > 1.0,
-	// it means both YES are overpriced. We can't directly sell.
-	// On Kalshi, we CAN buy NO shares in each market.
-	// NO price ≈ 1 - YES price. Buying NO at (1-homePrice) + (1-awayPrice) = 2 - yesSum < 1.0
-	// But our emitter only supports buy YES orders.
-	// For paper trading, we record the arb signal. Real execution would buy NO.
+	// Buy NO on both markets. On Kalshi V2: side="ask" buys NO (long NO).
+	// NO price ≈ 1 - YES price. Total cost = (1-homePrice) + (1-awayPrice) = 2 - yesSum < 1.0.
+	// One NO always wins → guaranteed profit = yesSum - 1.0.
 	for _, mkt := range []string{homeMkt, awayMkt} {
 		price := homePrice
 		if mkt == awayMkt {
@@ -196,6 +198,7 @@ func (s *CrossArbStrategy) fireBuyNO(eventTicker, homeMkt, awayMkt string, homeP
 			MatchTicker:   eventTicker,
 			MarketTicker:  mkt,
 			Action:        "buy_no",
+			Side:          store.OrderSideOpen,
 			Context:       fmt.Sprintf("crossarb_buy_no_edge%dc", edgeCents),
 			ConvProb:      price, // NO wins when YES loses
 			MarketPrice:   noPrice,
@@ -205,15 +208,17 @@ func (s *CrossArbStrategy) fireBuyNO(eventTicker, homeMkt, awayMkt string, homeP
 			KellyFraction: kellyFractionP,
 			Strategy:      s.cfg.Label,
 			Payload:       string(payload),
+			PairID:        pairID,
 		}
 		if !s.emitter.EmitOrder(o) {
-			s.log.Warn("cross-arb: NO order dropped", "match", eventTicker, "market", mkt)
+			s.log.Warn("cross-arb: NO leg dropped, skipping remaining legs",
+				"match", eventTicker, "market", mkt, "pair_id", pairID)
 			return
 		}
 	}
 	s.log.Info("cross-arb: buy both NO",
 		"match", eventTicker, "home", homePrice, "away", awayPrice,
-		"sum", homePrice+awayPrice, "edge_cents", edgeCents)
+		"sum", homePrice+awayPrice, "edge_cents", edgeCents, "pair_id", pairID)
 }
 
 func (s *CrossArbStrategy) SetReplayTime(ts time.Time) {

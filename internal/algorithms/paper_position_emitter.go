@@ -72,10 +72,18 @@ func (e *PaperPositionEmitter) EmitOrder(o store.Order) bool {
 			"fill_count", fillCount, "realized_pnl_cents", realizedPnL,
 			"remaining_open", remaining)
 	default:
-		// Buy-to-open: apply to position.
+		// Buy-to-open: apply to position. buy_no uses ApplyBuyNO so
+		// Settle flips the win condition (NO wins when result="no").
 		if fillCount > 0 {
-			posID, err := e.pos.ApplyBuy(
-				ctx, o.MatchTicker, o.MarketTicker, o.Strategy, false, fillCount, o.MarketPrice)
+			var posID int64
+			var err error
+			if o.Action == "buy_no" {
+				posID, err = e.pos.ApplyBuyNO(
+					ctx, o.MatchTicker, o.MarketTicker, o.Strategy, false, fillCount, o.MarketPrice)
+			} else {
+				posID, err = e.pos.ApplyBuy(
+					ctx, o.MatchTicker, o.MarketTicker, o.Strategy, false, fillCount, o.MarketPrice)
+			}
 			if err != nil {
 				e.log.Warn("paper: buy position update failed",
 					"market", o.MarketTicker, "strategy", o.Strategy,
