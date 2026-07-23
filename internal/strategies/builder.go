@@ -29,6 +29,8 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 	// the factory map builds them.
 	var bp *algorithms.BreakPointStrategy
 	var cp, cpWTA *algorithms.ConvexPoolStrategy
+	var cpExit *algorithms.ConvexPoolExitStrategy
+	var cpAdaptive *algorithms.ConvexPoolAdaptiveStrategy
 	var sw, swAggro, swNoAdj *algorithms.SetWinnerStrategy
 
 	multi := algorithms.NewMultiStrategyFromFactories(emitter, log, map[string]algorithms.StrategyFactoryFn{
@@ -216,6 +218,14 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 			cpWTA = algorithms.NewConvexPoolStrategyWithDB(e, db, log, cfg)
 			return cpWTA
 		},
+		"convexpool-exit": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cpExit = algorithms.NewConvexPoolExitStrategyWithDB(e, db, log, algorithms.DefaultConvexPoolExitConfig())
+			return cpExit
+		},
+		"convexpool-adaptive": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cpAdaptive = algorithms.NewConvexPoolAdaptiveStrategyWithDB(e, db, log, algorithms.DefaultConvexPoolAdaptiveConfig())
+			return cpAdaptive
+		},
 		"doublebreak": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return algorithms.NewDoubleBreakStrategy(e, log, algorithms.DefaultDoubleBreakConfig())
 		},
@@ -292,6 +302,12 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 	}
 	if cpWTA != nil {
 		cpWTA.SetSharedMarkovModel(sharedMarkov)
+	}
+	if cpExit != nil {
+		cpExit.SetSharedMarkovModel(sharedMarkov)
+	}
+	if cpAdaptive != nil {
+		cpAdaptive.SetSharedMarkovModel(sharedMarkov)
 	}
 	if sw != nil {
 		sw.SetSharedMarkovModel(sharedMarkov)

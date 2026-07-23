@@ -263,5 +263,17 @@ func DefaultFactories() map[string]StrategyFactory {
 		s.SetSharedMarkovModel(sharedMarkov)
 		return s
 	},
+	// Convexpool with full sell-to-close pipeline (TP/SL/time + edge reversal).
+	"convexpool-exit": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		s := algorithms.NewConvexPoolExitStrategy(em, log, algorithms.DefaultConvexPoolExitConfig())
+		s.SetSharedMarkovModel(sharedMarkov)
+		return s
+	},
+	// Convexpool with dynamic alpha scaling with score depth.
+	"convexpool-adaptive": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		s := algorithms.NewConvexPoolAdaptiveStrategy(em, log, algorithms.DefaultConvexPoolAdaptiveConfig())
+		s.SetSharedMarkovModel(sharedMarkov)
+		return s
+	},
 	}
 }
