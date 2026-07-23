@@ -12,12 +12,15 @@ import (
 )
 
 // SetPointConfig controls set-point strategy behavior.
-// Derived from data exploration (explore.py):
-//   - Overall set-point conversion: 91%
-//   - Serving set-point conversion: 93%
-//   - Returning set-point conversion: 89%
-//   - Match-point conversion (serving): 97%
-//   - Match-point conversion (returning): 89%
+//
+// Original thesis: set points convert at 91% (93% serving, 89% returning)
+// but markets price them at 56c avg — a 33c edge. That was wrong: the
+// strategy compared set-conversion probability to a match-winner market
+// price. Set conversion ≠ match-win probability.
+//
+// Fixed: uses Markov FairValue (match-win probability from current score
+// state) for edge calculation. Set-point detection gates WHEN to fire;
+// Markov determines IF there's an edge.
 type SetPointConfig struct {
 	// IncludeSetPoints: fire on non-match-point set points (set points in
 	// sets that don't decide the match, e.g. set 1 when 0-0).
@@ -25,16 +28,16 @@ type SetPointConfig struct {
 	// IncludeReturning: fire when the set-point player is returning (breaking).
 	// If false, only fire when serving.
 	IncludeReturning bool
-	// ServeConvProb: conversion probability when serving at set point.
-	ServeConvProb float64
-	// ReturnConvProb: conversion probability when returning at set point.
-	ReturnConvProb float64
+	// PServe: serve point win probability for Markov model (0.64 ATP, 0.62 WTA).
+	PServe float64
 	// MaxMarketPrice: skip signals above this price (0 = no cap).
 	MaxMarketPrice float64
 	// MinMarketPrice: skip signals below this price.
 	MinMarketPrice float64
 	// MinEdgeCents: minimum edge to emit order.
 	MinEdgeCents int
+	// CooldownPoints: minimum points between fires per match.
+	CooldownPoints int
 	// Label: strategy name for logging.
 	Label string
 	// MaxSetNumber: if > 0, only fire on set points in sets <= this number
@@ -50,32 +53,44 @@ type SetPointConfig struct {
 }
 
 // DefaultSetPointConfig fires on all set points (serving + returning).
+// MinEdgeCents=5 clears Kalshi's ~1c/contract fee with margin.
 func DefaultSetPointConfig() SetPointConfig {
 	return SetPointConfig{
 		IncludeSetPoints: true,
 		IncludeReturning: true,
-		ServeConvProb:    0.93,
-		ReturnConvProb:   0.89,
+		PServe:           0.64,
 		MaxMarketPrice:   0.0,
 		MinMarketPrice:   0.05,
-		MinEdgeCents:     1,
+		MinEdgeCents:     5,
+		CooldownPoints:   3,
 		Label:            "setpoint",
 	}
 }
 
+// spMatchState tracks per-event set tracking, point dedup, and cooldown.
+type spMatchState struct {
+	setsHome        int
+	setsAway        int
+	lastSetNum      int
+	lastHomeGames   int
+	lastAwayGames   int
+	lastScorer      int
+	pointsSinceFire int
+}
+
 // SetPointStrategy is a configurable set-point detection strategy.
-// Generalizes MatchPointStrategy to fire on any set point, not just
-// match-deciding ones. Data shows set points have 91% conversion
-// but market prices them at 56c avg — a 33c edge.
+// Uses Markov match-win probability for edge calculation, gated to fire
+// only at set points (including tiebreak set points).
 type SetPointStrategy struct {
 	mu          sync.RWMutex
 	prices      map[string]float64
 	priceTimes  map[string]time.Time
 	markets     map[string][]string
-	matchStates map[string]*matchState
+	matchStates map[string]*spMatchState
 	seenPoints  map[string]map[string]bool
 	series      map[string]string // event_ticker -> series_ticker
 	emitter     OrderEmitter
+	model       *MarkovModel
 	db          *store.DB // nil in backtest mode
 	log         *slog.Logger
 	cfg         SetPointConfig
@@ -87,10 +102,11 @@ func NewSetPointStrategy(emitter OrderEmitter, log *slog.Logger, cfg SetPointCon
 		prices:      make(map[string]float64),
 		priceTimes:  make(map[string]time.Time),
 		markets:     make(map[string][]string),
-		matchStates: make(map[string]*matchState),
+		matchStates: make(map[string]*spMatchState),
 		seenPoints:  make(map[string]map[string]bool),
 		series:      make(map[string]string),
 		emitter:     emitter,
+		model:       NewMarkovModelWithProb(cfg.PServe),
 		log:         log,
 		cfg:         cfg,
 	}
@@ -104,6 +120,14 @@ func NewSetPointStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Log
 	return s
 }
 
+// SetSharedMarkovModel replaces the per-strategy model with a shared one.
+// Memoization then works across strategies with identical pServe.
+func (s *SetPointStrategy) SetSharedMarkovModel(m *MarkovModel) {
+	s.mu.Lock()
+	s.model = m
+	s.mu.Unlock()
+}
+
 // SetSeriesTicker maps event_ticker to series_ticker for series filtering.
 // Implements SeriesSetter — called by backtest engine or live wiring.
 func (s *SetPointStrategy) SetSeriesTicker(eventTicker, seriesTicker string) {
@@ -115,6 +139,9 @@ func (s *SetPointStrategy) SetSeriesTicker(eventTicker, seriesTicker string) {
 func (s *SetPointStrategy) RegisterMarkets(eventTicker string, marketTickers []string) {
 	s.mu.Lock()
 	s.markets[eventTicker] = marketTickers
+	if _, ok := s.matchStates[eventTicker]; !ok {
+		s.matchStates[eventTicker] = &spMatchState{}
+	}
 	s.mu.Unlock()
 
 	if s.db != nil {
@@ -186,7 +213,7 @@ func (s *SetPointStrategy) updateMatchState(eventTicker string, p store.Point) {
 	defer s.mu.Unlock()
 	ms, ok := s.matchStates[eventTicker]
 	if !ok {
-		ms = &matchState{}
+		ms = &spMatchState{}
 		s.matchStates[eventTicker] = ms
 	}
 	if p.SetNumber > ms.lastSetNum && ms.lastSetNum > 0 {
@@ -206,6 +233,7 @@ func (s *SetPointStrategy) updateMatchState(eventTicker string, p store.Point) {
 	ms.lastHomeGames = p.HomeGames
 	ms.lastAwayGames = p.AwayGames
 	ms.lastScorer = p.Scorer
+	ms.pointsSinceFire++
 }
 
 func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
@@ -246,6 +274,20 @@ func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
 		return
 	}
 
+	// Cooldown check
+	s.mu.RLock()
+	ms := s.matchStates[eventTicker]
+	cooldownOK := ms != nil && ms.pointsSinceFire >= s.cfg.CooldownPoints
+	setsHome, setsAway := 0, 0
+	if ms != nil {
+		setsHome = ms.setsHome
+		setsAway = ms.setsAway
+	}
+	s.mu.RUnlock()
+	if !cooldownOK {
+		return
+	}
+
 	s.mu.RLock()
 	mktTickers, ok := s.markets[eventTicker]
 	s.mu.RUnlock()
@@ -260,9 +302,19 @@ func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
 		marketTicker = mktTickers[1]
 	}
 
-	convProb := s.cfg.ServeConvProb
-	if !isServing {
-		convProb = s.cfg.ReturnConvProb
+	// Markov match-win probability for the set-point winner.
+	// FairValue returns P(home wins match) — flip for away.
+	homeFV := s.model.FairValue(
+		setsHome, setsAway,
+		p.HomeGames, p.AwayGames,
+		p.HomePoints, p.AwayPoints,
+		p.Server, p.IsTiebreak,
+	)
+	var convProb float64
+	if sp.winner == 1 {
+		convProb = homeFV
+	} else {
+		convProb = 1.0 - homeFV
 	}
 
 	s.mu.RLock()
@@ -291,12 +343,15 @@ func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
 	size := kellySized(convProb, mktPrice)
 
 	payload, _ := json.Marshal(map[string]any{
-		"home_games": p.HomeGames, "away_games": p.AwayGames,
-		"home_points": p.HomePoints, "away_points": p.AwayPoints,
-		"server": p.Server, "scorer": p.Scorer,
-		"set": p.SetNumber, "game": p.GameNumber,
-		"serving": isServing,
-		"is_mp":   sp.isMatchPoint,
+		"home_games":   p.HomeGames, "away_games": p.AwayGames,
+		"home_points":  p.HomePoints, "away_points": p.AwayPoints,
+		"server":       p.Server, "scorer": p.Scorer,
+		"set":          p.SetNumber, "game": p.GameNumber,
+		"serving":      isServing,
+		"is_mp":        sp.isMatchPoint,
+		"is_tiebreak":  p.IsTiebreak,
+		"markov_fv":    homeFV,
+		"sets_home":    setsHome, "sets_away": setsAway,
 	})
 
 	o := store.Order{
@@ -320,11 +375,18 @@ func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
 		s.log.Warn("setpoint: order dropped", "match", eventTicker, "market", marketTicker)
 		return
 	}
+
+	s.mu.Lock()
+	if ms != nil {
+		ms.pointsSinceFire = 0
+	}
+	s.mu.Unlock()
+
 	s.log.Info("setpoint: order emitted",
 		"match", eventTicker, "market", marketTicker,
 		"action", "buy", "edge_cents", edgeCents, "conv_prob", convProb,
 		"mkt_price", mktPrice, "size", size, "context", sp.context,
-		"serving", isServing, "is_mp", sp.isMatchPoint)
+		"serving", isServing, "is_mp", sp.isMatchPoint, "is_tb", p.IsTiebreak)
 }
 
 type setPointSignal struct {
@@ -343,10 +405,6 @@ func (s *SetPointStrategy) detectSetPoint(eventTicker string, p store.Point) *se
 	}
 	s.mu.RUnlock()
 
-	if p.IsTiebreak {
-		return nil
-	}
-
 	homeNeedsSet := setsToWin - setsHome
 	awayNeedsSet := setsToWin - setsAway
 	if homeNeedsSet <= 0 || awayNeedsSet <= 0 {
@@ -356,6 +414,40 @@ func (s *SetPointStrategy) detectSetPoint(eventTicker string, p store.Point) *se
 	homeOneSetAway := homeNeedsSet == 1
 	awayOneSetAway := awayNeedsSet == 1
 
+	// Tiebreak: set point = one point away from winning tiebreak (first to 7, win by 2).
+	if p.IsTiebreak {
+		h := tbPointValue(p.HomePoints)
+		a := tbPointValue(p.AwayPoints)
+		// Win next point → score+1 >= 7 AND lead >= 2
+		homeCanWinSet := h >= 6 && (h-a) >= 1
+		awayCanWinSet := a >= 6 && (a-h) >= 1
+		if !homeCanWinSet && !awayCanWinSet {
+			return nil
+		}
+		homeIsMP := homeCanWinSet && homeOneSetAway
+		awayIsMP := awayCanWinSet && awayOneSetAway
+		if !s.cfg.IncludeSetPoints && !homeIsMP && !awayIsMP {
+			return nil
+		}
+		winner := 2
+		ctx := "away_tb_set_point"
+		if homeCanWinSet {
+			winner = 1
+			ctx = "home_tb_set_point"
+		}
+		if homeIsMP {
+			ctx = "home_tb_match_point"
+		} else if awayIsMP {
+			ctx = "away_tb_match_point"
+		}
+		return &setPointSignal{
+			winner:       winner,
+			context:      ctx,
+			isMatchPoint: homeIsMP || awayIsMP,
+		}
+	}
+
+	// Non-tiebreak: set point = can win this game to win the set.
 	homeCanWinGame := canWinGame(p.HomePoints, p.AwayPoints, p.Server, 1)
 	awayCanWinGame := canWinGame(p.HomePoints, p.AwayPoints, p.Server, 2)
 

@@ -32,53 +32,39 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 	var cpExit *algorithms.ConvexPoolExitStrategy
 	var cpAdaptive *algorithms.ConvexPoolAdaptiveStrategy
 	var sw, swAggro, swNoAdj *algorithms.SetWinnerStrategy
+	var sp, spServe, spCheap, spSet1, spAggro *algorithms.SetPointStrategy
 
 	multi := algorithms.NewMultiStrategyFromFactories(emitter, log, map[string]algorithms.StrategyFactoryFn{
 		"matchpoint": func(e algorithms.OrderEmitter) algorithms.Strategy { return matchPoint },
 		"matchpoint-aggro": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
+			spAggro = algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
 				IncludeSetPoints: false,
 				IncludeReturning: true,
-				ServeConvProb:    0.97,
-				ReturnConvProb:   0.89,
+				PServe:           0.64,
 				MinMarketPrice:   0.05,
-				MinEdgeCents:     1,
+				MinEdgeCents:     5,
+				CooldownPoints:   3,
 				Label:            "matchpoint-aggro",
 			})
+			return spAggro
 		},
 		"setpoint": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
-				IncludeSetPoints: true,
-				IncludeReturning: true,
-				ServeConvProb:    0.93,
-				ReturnConvProb:   0.89,
-				MinMarketPrice:   0.05,
-				MinEdgeCents:     1,
-				Label:            "setpoint",
-			})
+			sp = algorithms.NewSetPointStrategyWithDB(e, db, log, algorithms.DefaultSetPointConfig())
+			return sp
 		},
 		"setpoint-serve": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
-				IncludeSetPoints: true,
-				IncludeReturning: false,
-				ServeConvProb:    0.93,
-				ReturnConvProb:   0.89,
-				MinMarketPrice:   0.05,
-				MinEdgeCents:     1,
-				Label:            "setpoint-serve",
-			})
+			cfg := algorithms.DefaultSetPointConfig()
+			cfg.IncludeReturning = false
+			cfg.Label = "setpoint-serve"
+			spServe = algorithms.NewSetPointStrategyWithDB(e, db, log, cfg)
+			return spServe
 		},
 		"setpoint-cheap": func(e algorithms.OrderEmitter) algorithms.Strategy {
-			return algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
-				IncludeSetPoints: true,
-				IncludeReturning: true,
-				ServeConvProb:    0.93,
-				ReturnConvProb:   0.89,
-				MaxMarketPrice:   0.50,
-				MinMarketPrice:   0.05,
-				MinEdgeCents:     1,
-				Label:            "setpoint-cheap",
-			})
+			cfg := algorithms.DefaultSetPointConfig()
+			cfg.MaxMarketPrice = 0.50
+			cfg.Label = "setpoint-cheap"
+			spCheap = algorithms.NewSetPointStrategyWithDB(e, db, log, cfg)
+			return spCheap
 		},
 		"fadelongshot": func(e algorithms.OrderEmitter) algorithms.Strategy { return fadeLongshot },
 		"nofade":       func(e algorithms.OrderEmitter) algorithms.Strategy { return noFade },
@@ -209,7 +195,8 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 			cfg := algorithms.DefaultSetPointConfig()
 			cfg.Label = "setpoint-set1"
 			cfg.MaxSetNumber = 1
-			return algorithms.NewSetPointStrategyWithDB(e, db, log, cfg)
+			spSet1 = algorithms.NewSetPointStrategyWithDB(e, db, log, cfg)
+			return spSet1
 		},
 		"convexpool-wta": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			cfg := algorithms.DefaultConvexPoolConfig()
@@ -317,6 +304,21 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 	}
 	if swNoAdj != nil {
 		swNoAdj.SetSharedMarkovModel(sharedMarkov)
+	}
+	if sp != nil {
+		sp.SetSharedMarkovModel(sharedMarkov)
+	}
+	if spServe != nil {
+		spServe.SetSharedMarkovModel(sharedMarkov)
+	}
+	if spCheap != nil {
+		spCheap.SetSharedMarkovModel(sharedMarkov)
+	}
+	if spSet1 != nil {
+		spSet1.SetSharedMarkovModel(sharedMarkov)
+	}
+	if spAggro != nil {
+		spAggro.SetSharedMarkovModel(sharedMarkov)
 	}
 
 	multi.SetDB(db)

@@ -20,30 +20,38 @@ func DefaultFactories() map[string]StrategyFactory {
 			return algorithms.NewMatchPointStrategy(em, log)
 		},
 		"matchpoint-aggro": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
-			return algorithms.NewSetPointStrategy(em, log, algorithms.SetPointConfig{
+			s := algorithms.NewSetPointStrategy(em, log, algorithms.SetPointConfig{
 				IncludeSetPoints: false,
 				IncludeReturning: true,
-				ServeConvProb:    0.97,
-				ReturnConvProb:   0.89,
+				PServe:           0.64,
 				MinMarketPrice:   0.05,
-				MinEdgeCents:     1,
+				MinEdgeCents:     5,
+				CooldownPoints:   3,
 				Label:            "matchpoint-aggro",
 			})
+			s.SetSharedMarkovModel(sharedMarkov)
+			return s
 		},
 		"setpoint": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
-			return algorithms.NewSetPointStrategy(em, log, algorithms.DefaultSetPointConfig())
+			s := algorithms.NewSetPointStrategy(em, log, algorithms.DefaultSetPointConfig())
+			s.SetSharedMarkovModel(sharedMarkov)
+			return s
 		},
 		"setpoint-serve": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			cfg := algorithms.DefaultSetPointConfig()
 			cfg.IncludeReturning = false
 			cfg.Label = "setpoint-serve"
-			return algorithms.NewSetPointStrategy(em, log, cfg)
+			s := algorithms.NewSetPointStrategy(em, log, cfg)
+			s.SetSharedMarkovModel(sharedMarkov)
+			return s
 		},
 		"setpoint-cheap": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			cfg := algorithms.DefaultSetPointConfig()
 			cfg.MaxMarketPrice = 0.50
 			cfg.Label = "setpoint-cheap"
-			return algorithms.NewSetPointStrategy(em, log, cfg)
+			s := algorithms.NewSetPointStrategy(em, log, cfg)
+			s.SetSharedMarkovModel(sharedMarkov)
+			return s
 		},
 		"fadelongshot": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewFadeLongshotStrategy(em, log, algorithms.DefaultFadeLongshotConfig())
@@ -252,7 +260,9 @@ func DefaultFactories() map[string]StrategyFactory {
 		cfg := algorithms.DefaultSetPointConfig()
 		cfg.Label = "setpoint-set1"
 		cfg.MaxSetNumber = 1
-		return algorithms.NewSetPointStrategy(em, log, cfg)
+		s := algorithms.NewSetPointStrategy(em, log, cfg)
+		s.SetSharedMarkovModel(sharedMarkov)
+		return s
 	},
 	// DEEP_RESEARCH_2: convexpool on WTA only (Sharpe 0.39 vs 0.12 base).
 	"convexpool-wta": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
