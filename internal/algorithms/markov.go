@@ -383,3 +383,14 @@ func (m *MarkovModel) FairValue(setsHome, setsAway int, gamesHome, gamesAway int
 	// Clamp to [0.01, 0.99] to avoid extreme values
 	return math.Max(0.01, math.Min(0.99, p))
 }
+
+// SetWinProbability returns P(home wins the current set) from the given
+// in-set score. Does not recurse to match level — pure set-win probability.
+// Useful for set-winner market fair value and per-set signal diagnostics.
+func (m *MarkovModel) SetWinProbability(gamesHome, gamesAway int, homePoints, awayPoints string, server int, isTiebreak bool) float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pHomeGame := m.gameWinProb(homePoints, awayPoints, server == 1, isTiebreak)
+	p := m.setWinProb(gamesHome, gamesAway, pHomeGame, server, isTiebreak)
+	return math.Max(0.01, math.Min(0.99, p))
+}

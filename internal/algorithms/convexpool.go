@@ -25,7 +25,9 @@ type ConvexPoolStrategy struct {
 	priceTimes map[string]time.Time
 	markets    map[string][]string
 	states     map[string]*cpMatchState
+	series     map[string]string // event_ticker -> series_ticker
 	emitter    OrderEmitter
+	db         *store.DB // nil in backtest mode
 	model      *MarkovModel
 	cfg        ConvexPoolConfig
 	log        *slog.Logger
@@ -45,6 +47,13 @@ type ConvexPoolConfig struct {
 	MinMarketPrice float64
 	MaxMarketPrice float64 // 0 = no cap
 	Label          string
+	// SeriesFilter: if non-empty, only fire on events matching one of these
+	// series tickers. Empty = no filter (all series).
+	SeriesFilter []string
+	// UTCHourStart / UTCHourEnd: if non-zero, only fire when entry ts UTC hour
+	// falls in [Start, End). Both 0 = no filter.
+	UTCHourStart int
+	UTCHourEnd   int
 }
 
 // DefaultConvexPoolConfig returns sensible defaults.
@@ -66,11 +75,28 @@ func NewConvexPoolStrategy(emitter OrderEmitter, log *slog.Logger, cfg ConvexPoo
 		priceTimes: make(map[string]time.Time),
 		markets:    make(map[string][]string),
 		states:     make(map[string]*cpMatchState),
+		series:     make(map[string]string),
 		emitter:    emitter,
 		model:      NewMarkovModelWithProb(cfg.PServe),
 		cfg:        cfg,
 		log:        log,
 	}
+}
+
+// SetSeriesTicker maps event_ticker to series_ticker for series filtering.
+// Implements SeriesSetter — called by backtest engine or live wiring.
+func (s *ConvexPoolStrategy) SetSeriesTicker(eventTicker, seriesTicker string) {
+	s.mu.Lock()
+	s.series[eventTicker] = seriesTicker
+	s.mu.Unlock()
+}
+
+// NewConvexPoolStrategyWithDB creates a live-mode convexpool that auto-loads
+// series_ticker from the markets table on RegisterMarkets.
+func NewConvexPoolStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg ConvexPoolConfig) *ConvexPoolStrategy {
+	s := NewConvexPoolStrategy(emitter, log, cfg)
+	s.db = db
+	return s
 }
 
 func (s *ConvexPoolStrategy) OnPrice(marketTicker string, price float64) {
@@ -114,6 +140,19 @@ func (s *ConvexPoolStrategy) RegisterMarkets(eventTicker string, marketTickers [
 		s.states[eventTicker] = &cpMatchState{}
 	}
 	s.mu.Unlock()
+
+	if s.db != nil {
+		s.loadSeriesTicker(eventTicker)
+	}
+}
+
+func (s *ConvexPoolStrategy) loadSeriesTicker(eventTicker string) {
+	series, err := s.db.GetSeriesTicker(context.Background(), eventTicker)
+	if err == nil && series != "" {
+		s.mu.Lock()
+		s.series[eventTicker] = series
+		s.mu.Unlock()
+	}
 }
 
 func (s *ConvexPoolStrategy) UnregisterMarkets(eventTicker string) {
@@ -124,6 +163,7 @@ func (s *ConvexPoolStrategy) UnregisterMarkets(eventTicker string) {
 	}
 	delete(s.markets, eventTicker)
 	delete(s.states, eventTicker)
+	delete(s.series, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -158,8 +198,19 @@ func (s *ConvexPoolStrategy) updateMatchState(eventTicker string, p store.Point)
 func (s *ConvexPoolStrategy) processConvex(eventTicker string, p store.Point) {
 	s.mu.RLock()
 	mkts, ok := s.markets[eventTicker]
+	series := s.series[eventTicker]
 	s.mu.RUnlock()
 	if !ok || len(mkts) < 2 {
+		return
+	}
+
+	// Series filter
+	if !seriesMatches(series, s.cfg.SeriesFilter) {
+		return
+	}
+
+	// UTC hour filter
+	if !utcHourMatches(s.now(), s.cfg.UTCHourStart, s.cfg.UTCHourEnd) {
 		return
 	}
 

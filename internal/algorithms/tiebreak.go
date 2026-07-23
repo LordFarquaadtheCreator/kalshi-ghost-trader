@@ -35,6 +35,13 @@ type TiebreakConfig struct {
 	BaseSize float64
 	// Label: strategy name for logging.
 	Label string
+	// SeriesFilter: if non-empty, only fire on events matching one of these
+	// series tickers. Empty = no filter (all series).
+	SeriesFilter []string
+	// UTCHourStart / UTCHourEnd: if non-zero, only fire when entry ts UTC hour
+	// falls in [Start, End). Both 0 = no filter.
+	UTCHourStart int
+	UTCHourEnd   int
 }
 
 func DefaultTiebreakConfig() TiebreakConfig {
@@ -58,7 +65,9 @@ type TiebreakStrategy struct {
 	maxPrices map[string]float64  // market_ticker -> peak price
 	markets   map[string][]string // event_ticker -> [home, away]
 	fired     map[string]bool     // event_ticker -> fired
+	series    map[string]string   // event_ticker -> series_ticker
 	emitter   OrderEmitter
+	db        *store.DB // nil in backtest mode
 	log       *slog.Logger
 	cfg       TiebreakConfig
 	replayNow *time.Time
@@ -70,16 +79,46 @@ func NewTiebreakStrategy(emitter OrderEmitter, log *slog.Logger, cfg TiebreakCon
 		maxPrices: make(map[string]float64),
 		markets:   make(map[string][]string),
 		fired:     make(map[string]bool),
+		series:    make(map[string]string),
 		emitter:   emitter,
 		log:       log,
 		cfg:       cfg,
 	}
 }
 
+// NewTiebreakStrategyWithDB creates a live-mode tiebreak that auto-loads
+// series_ticker from the markets table on RegisterMarkets.
+func NewTiebreakStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg TiebreakConfig) *TiebreakStrategy {
+	s := NewTiebreakStrategy(emitter, log, cfg)
+	s.db = db
+	return s
+}
+
+// SetSeriesTicker maps event_ticker to series_ticker for series filtering.
+// Implements SeriesSetter — called by backtest engine or live wiring.
+func (s *TiebreakStrategy) SetSeriesTicker(eventTicker, seriesTicker string) {
+	s.mu.Lock()
+	s.series[eventTicker] = seriesTicker
+	s.mu.Unlock()
+}
+
 func (s *TiebreakStrategy) RegisterMarkets(eventTicker string, marketTickers []string) {
 	s.mu.Lock()
 	s.markets[eventTicker] = marketTickers
 	s.mu.Unlock()
+
+	if s.db != nil {
+		s.loadSeriesTicker(eventTicker)
+	}
+}
+
+func (s *TiebreakStrategy) loadSeriesTicker(eventTicker string) {
+	series, err := s.db.GetSeriesTicker(context.Background(), eventTicker)
+	if err == nil && series != "" {
+		s.mu.Lock()
+		s.series[eventTicker] = series
+		s.mu.Unlock()
+	}
 }
 
 func (s *TiebreakStrategy) UnregisterMarkets(eventTicker string) {
@@ -90,6 +129,7 @@ func (s *TiebreakStrategy) UnregisterMarkets(eventTicker string) {
 	}
 	delete(s.markets, eventTicker)
 	delete(s.fired, eventTicker)
+	delete(s.series, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -112,6 +152,18 @@ func (s *TiebreakStrategy) OnPriceAt(marketTicker string, price float64, ts time
 
 	maxPrice := s.maxPrices[marketTicker]
 	if maxPrice < s.cfg.MinPeakPrice {
+		s.mu.Unlock()
+		return
+	}
+
+	// Series filter
+	if !seriesMatches(s.series[eventTicker], s.cfg.SeriesFilter) {
+		s.mu.Unlock()
+		return
+	}
+
+	// UTC hour filter
+	if !utcHourMatches(ts, s.cfg.UTCHourStart, s.cfg.UTCHourEnd) {
 		s.mu.Unlock()
 		return
 	}
@@ -200,9 +252,21 @@ func (s *TiebreakStrategy) OnPoint(eventTicker string, p store.Point) {
 		brokenMkt = mkts[1]
 	}
 
+	series := s.series[eventTicker]
+	s.mu.Unlock()
+
+	// Series filter
+	if !seriesMatches(series, s.cfg.SeriesFilter) {
+		return
+	}
+
+	// UTC hour filter
+	if !utcHourMatches(s.now(), s.cfg.UTCHourStart, s.cfg.UTCHourEnd) {
+		return
+	}
+
 	maxPrice := s.maxPrices[brokenMkt]
 	price := s.prices[brokenMkt]
-	s.mu.Unlock()
 
 	if maxPrice < s.cfg.MinPeakPrice {
 		return

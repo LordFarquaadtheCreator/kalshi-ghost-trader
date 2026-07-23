@@ -37,6 +37,16 @@ type SetPointConfig struct {
 	MinEdgeCents int
 	// Label: strategy name for logging.
 	Label string
+	// MaxSetNumber: if > 0, only fire on set points in sets <= this number
+	// (e.g. 1 = set 1 only). 0 = no filter.
+	MaxSetNumber int
+	// SeriesFilter: if non-empty, only fire on events matching one of these
+	// series tickers. Empty = no filter (all series).
+	SeriesFilter []string
+	// UTCHourStart / UTCHourEnd: if non-zero, only fire when entry ts UTC hour
+	// falls in [Start, End). Both 0 = no filter.
+	UTCHourStart int
+	UTCHourEnd   int
 }
 
 // DefaultSetPointConfig fires on all set points (serving + returning).
@@ -64,7 +74,9 @@ type SetPointStrategy struct {
 	markets     map[string][]string
 	matchStates map[string]*matchState
 	seenPoints  map[string]map[string]bool
+	series      map[string]string // event_ticker -> series_ticker
 	emitter     OrderEmitter
+	db          *store.DB // nil in backtest mode
 	log         *slog.Logger
 	cfg         SetPointConfig
 	replayNow   *time.Time
@@ -77,16 +89,46 @@ func NewSetPointStrategy(emitter OrderEmitter, log *slog.Logger, cfg SetPointCon
 		markets:     make(map[string][]string),
 		matchStates: make(map[string]*matchState),
 		seenPoints:  make(map[string]map[string]bool),
+		series:      make(map[string]string),
 		emitter:     emitter,
 		log:         log,
 		cfg:         cfg,
 	}
 }
 
+// NewSetPointStrategyWithDB creates a live-mode setpoint that auto-loads
+// series_ticker from the markets table on RegisterMarkets.
+func NewSetPointStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg SetPointConfig) *SetPointStrategy {
+	s := NewSetPointStrategy(emitter, log, cfg)
+	s.db = db
+	return s
+}
+
+// SetSeriesTicker maps event_ticker to series_ticker for series filtering.
+// Implements SeriesSetter — called by backtest engine or live wiring.
+func (s *SetPointStrategy) SetSeriesTicker(eventTicker, seriesTicker string) {
+	s.mu.Lock()
+	s.series[eventTicker] = seriesTicker
+	s.mu.Unlock()
+}
+
 func (s *SetPointStrategy) RegisterMarkets(eventTicker string, marketTickers []string) {
 	s.mu.Lock()
 	s.markets[eventTicker] = marketTickers
 	s.mu.Unlock()
+
+	if s.db != nil {
+		s.loadSeriesTicker(eventTicker)
+	}
+}
+
+func (s *SetPointStrategy) loadSeriesTicker(eventTicker string) {
+	series, err := s.db.GetSeriesTicker(context.Background(), eventTicker)
+	if err == nil && series != "" {
+		s.mu.Lock()
+		s.series[eventTicker] = series
+		s.mu.Unlock()
+	}
 }
 
 func (s *SetPointStrategy) UnregisterMarkets(eventTicker string) {
@@ -98,6 +140,7 @@ func (s *SetPointStrategy) UnregisterMarkets(eventTicker string) {
 	delete(s.markets, eventTicker)
 	delete(s.matchStates, eventTicker)
 	delete(s.seenPoints, eventTicker)
+	delete(s.series, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -180,6 +223,21 @@ func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
 
 	sp := s.detectSetPoint(eventTicker, p)
 	if sp == nil {
+		return
+	}
+
+	// MaxSetNumber filter: only fire on sets <= MaxSetNumber
+	if s.cfg.MaxSetNumber > 0 && p.SetNumber > s.cfg.MaxSetNumber {
+		return
+	}
+
+	// Series filter
+	if !seriesMatches(s.series[eventTicker], s.cfg.SeriesFilter) {
+		return
+	}
+
+	// UTC hour filter
+	if !utcHourMatches(s.now(), s.cfg.UTCHourStart, s.cfg.UTCHourEnd) {
 		return
 	}
 

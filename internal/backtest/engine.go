@@ -111,6 +111,11 @@ type VolumeSetter interface {
 	SetVolumeSeries(marketTicker string, vols []algorithms.TickVolume)
 }
 
+// BookSetter is implemented by strategies needing bid/ask/sizes series.
+type BookSetter interface {
+	SetBookSeries(marketTicker string, books []algorithms.BookTick)
+}
+
 // Engine holds loaded DB data and runs strategies against it. Replay-only.
 type Engine struct {
 	db            *gorm.DB
@@ -119,6 +124,7 @@ type Engine struct {
 	marketCloseTs map[string]int64
 	tickPrices    map[string][]TickPrice
 	tickVolumes   map[string][]TickVolume
+	bookTicks     map[string][]algorithms.BookTick
 	points        map[string][]store.Point
 	eventTitles   map[string]string
 	eventSeries   map[string]string
@@ -146,6 +152,7 @@ func NewEngine(log *slog.Logger, db *gorm.DB) (*Engine, error) {
 		marketCloseTs:    make(map[string]int64),
 		tickPrices:       make(map[string][]TickPrice),
 		tickVolumes:      make(map[string][]TickVolume),
+		bookTicks:        make(map[string][]algorithms.BookTick),
 		points:           make(map[string][]store.Point),
 		eventTitles:      make(map[string]string),
 		eventSeries:      make(map[string]string),

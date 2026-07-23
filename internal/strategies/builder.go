@@ -155,6 +155,110 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 			cfg.UTCHourEnd = 4
 			return algorithms.NewFadeLongshotStrategyWithDB(e, db, log, cfg)
 		},
+		// DEEP_RESEARCH_2: filtered variants of existing winners.
+		"setdown-series": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultSetDownConfig()
+			cfg.Label = "setdown-series"
+			cfg.SeriesFilter = []string{"KXATPCHALLENGERMATCH", "KXATPMATCH", "KXWTAMATCH", "KXITFDOUBLES"}
+			return algorithms.NewSetDownStrategyWithDB(e, db, log, cfg)
+		},
+		"setdown-noon": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultSetDownConfig()
+			cfg.Label = "setdown-noon"
+			cfg.UTCHourStart = 11
+			cfg.UTCHourEnd = 13
+			return algorithms.NewSetDownStrategyWithDB(e, db, log, cfg)
+		},
+		"tiebreak-itfwdoubles": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultTiebreakConfig()
+			cfg.Label = "tiebreak-itfwdoubles"
+			cfg.SeriesFilter = []string{"KXITFWDOUBLES"}
+			return algorithms.NewTiebreakStrategyWithDB(e, db, log, cfg)
+		},
+		"tiebreak-eu-daytime": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultTiebreakConfig()
+			cfg.Label = "tiebreak-eu-daytime"
+			cfg.UTCHourStart = 10
+			cfg.UTCHourEnd = 16
+			return algorithms.NewTiebreakStrategyWithDB(e, db, log, cfg)
+		},
+		"cross-arb-favorite-itf": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultCrossArbFavoriteConfig()
+			cfg.Label = "cross-arb-favorite-itf"
+			cfg.SeriesFilter = []string{"KXITFMATCH"}
+			return algorithms.NewCrossArbFavoriteStrategyWithDB(e, db, log, cfg)
+		},
+		"setpoint-set1": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultSetPointConfig()
+			cfg.Label = "setpoint-set1"
+			cfg.MaxSetNumber = 1
+			return algorithms.NewSetPointStrategyWithDB(e, db, log, cfg)
+		},
+		"convexpool-wta": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultConvexPoolConfig()
+			cfg.Label = "convexpool-wta"
+			cfg.SeriesFilter = []string{"KXWTAMATCH"}
+			return algorithms.NewConvexPoolStrategyWithDB(e, db, log, cfg)
+		},
+		"doublebreak": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewDoubleBreakStrategy(e, log, algorithms.DefaultDoubleBreakConfig())
+		},
+		"bookpressure": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewBookPressureStrategy(e, log, algorithms.DefaultBookPressureConfig())
+		},
+		"bookpressure-strict": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultBookPressureConfig()
+			cfg.MinPressure = 0.70
+			cfg.CooldownSeconds = 180
+			cfg.MinBidSize = 500
+			cfg.MinAskSize = 500
+			cfg.TakeProfitCents = 3
+			cfg.StopLossCents = 2
+			cfg.Label = "bookpressure-strict"
+			return algorithms.NewBookPressureStrategy(e, log, cfg)
+		},
+		"bookpressure-deep": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultBookPressureConfig()
+			cfg.MinPressure = 0.75
+			cfg.CooldownSeconds = 120
+			cfg.MinBidSize = 1000
+			cfg.MinAskSize = 1000
+			cfg.TakeProfitCents = 4
+			cfg.StopLossCents = 2
+			cfg.HoldSeconds = 180
+			cfg.Label = "bookpressure-deep"
+			return algorithms.NewBookPressureStrategy(e, log, cfg)
+		},
+		"bookpressure-elite": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultBookPressureConfig()
+			cfg.MinPressure = 0.80
+			cfg.CooldownSeconds = 180
+			cfg.MinBidSize = 2000
+			cfg.MinAskSize = 2000
+			cfg.TakeProfitCents = 3
+			cfg.StopLossCents = 2
+			cfg.HoldSeconds = 180
+			cfg.Label = "bookpressure-elite"
+			return algorithms.NewBookPressureStrategy(e, log, cfg)
+		},
+		"setwinner": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewSetWinnerStrategy(e, log, algorithms.DefaultSetWinnerConfig())
+		},
+		"setwinner-aggro": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultSetWinnerConfig()
+			cfg.MinEdgeCents = 1
+			cfg.MaxMarketPrice = 0.95
+			cfg.CooldownPoints = 1
+			cfg.Label = "setwinner-aggro"
+			return algorithms.NewSetWinnerStrategy(e, log, cfg)
+		},
+		"setwinner-noadjust": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultSetWinnerConfig()
+			cfg.ReversalPenalty = 0
+			cfg.DecidingSetBoost = 0
+			cfg.Label = "setwinner-noadjust"
+			return algorithms.NewSetWinnerStrategy(e, log, cfg)
+		},
 		"close_timer": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return sigpkg.NewCloseTimer(db, matchPoint, e, log)
 		},

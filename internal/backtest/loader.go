@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/farquaad/kalshi-ghost-trader/internal/algorithms"
 	"github.com/farquaad/kalshi-ghost-trader/internal/store"
 )
 
@@ -87,6 +88,42 @@ func (e *Engine) load() error {
 	}
 	if err := tickRows.Err(); err != nil {
 		return fmt.Errorf("iterate tick rows: %w", err)
+	}
+
+	// Load book data (bid/ask/sizes) from ticker messages for book-pressure strategies.
+	bookRows, err := e.db.WithContext(ctx).Raw(`
+		SELECT market_ticker, ts, yes_bid, yes_ask, yes_bid_size, yes_ask_size
+		FROM ticks
+		WHERE market_ticker IN (SELECT market_ticker FROM markets WHERE status = 'finalized')
+		  AND msg_type = 'ticker'
+		  AND yes_bid > 0 AND yes_ask > 0
+		  AND yes_bid_size > 0 AND yes_ask_size > 0
+		ORDER BY market_ticker, ts
+	`).Rows()
+	if err != nil {
+		return fmt.Errorf("query book ticks: %w", err)
+	}
+	defer bookRows.Close()
+	for bookRows.Next() {
+		var mkt string
+		var ts int64
+		var bid, ask, bidSz, askSz sql.NullFloat64
+		if err := bookRows.Scan(&mkt, &ts, &bid, &ask, &bidSz, &askSz); err != nil {
+			return fmt.Errorf("scan book row: %w", err)
+		}
+		if !bid.Valid || !ask.Valid || !bidSz.Valid || !askSz.Valid {
+			continue
+		}
+		e.bookTicks[mkt] = append(e.bookTicks[mkt], algorithms.BookTick{
+			TS:      ts,
+			Bid:     bid.Float64,
+			Ask:     ask.Float64,
+			BidSize: bidSz.Float64,
+			AskSize: askSz.Float64,
+		})
+	}
+	if err := bookRows.Err(); err != nil {
+		return fmt.Errorf("iterate book rows: %w", err)
 	}
 
 	// Load point-by-point score data

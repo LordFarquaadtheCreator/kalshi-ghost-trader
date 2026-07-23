@@ -70,6 +70,14 @@ func (e *Engine) wireStrategyContext(strat ReplayStrategy, matchTicker, homeMkt,
 			vs.SetVolumeSeries(awayMkt, toAlgoVolumes(vols))
 		}
 	}
+	if bs, ok := strat.(BookSetter); ok {
+		if books := e.bookTicks[homeMkt]; len(books) > 0 {
+			bs.SetBookSeries(homeMkt, books)
+		}
+		if books := e.bookTicks[awayMkt]; len(books) > 0 {
+			bs.SetBookSeries(awayMkt, books)
+		}
+	}
 }
 
 // toAlgoVolumes converts engine TickVolume slice to algorithms.TickVolume slice.

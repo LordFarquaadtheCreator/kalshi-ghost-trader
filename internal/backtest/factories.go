@@ -93,6 +93,47 @@ func DefaultFactories() map[string]StrategyFactory {
 		"buythedip": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			return algorithms.NewBuyTheDipStrategy(em, log, algorithms.DefaultBuyTheDipConfig())
 		},
+		"doublebreak": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewDoubleBreakStrategy(em, log, algorithms.DefaultDoubleBreakConfig())
+		},
+		"bookpressure": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewBookPressureStrategy(em, log, algorithms.DefaultBookPressureConfig())
+		},
+		"bookpressure-strict": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultBookPressureConfig()
+			cfg.MinPressure = 0.70
+			cfg.CooldownSeconds = 180
+			cfg.MinBidSize = 500
+			cfg.MinAskSize = 500
+			cfg.TakeProfitCents = 3
+			cfg.StopLossCents = 2
+			cfg.Label = "bookpressure-strict"
+			return algorithms.NewBookPressureStrategy(em, log, cfg)
+		},
+		"bookpressure-deep": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultBookPressureConfig()
+			cfg.MinPressure = 0.75
+			cfg.CooldownSeconds = 120
+			cfg.MinBidSize = 1000
+			cfg.MinAskSize = 1000
+			cfg.TakeProfitCents = 4
+			cfg.StopLossCents = 2
+			cfg.HoldSeconds = 180
+			cfg.Label = "bookpressure-deep"
+			return algorithms.NewBookPressureStrategy(em, log, cfg)
+		},
+		"bookpressure-elite": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultBookPressureConfig()
+			cfg.MinPressure = 0.80
+			cfg.CooldownSeconds = 180
+			cfg.MinBidSize = 2000
+			cfg.MinAskSize = 2000
+			cfg.TakeProfitCents = 3
+			cfg.StopLossCents = 2
+			cfg.HoldSeconds = 180
+			cfg.Label = "bookpressure-elite"
+			return algorithms.NewBookPressureStrategy(em, log, cfg)
+		},
 		// RQ3: series-tier stratification of fadelongshot
 		"fadelongshot-itf": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 			cfg := algorithms.DefaultFadeLongshotConfig()
@@ -133,5 +174,76 @@ func DefaultFactories() map[string]StrategyFactory {
 			cfg.UTCHourEnd = 4
 			return algorithms.NewFadeLongshotStrategy(em, log, cfg)
 		},
+		// Set-winner prediction: Markov match-win prob + per-set psychological adjustment
+		"setwinner": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			return algorithms.NewSetWinnerStrategy(em, log, algorithms.DefaultSetWinnerConfig())
+		},
+		"setwinner-aggro": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultSetWinnerConfig()
+			cfg.MinEdgeCents = 1
+			cfg.MaxMarketPrice = 0.95
+			cfg.CooldownPoints = 1
+			cfg.Label = "setwinner-aggro"
+			return algorithms.NewSetWinnerStrategy(em, log, cfg)
+		},
+		// Ablation: pure Markov, no per-set adjustment
+		"setwinner-noadjust": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+			cfg := algorithms.DefaultSetWinnerConfig()
+			cfg.ReversalPenalty = 0
+			cfg.DecidingSetBoost = 0
+			cfg.Label = "setwinner-noadjust"
+			return algorithms.NewSetWinnerStrategy(em, log, cfg)
+		},
+	// DEEP_RESEARCH_2: setdown filtered to positive-P&L series only.
+	"setdown-series": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultSetDownConfig()
+		cfg.Label = "setdown-series"
+		cfg.SeriesFilter = []string{"KXATPCHALLENGERMATCH", "KXATPMATCH", "KXWTAMATCH", "KXITFDOUBLES"}
+		return algorithms.NewSetDownStrategy(em, log, cfg)
+	},
+	// DEEP_RESEARCH_2: setdown at UTC 11-13 (noon window, Sharpe 1.17).
+	"setdown-noon": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultSetDownConfig()
+		cfg.Label = "setdown-noon"
+		cfg.UTCHourStart = 11
+		cfg.UTCHourEnd = 13
+		return algorithms.NewSetDownStrategy(em, log, cfg)
+	},
+	// DEEP_RESEARCH_2: tiebreak on ITF women's doubles (Sharpe 2.07, 99.3% hit).
+	"tiebreak-itfwdoubles": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultTiebreakConfig()
+		cfg.Label = "tiebreak-itfwdoubles"
+		cfg.SeriesFilter = []string{"KXITFWDOUBLES"}
+		return algorithms.NewTiebreakStrategy(em, log, cfg)
+	},
+	// DEEP_RESEARCH_2: tiebreak EU daytime only (UTC 10-16).
+	"tiebreak-eu-daytime": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultTiebreakConfig()
+		cfg.Label = "tiebreak-eu-daytime"
+		cfg.UTCHourStart = 10
+		cfg.UTCHourEnd = 16
+		return algorithms.NewTiebreakStrategy(em, log, cfg)
+	},
+	// DEEP_RESEARCH_2: cross-arb-favorite on ITF men's only (Sharpe 1.18).
+	"cross-arb-favorite-itf": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultCrossArbFavoriteConfig()
+		cfg.Label = "cross-arb-favorite-itf"
+		cfg.SeriesFilter = []string{"KXITFMATCH"}
+		return algorithms.NewCrossArbFavoriteStrategy(em, log, cfg)
+	},
+	// DEEP_RESEARCH_2: setpoint set 1 only (removes losing set 2+ bucket).
+	"setpoint-set1": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultSetPointConfig()
+		cfg.Label = "setpoint-set1"
+		cfg.MaxSetNumber = 1
+		return algorithms.NewSetPointStrategy(em, log, cfg)
+	},
+	// DEEP_RESEARCH_2: convexpool on WTA only (Sharpe 0.39 vs 0.12 base).
+	"convexpool-wta": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultConvexPoolConfig()
+		cfg.Label = "convexpool-wta"
+		cfg.SeriesFilter = []string{"KXWTAMATCH"}
+		return algorithms.NewConvexPoolStrategy(em, log, cfg)
+	},
 	}
 }

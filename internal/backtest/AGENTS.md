@@ -51,6 +51,7 @@ Optional interfaces strategies can implement:
 - `SeriesSetter` — needs series_ticker (fadelongshot variants)
 - `SurfaceSetter` — needs court surface (surface-markov)
 - `VolumeSetter` — needs dollar_volume series (volratio)
+- `BookSetter` — needs bid/ask/sizes series (bookpressure)
 - `algorithms.ScoreObserver` — wants point-by-point score updates
 
 ## Gotchas

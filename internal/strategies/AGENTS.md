@@ -54,6 +54,21 @@ emitter is wired separately inside `KalshiOrderEmitter` via `QuotaGuard`.
 | `fadelongshot-wta` | `FadeLongshotStrategy` | series-filtered: WTA |
 | `fadelongshot-doubles` | `FadeLongshotStrategy` | series-filtered: all doubles |
 | `fadelongshot-evening` | `FadeLongshotStrategy` | UTC hour window 18-4 |
+| `setdown-series` | `SetDownStrategy` | DEEP_RESEARCH_2: positive-P&L series only |
+| `setdown-noon` | `SetDownStrategy` | DEEP_RESEARCH_2: UTC 11-13 (Sharpe 1.17) |
+| `tiebreak-itfwdoubles` | `TiebreakStrategy` | DEEP_RESEARCH_2: ITF women's doubles (Sharpe 2.07) |
+| `tiebreak-eu-daytime` | `TiebreakStrategy` | DEEP_RESEARCH_2: UTC 10-16 |
+| `cross-arb-favorite-itf` | `CrossArbFavoriteStrategy` | DEEP_RESEARCH_2: ITF men's only |
+| `setpoint-set1` | `SetPointStrategy` | DEEP_RESEARCH_2: set 1 only |
+| `convexpool-wta` | `ConvexPoolStrategy` | DEEP_RESEARCH_2: WTA only (Sharpe 0.39) |
+| `doublebreak` | `DoubleBreakStrategy` | double break points (15-40, 30-40, 0-40) |
+| `bookpressure` | `BookPressureStrategy` | bid/ask size imbalance, default 0.60 pressure |
+| `bookpressure-strict` | `BookPressureStrategy` | 0.70 pressure, 500 min size, TP 3, SL 2 |
+| `bookpressure-deep` | `BookPressureStrategy` | 0.75 pressure, 1000 min size, TP 4, SL 2, 180s |
+| `bookpressure-elite` | `BookPressureStrategy` | 0.80 pressure, 2000 min size, TP 3, SL 2, 180s |
+| `setwinner` | `SetWinnerStrategy` | Markov + per-set psychological adjustment |
+| `setwinner-aggro` | `SetWinnerStrategy` | min edge 1, max price 0.95, cooldown 1 point |
+| `setwinner-noadjust` | `SetWinnerStrategy` | ablation: pure Markov, no per-set adjustment |
 | `close_timer` | `signal.CloseTimer` | uses `matchPoint` for `PriceLookup` |
 
 ## Gotchas

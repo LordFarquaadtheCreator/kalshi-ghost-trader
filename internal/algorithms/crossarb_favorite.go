@@ -27,6 +27,13 @@ type CrossArbFavoriteConfig struct {
 	MaxNOPrice float64
 	// Label: strategy label.
 	Label string
+	// SeriesFilter: if non-empty, only fire on events matching one of these
+	// series tickers. Empty = no filter (all series).
+	SeriesFilter []string
+	// UTCHourStart / UTCHourEnd: if non-zero, only fire when entry ts UTC hour
+	// falls in [Start, End). Both 0 = no filter.
+	UTCHourStart int
+	UTCHourEnd   int
 }
 
 func DefaultCrossArbFavoriteConfig() CrossArbFavoriteConfig {
@@ -47,7 +54,9 @@ type CrossArbFavoriteStrategy struct {
 	prices    map[string]float64
 	markets   map[string][]string
 	fired     map[string]bool
+	series    map[string]string // event_ticker -> series_ticker
 	emitter   OrderEmitter
+	db        *store.DB // nil in backtest mode
 	log       *slog.Logger
 	cfg       CrossArbFavoriteConfig
 	replayNow *time.Time
@@ -58,16 +67,46 @@ func NewCrossArbFavoriteStrategy(emitter OrderEmitter, log *slog.Logger, cfg Cro
 		prices:  make(map[string]float64),
 		markets: make(map[string][]string),
 		fired:   make(map[string]bool),
+		series:  make(map[string]string),
 		emitter: emitter,
 		log:     log,
 		cfg:     cfg,
 	}
 }
 
+// NewCrossArbFavoriteStrategyWithDB creates a live-mode cross-arb-favorite
+// that auto-loads series_ticker from the markets table on RegisterMarkets.
+func NewCrossArbFavoriteStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg CrossArbFavoriteConfig) *CrossArbFavoriteStrategy {
+	s := NewCrossArbFavoriteStrategy(emitter, log, cfg)
+	s.db = db
+	return s
+}
+
+// SetSeriesTicker maps event_ticker to series_ticker for series filtering.
+// Implements SeriesSetter — called by backtest engine or live wiring.
+func (s *CrossArbFavoriteStrategy) SetSeriesTicker(eventTicker, seriesTicker string) {
+	s.mu.Lock()
+	s.series[eventTicker] = seriesTicker
+	s.mu.Unlock()
+}
+
 func (s *CrossArbFavoriteStrategy) RegisterMarkets(eventTicker string, marketTickers []string) {
 	s.mu.Lock()
 	s.markets[eventTicker] = marketTickers
 	s.mu.Unlock()
+
+	if s.db != nil {
+		s.loadSeriesTicker(eventTicker)
+	}
+}
+
+func (s *CrossArbFavoriteStrategy) loadSeriesTicker(eventTicker string) {
+	series, err := s.db.GetSeriesTicker(context.Background(), eventTicker)
+	if err == nil && series != "" {
+		s.mu.Lock()
+		s.series[eventTicker] = series
+		s.mu.Unlock()
+	}
 }
 
 func (s *CrossArbFavoriteStrategy) UnregisterMarkets(eventTicker string) {
@@ -77,6 +116,7 @@ func (s *CrossArbFavoriteStrategy) UnregisterMarkets(eventTicker string) {
 	}
 	delete(s.markets, eventTicker)
 	delete(s.fired, eventTicker)
+	delete(s.series, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -111,6 +151,18 @@ func (s *CrossArbFavoriteStrategy) OnPriceAt(marketTicker string, price float64,
 	yesSum := homePrice + awayPrice
 	noEdgeCents := int((yesSum - 1.0) * 100)
 	if noEdgeCents < s.cfg.MinEdgeCents {
+		s.mu.Unlock()
+		return
+	}
+
+	// Series filter
+	if !seriesMatches(s.series[eventTicker], s.cfg.SeriesFilter) {
+		s.mu.Unlock()
+		return
+	}
+
+	// UTC hour filter
+	if !utcHourMatches(ts, s.cfg.UTCHourStart, s.cfg.UTCHourEnd) {
 		s.mu.Unlock()
 		return
 	}

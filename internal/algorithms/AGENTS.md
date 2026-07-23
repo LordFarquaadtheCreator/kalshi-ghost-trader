@@ -28,6 +28,8 @@ backtest engine — one source of truth for signal logic.
 - `calibrated_markov.go` — calibrated Markov strategy
 - `surface_markov.go` — surface Markov strategy
 - `buythedip.go` — buy-the-dip strategy (first with full sell-to-close pipeline)
+- `bookpressure.go` — book pressure microstructure strategy (bid/ask size imbalance)
+- `setwinner.go` — per-set Markov set-winner prediction strategy
 
 ## Interfaces
 
@@ -225,6 +227,125 @@ can re-enter on a new dip.
 - No stale price guard on sell (unlike adout which checks priceStaleTTL).
   If WS disconnects mid-position, time exit will fire on next price
   update. If no update arrives, position settles at market close.
+
+## BookPressureStrategy (`bookpressure.go`)
+
+Microstructure strategy exploiting bid/ask size imbalance. First strategy
+using orderbook depth data (bid/ask sizes from ticker messages).
+
+Research (200K sampled ticker msgs across finalized markets):
+- Strong bid pressure (>0.6): +0.98c avg drift over 120s, 42.6% up rate
+- Strong ask pressure (<-0.6): -0.33c avg drift, 30.7% up rate
+- Signal asymmetric — bid side much stronger
+- Works across all price levels (0.20-0.80)
+- Avg pressure during match does NOT predict final outcome — purely
+  a short-term drift signal
+
+Logic:
+1. On each price tick, looks up book state (bid/ask sizes) at current ts
+2. Computes pressure = (bid_size - ask_size) / (bid_size + ask_size)
+3. If pressure >= MinPressure, buys YES at current price
+4. Exits via TP (price rises TakeProfitCents), SL (price drops StopLossCents),
+   time exit (HoldSeconds), or pressure reversal (< ExitPressure)
+5. Per-market cooldown between entries
+
+Config (`BookPressureConfig`):
+- `MinPressure` — threshold to trigger (default 0.60)
+- `ExitPressure` — exit if pressure drops below (default 0.0)
+- `MinBidSize`/`MinAskSize` — minimum book depth (default 100)
+- `MinEntryPrice`/`MaxEntryPrice` — tradeable range (0.15-0.85)
+- `HoldSeconds` — time exit (default 120)
+- `TakeProfitCents` — TP threshold (default 5)
+- `StopLossCents` — SL threshold (default 3)
+- `CooldownSeconds` — per-market cooldown (default 60)
+
+Implements `ScoreObserver` — excludes match/set point context.
+Implements `PreMatchGated` — only fires after match starts.
+Implements `BookSetter` (backtest) — receives historical book data.
+
+Backtest variants:
+- `bookpressure` — default (0.60 pressure, 100 min size)
+- `bookpressure-strict` — 0.70 pressure, 500 min size, TP 3, SL 2
+- `bookpressure-deep` — 0.75 pressure, 1000 min size, TP 4, SL 2, 180s hold
+- `bookpressure-elite` — 0.80 pressure, 2000 min size, TP 3, SL 2, 180s hold
+
+Backtest results (5625 matches):
+- `bookpressure`: 58K signals, 0.5% ROI, PF 2.0, Sharpe 0.098
+- `bookpressure-strict`: 16K signals, 0.5% ROI, PF 2.64, Sharpe 0.167
+- `bookpressure-deep`: 9.5K signals, 0.7% ROI, PF 3.18, Sharpe 0.171
+- `bookpressure-elite`: 3.1K signals, 0.7% ROI, PF 3.32, Sharpe 0.192
+
+Edge is real but small. Stricter filtering improves quality (PF, Sharpe)
+but reduces total P&L. Most trades exit at 0c (noise); edge comes from
+occasional TP hits. In live, passive orders needed to avoid spread cost
+eating the ~0.7c drift.
+
+**Gaps:**
+- Edge per trade thin (~0.7c). Spread cost in live (~1c) could erase it.
+  Needs passive order execution or larger position sizes.
+- Book data loaded via separate DB query in backtest (adds ~6s load time).
+  In live, book data comes from WS ticker messages (yes_bid_size, yes_ask_size).
+- No persistence requirement — fires on single tick with high pressure.
+  Could require N consecutive high-pressure ticks to filter momentary spikes.
+- Binary search on book series per tick — O(log N) per price update.
+  Fine for backtest; in live, book state is updated directly via OnPrice.
+
+## SetWinnerStrategy (`setwinner.go`)
+
+Per-set Markov set-winner prediction. Computes Markov match-win probability
+from current score, applies per-set psychological adjustment from research
+literature, buys the side with edge > threshold.
+
+Research basis:
+- Set 1: i.i.d. holds (Klaassen-Magnus 2001, Depken et al. 2021) — no adjustment
+- Set 2: psychological reversal — set 1 winner underperforms by ~3%
+  (Depken et al. 2021, Meier et al. 2022)
+- Set 3 (deciding, best-of-3): set 2 winner gets ~2% momentum boost
+  (IZA DP 9315)
+
+Logic:
+1. `OnPoint` updates match state (set counts, set 2 winner tracking)
+2. Computes Markov `FairValue` (match-win prob, home perspective)
+3. Applies per-set adjustment:
+   - Set 1: no change
+   - Set 2: if home won set 1, homeFV -= ReversalPenalty; else homeFV += ReversalPenalty
+   - Set 3 (1-1): if home won set 2, homeFV += DecidingSetBoost; else -= DecidingSetBoost
+   - Set 4+ (best-of-5): reversal on most recent set winner
+4. Computes edge for both sides, buys the side with larger edge
+5. Cooldown: CooldownPoints between fires per match
+
+Config (`SetWinnerConfig`):
+- `PServe` — serve point win probability (default 0.64)
+- `ReversalPenalty` — set 1 winner's match-win prob reduction in set 2 (default 0.03)
+- `DecidingSetBoost` — set 2 winner's match-win prob boost in set 3 (default 0.02)
+- `MinEdgeCents` — minimum edge to fire (default 3)
+- `MinMarketPrice` — don't buy below (default 0.05)
+- `MaxMarketPrice` — don't buy above (default 0.92)
+- `CooldownPoints` — min points between fires (default 3)
+- `Label` — strategy label (default "setwinner")
+
+Variants (registered in `factories.go`):
+- `setwinner` — default config
+- `setwinner-aggro` — MinEdgeCents=1, CooldownPoints=1, MaxMarketPrice=0.95
+- `setwinner-noadjust` — ReversalPenalty=0, DecidingSetBoost=0 (ablation control)
+
+Backtest results (5625 matches):
+- `setwinner`: 4701 signals, 5.3% ROI, $1204 P&L, Sharpe 0.025, PF 1.08
+- `setwinner-noadjust`: 4705 signals, 2.9% ROI, $660 P&L, Sharpe 0.014, PF 1.04
+- Per-set adjustment nearly doubles ROI (ablation validated)
+- Beats breakpoint (2.4% ROI) and convexpool (-4.6% ROI)
+- Highest absolute P&L among all set-related strategies
+
+Implements `ScoreObserver` for point-by-point score updates.
+
+**Gaps:**
+- Single global pServe — no per-player serve strength. WTA matches use ATP
+  default (0.64 vs ~0.62). Could parameterize via series_ticker detection.
+- ReversalPenalty/DecidingSetBoost are static. Could vary by player ranking
+  gap (bigger reversal for underdogs who won set 1 unexpectedly).
+- No sell logic — buy only. No exit on edge reversal.
+- 30% win rate (buying underdogs). Profitable due to payoff ratio (~3:1)
+  but high variance per trade.
 
 ## MultiStrategyRuntime (`multi.go`)
 
