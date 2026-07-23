@@ -23,7 +23,7 @@ Generic table from config. Props: `columns` (array of `{key, label, class?, alig
 Chart.js line chart bound to a polling store. Props: `title`, `series` (array of `{label, getValue, color}`), `store` (readable with `.history` array), `yUnit?`. Renders chart on store updates, destroys on unmount.
 
 ### BarChart.svelte
-Chart.js bar chart. Props: `title`, `labels`, `datasets`, `yLabel?`. Used for win/loss comparison on strategies page.
+Chart.js bar chart. Props: `title`, `labels`, `datasets`, `yLabel?`. Used for win/loss comparison.
 
 ### CollapsibleSection.svelte
 Collapsible wrapper for table sections. Props: `title`, `count?`, `defaultOpen?` (default true). Button header with arrow icon (▼/▶). Content via snippet children. Used across all pages with tables.

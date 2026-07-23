@@ -1,204 +1,157 @@
 <script>
-	import { onMount } from 'svelte';
-	import { page } from '$app/state';
-	import PageHeader from '$lib/components/PageHeader.svelte';
-	import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
-	import ModelLineage from '$lib/components/ModelLineage.svelte';
-	import GateProgress from '$lib/components/GateProgress.svelte';
-	import DriftPanel from '$lib/components/DriftPanel.svelte';
-	import EmptyState from '$lib/components/EmptyState.svelte';
-	import { api } from '$lib/api.js';
+  import { api } from '$lib/api.js';
+  import { browser } from '$app/environment';
+  import PageHeader from '$lib/components/PageHeader.svelte';
+  import EmptyState from '$lib/components/EmptyState.svelte';
+  import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
 
-	/** @typedef {{ id: number, family: string, version: number, status: string, trial_index: number, strategy_name?: string, feature_hash?: string, artifact_sha?: string, metrics?: any }} Model */
+  let { data } = $props();
 
-	let { data } = $props();
+  /** @type {string[]} */
+  let strategies = $state(data?.strategies ?? []);
+  /** @type {string | null} */
+  let error = $state(data?.error ?? null);
+  let connected = $state(!error);
 
-	/** @type {Model[]} */
-	let models = $state(data.models || []);
-	let error = $state(data.error || null);
-	let connected = $state(!error);
-	/** @type {Model | null} */
-	let selectedModel = $state(null);
-	/** @type {Array<{feature: string, train_mean: number, live_mean: number, drift_score: number}>} */
-	let driftData = $state([]);
+  async function refresh() {
+    try {
+      const result = await api.getStrategies();
+      strategies = result?.strategies ?? [];
+      error = null;
+      connected = true;
+    } catch (e) {
+      error = String(e);
+      connected = false;
+    }
+  }
 
-	onMount(() => {
-		if (models.length > 0) {
-			selectedModel = models[0];
-		}
-	});
+  // Group strategies by base name (strip variant suffixes for grouping).
+  function baseName(/** @type {string} */ s) {
+    for (const sep of ['-itf', '-wta', '-atp', '-challenger', '-doubles', '-evening',
+      '-noon', '-series', '-eu-daytime', '-itfwdoubles', '-set1', '-strict',
+      '-deep', '-elite', '-aggro', '-noadjust', '-serve', '-cheap', '-favorite']) {
+      if (s.endsWith(sep)) return s.slice(0, -sep.length);
+    }
+    return s;
+  }
 
-	async function refresh() {
-		try {
-			const result = await api.getModels();
-			models = result.data || result || [];
-			error = null;
-			connected = true;
-			if (!selectedModel && models.length > 0) {
-				selectedModel = models[0];
-			}
-		} catch (e) {
-			error = String(e);
-			connected = false;
-		}
-	}
-
-	/** @param {Model} m */
-	function selectModel(m) {
-		selectedModel = m;
-	}
-
-	// Find champion per family for leaderboard.
-	let champions = $derived(
-		models.filter((m) => m.status === 'champion')
-	);
-
-	let paperModels = $derived(
-		models.filter((m) => m.status === 'paper')
-	);
+  let groups = $derived.by(() => {
+    /** @type {Record<string, string[]>} */
+    const g = {};
+    for (const s of strategies) {
+      const b = baseName(s);
+      if (!g[b]) g[b] = [];
+      g[b].push(s);
+    }
+    // Sort groups alphabetically, variants within each group alphabetically.
+    /** @type {[string, string[]][]} */
+    const entries = Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
+    for (const [, variants] of entries) {
+      variants.sort();
+    }
+    return entries;
+  });
 </script>
 
 <svelte:head><title>Strategies — Kalshi Ghost Trader</title></svelte:head>
 
 <div class="page-container">
-	<PageHeader title="Learned Strategies" {connected} error={error || undefined}>
-		<button onclick={refresh} class="refresh-btn">Refresh</button>
-	</PageHeader>
+  <PageHeader title="Strategies" {connected} error={error || undefined}>
+    <button onclick={refresh} class="refresh-btn">Refresh</button>
+  </PageHeader>
 
-	{#if models.length === 0 && !error}
-		<EmptyState text="No models registered. Train a model to get started." />
-	{:else if error}
-		<EmptyState text={error} variant="error" />
-	{:else}
-		<div class="strategies-layout">
-			<div class="left-panel">
-				<CollapsibleSection title="Model Lineage" count={models.length} defaultOpen={true}>
-					<ModelLineage {models} />
-				</CollapsibleSection>
+  {#if strategies.length === 0 && !error}
+    <EmptyState text="No strategies registered." />
+  {:else if error}
+    <EmptyState text={error} variant="error" />
+  {:else}
+    <div class="summary-bar">
+      <div class="summary-stat">
+        <span class="label">Total</span>
+        <span class="value">{strategies.length}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="label">Base Strategies</span>
+        <span class="value">{groups.length}</span>
+      </div>
+    </div>
 
-				<CollapsibleSection title="Champion Leaderboard" count={champions.length} defaultOpen={true}>
-					{#if champions.length > 0}
-						<table class="leaderboard">
-							<thead>
-								<tr>
-									<th>Strategy</th>
-									<th>Family</th>
-									<th>Version</th>
-									<th>Deflated Sharpe</th>
-								</tr>
-							</thead>
-							<tbody>
-								{#each champions as m}
-									<tr data-testid="champion-row">
-										<td class="strategy-name">{m.strategy_name || `rl.${m.family}.v${m.version}`}</td>
-										<td>{m.family}</td>
-										<td>v{m.version}</td>
-										<td class="num">{(m.metrics?.deflated_sharpe || 0).toFixed(3)}</td>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
-					{:else}
-						<EmptyState text="No champion models yet" />
-					{/if}
-				</CollapsibleSection>
-			</div>
-
-			<div class="right-panel">
-				<CollapsibleSection title="Gate Progress" defaultOpen={true}>
-					<GateProgress model={selectedModel} />
-				</CollapsibleSection>
-
-				<CollapsibleSection title="Feature Drift" defaultOpen={false}>
-					<DriftPanel driftData={driftData} />
-				</CollapsibleSection>
-
-				{#if selectedModel}
-				<CollapsibleSection title="Model Details" defaultOpen={true}>
-					<dl class="model-details">
-						<dt>ID</dt><dd>{selectedModel.id}</dd>
-						<dt>Strategy</dt><dd>{selectedModel.strategy_name || `rl.${selectedModel.family}.v${selectedModel.version}`}</dd>
-						<dt>Family</dt><dd>{selectedModel.family}</dd>
-						<dt>Version</dt><dd>v{selectedModel.version}</dd>
-						<dt>Status</dt><dd>{selectedModel.status}</dd>
-						<dt>Trial Index</dt><dd>{selectedModel.trial_index}</dd>
-						<dt>Feature Hash</dt><dd class="mono">{selectedModel.feature_hash}</dd>
-						<dt>Artifact SHA</dt><dd class="mono">{selectedModel.artifact_sha}</dd>
-					</dl>
-				</CollapsibleSection>
-				{/if}
-			</div>
-		</div>
-	{/if}
+    <CollapsibleSection title="Registered Strategies" count={strategies.length} defaultOpen={true}>
+      <div class="strategy-groups">
+        {#each groups as [base, variants]}
+          <div class="strategy-group">
+            <div class="group-header" class:multi={variants.length > 1}>
+              <span class="group-name">{base}</span>
+              {#if variants.length > 1}
+                <span class="variant-count">{variants.length} variants</span>
+              {/if}
+            </div>
+            <div class="variant-list">
+              {#each variants as v}
+                <span class="strategy-tag">{v}</span>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
+    </CollapsibleSection>
+  {/if}
 </div>
 
 <style>
-	.page-container {
-		padding: 20px;
-	}
-	.strategies-layout {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 1rem;
-	}
-	.left-panel, .right-panel {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-	}
-	.refresh-btn {
-		padding: 4px 12px;
-		font-size: 12px;
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		background: var(--surface);
-		cursor: pointer;
-	}
-	.refresh-btn:hover {
-		background: var(--border);
-	}
-	.leaderboard {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 0.85rem;
-	}
-	.leaderboard th {
-		text-align: left;
-		padding: 0.4rem 0.5rem;
-		border-bottom: 1px solid var(--border);
-		color: var(--text-muted);
-	}
-	.leaderboard td {
-		padding: 0.3rem 0.5rem;
-		border-bottom: 1px solid var(--border);
-	}
-	.strategy-name {
-		font-family: monospace;
-	}
-	.num {
-		text-align: right;
-		font-family: monospace;
-	}
-	.model-details {
-		display: grid;
-		grid-template-columns: auto 1fr;
-		gap: 0.25rem 1rem;
-		font-size: 0.85rem;
-	}
-	.model-details dt {
-		color: var(--text-muted);
-		font-weight: 600;
-	}
-	.model-details dd {
-		margin: 0;
-	}
-	.mono {
-		font-family: monospace;
-		font-size: 0.8rem;
-	}
-	@media (max-width: 768px) {
-		.strategies-layout {
-			grid-template-columns: 1fr;
-		}
-	}
+  .page-container { padding: 20px; }
+  .refresh-btn {
+    padding: 4px 12px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    cursor: pointer;
+  }
+  .refresh-btn:hover { background: var(--border); }
+  .strategy-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .strategy-group {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+  }
+  .group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .group-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .variant-count {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--surface-hover);
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .variant-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .strategy-tag {
+    font-family: monospace;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: var(--radius-xs);
+    background: var(--surface-hover);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+  .group-header.multi .group-name {
+    color: var(--text);
+  }
 </style>

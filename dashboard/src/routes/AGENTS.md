@@ -19,6 +19,10 @@ File-based routing. Each route directory has `+page.svelte` (component) and `+pa
 - `+page.js` — Disables SSR, initial load of `/api/orders?limit=100` + `/api/paper-orders-insights` in parallel.
 - `+page.svelte` — Paper orders. Polls `getOrders({limit:100})` (5s) for tables. Pre-computed insights from `PaperOrdersInsights` component (manual refresh + 5-min auto). Filters: strategy (shared with insights), result, match, price (tables only). Summary bar from `filteredSummary` (page subset). Two `CollapsibleSection` tables: Open Positions (pending) + Settled Trades (recent 100). No "load more" pagination.
 
+### `/strategies`
+- `+page.js` — Disables SSR, initial load of `/api/strategies`.
+- `+page.svelte` — Lists all registered strategies from `backtest.DefaultFactories()`. Groups variants by base name. No polling — static registry.
+
 ### `/simulation`
 - `+page.js` — Disables SSR, initial load of strategy list.
 - `+page.svelte` — Pre-computed simulation insights. Single `getSimulation()` call on mount (no polling — data updates daily via cron). Strategy toggles + day filter + chart metric selector. Summary cards per strategy (from `backtest_results.summary_json`). Four Chart.js charts: cumulative P&L (from pre-computed `cum_pnl_json`), win/loss bars, band performance, signal count per band. Peak band cards + cross-strategy band totals + best bands table + per-strategy per-band detail table. No live recompute — all data from `simulation_insights` + `backtest_results` tables.
