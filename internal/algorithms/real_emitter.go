@@ -332,15 +332,46 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		return false
 	}
 
-	// format price as fixed-point dollars (Kalshi expects string like "0.6500")
-	priceStr := fmt.Sprintf("%.4f", o.MarketPrice)
-	countStr := strconv.Itoa(contracts)
-
-	// client_order_id: per-order UUID for idempotency. If a timeout leaves the
-	// order in an ambiguous state, retrying with the same client_order_id is
-	// safe — Kalshi dedupes. Also surfaces in Kalshi's response so we can
-	// correlate client and server side of a submission.
+	// Submit IOC bid at signal price. On zero-fill, retry as market order.
 	clientOrderID := uuid.NewString()
+	priceStr := fmt.Sprintf("%.4f", o.MarketPrice)
+	fillCount, zeroFill, submitted := e.submitBuyToKalshi(orderCtx, o, contracts, priceStr, clientOrderID, "ioc_zero_fill", newBalance)
+	if !submitted {
+		return false
+	}
+	if zeroFill {
+		fillCount = e.retryBuyAsMarket(ctx, o, contracts)
+	}
+
+	// Paired orders (cross-arb): return false on zero-fill so strategy
+	// skips leg 2. Without this, leg 1 zero-fills but returns true,
+	// strategy emits leg 2, and we get naked directional risk.
+	if o.PairID != "" && fillCount == 0 {
+		return false
+	}
+	return true
+}
+
+// submitBuyToKalshi posts a buy bid to Kalshi and processes the response.
+// Handles fill detection, fill-price fetch, DB update, position application,
+// and logging. Shared by emitBuy's initial attempt and the market-order retry.
+//
+// zeroFillReason is used as the cancel reason when IOC zero-fills.
+// poolBalanceCents is included in the success log for audit.
+//
+// Returns (fillCount, zeroFill, submitted). submitted=false only on POST
+// failure — caller should return false. zeroFill=true when IOC canceled with
+// no fills — caller may retry as market order.
+func (e *KalshiOrderEmitter) submitBuyToKalshi(
+	orderCtx context.Context,
+	o store.Order,
+	contracts int,
+	priceStr string,
+	clientOrderID string,
+	zeroFillReason string,
+	poolBalanceCents int64,
+) (fillCount float64, zeroFill bool, submitted bool) {
+	countStr := strconv.Itoa(contracts)
 
 	req := createOrderV2Request{
 		Ticker:                  o.MarketTicker,
@@ -357,7 +388,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 	}
 
 	var resp createOrderV2Response
-	err = e.client.Post(orderCtx, "/portfolio/events/orders", req, &resp)
+	err := e.client.Post(orderCtx, "/portfolio/events/orders", req, &resp)
 	if err != nil {
 		e.log.Error("real: order submission FAILED",
 			"order_id", o.ID, "client_order_id", clientOrderID,
@@ -368,10 +399,10 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID, "submit_failed: "+err.Error()); dbErr != nil {
 			e.log.Error("real: failed to mark order as failed", "order_id", o.ID, "error", dbErr)
 		}
-		return false
+		return 0, false, false
 	}
 
-	fillCount, err := strconv.ParseFloat(resp.FillCount, 64)
+	fillCount, err = strconv.ParseFloat(resp.FillCount, 64)
 	if err != nil {
 		e.log.Error("real: unparseable fill_count, marking unverified",
 			"order_id", o.ID, "server_order_id", resp.OrderID,
@@ -380,7 +411,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, 0, "unverified", "unparseable_fill_count: "+resp.FillCount); uerr != nil {
 			e.log.Error("real: failed to mark order unverified", "order_id", o.ID, "error", uerr)
 		}
-		return true
+		return 0, false, true
 	}
 	remainingCount, err := strconv.ParseFloat(resp.RemainingCount, 64)
 	if err != nil {
@@ -391,7 +422,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, 0, "unverified", "unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
 			e.log.Error("real: failed to mark order unverified", "order_id", o.ID, "error", uerr)
 		}
-		return true
+		return fillCount, false, true
 	}
 	status := "submitted"
 	cancelReason := ""
@@ -402,7 +433,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 	} else if remainingCount == 0 {
 		// IOC with zero fill — fully canceled by Kalshi
 		status = "canceled"
-		cancelReason = "ioc_zero_fill"
+		cancelReason = zeroFillReason
 	}
 
 	// Fetch actual fill price from Kalshi for filled/partial orders. Used
@@ -428,7 +459,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		if entryPrice <= 0 {
 			entryPrice = o.MarketPrice
 		}
-		posID, perr := e.pos.ApplyBuy(ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, entryPrice)
+		posID, perr := e.pos.ApplyBuy(context.Background(), o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, entryPrice)
 		if perr != nil {
 			e.log.Error("real: ApplyBuy failed",
 				"market", o.MarketTicker, "strategy", o.Strategy,
@@ -449,15 +480,93 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		"fill_price", fillPrice,
 		"count", countStr, "price", priceStr,
 		"environment", e.cfg.Environment,
+		"pool_balance_cents", poolBalanceCents)
+
+	zeroFill = (status == "canceled" && cancelReason != "")
+	return fillCount, zeroFill, true
+}
+
+// retryBuyAsMarket submits a second IOC bid at a marketable price after the
+// original IOC zero-filled. The original order was already marked canceled and
+// the pool refunded by UpdateRealOrder. Creates a fresh order row, re-deducts
+// the pool at the market bid price, and submits a bid high enough to cross any
+// ask (capped at what the pool can afford).
+//
+// Bidding at 0.99 fills at best ask — actual fill price reflects real
+// liquidity, not our bid. reconcileFillPrice handles the gap between the
+// deduction at bid price and the actual fill cost.
+//
+// Returns the fill count from the retry (0 if retry was skipped or failed).
+func (e *KalshiOrderEmitter) retryBuyAsMarket(
+	ctx context.Context,
+	o store.Order,
+	contracts int,
+) float64 {
+	// Fresh timeout — original orderCtx may be nearly exhausted.
+	orderCtx, cancel := context.WithTimeout(ctx, time.Duration(e.cfg.OrderTimeoutS)*time.Second)
+	defer cancel()
+
+	// Pool was refunded by UpdateRealOrder on the zero-fill cancel.
+	lp, err := liquiditypool.Get(ctx, e.db.GormDB())
+	if err != nil {
+		e.log.Error("real: market retry failed to get pool balance",
+			"market", o.MarketTicker, "error", err)
+		return 0
+	}
+	if lp.BalanceCents <= 0 {
+		e.log.Warn("real: market retry skipped, pool empty",
+			"market", o.MarketTicker)
+		return 0
+	}
+
+	// Bid high enough to cross any ask. Cap at what pool can afford.
+	// At 0.99 bid, matching engine fills at best ask price(s), not 0.99.
+	// Pool reconciled on actual fill — over-deduction refunded.
+	maxPrice := math.Min(0.99, float64(lp.BalanceCents)/float64(contracts)/100.0)
+	if maxPrice < 0.01 {
+		e.log.Warn("real: market retry skipped, pool too small for one contract",
+			"market", o.MarketTicker, "balance_cents", lp.BalanceCents, "contracts", contracts)
+		return 0
+	}
+
+	retryPriceCents := int64(math.Floor(maxPrice * 100))
+	if retryPriceCents < 1 {
+		return 0
+	}
+	retryPrice := float64(retryPriceCents) / 100.0
+	retrySpendCents := int64(contracts) * retryPriceCents
+
+	// Fresh order row for the retry — original stays as canceled.
+	o.ID = 0
+	o.OrderStatus = "pending"
+	o.MarketPrice = retryPrice // so refund/reconcile uses retry price
+	retryOrderID, err := e.db.InsertRealOrder(ctx, o)
+	if err != nil {
+		e.log.Error("real: market retry failed to persist order",
+			"market", o.MarketTicker, "error", err)
+		return 0
+	}
+	o.ID = retryOrderID
+
+	newBalance, err := liquiditypool.Deduct(orderCtx, e.db.GormDB(), retrySpendCents)
+	if err != nil {
+		e.log.Error("real: market retry failed to deduct pool",
+			"market", o.MarketTicker, "spend_cents", retrySpendCents, "error", err)
+		if dbErr := e.db.MarkRealOrderFailedNoRefund(context.Background(), o.ID, "market_retry_pool_deduct_failed: "+err.Error()); dbErr != nil {
+			e.log.Error("real: market retry failed to mark order failed", "error", dbErr)
+		}
+		return 0
+	}
+
+	e.log.Info("real: retrying as market order",
+		"market", o.MarketTicker, "strategy", o.Strategy,
+		"contracts", contracts, "bid_price", retryPrice,
 		"pool_balance_cents", newBalance)
 
-	// Paired orders (cross-arb): return false on zero-fill so strategy
-	// skips leg 2. Without this, leg 1 zero-fills but returns true,
-	// strategy emits leg 2, and we get naked directional risk.
-	if o.PairID != "" && fillCount == 0 {
-		return false
-	}
-	return true
+	clientOrderID := uuid.NewString()
+	priceStr := fmt.Sprintf("%.4f", retryPrice)
+	fillCount, _, _ := e.submitBuyToKalshi(orderCtx, o, contracts, priceStr, clientOrderID, "market_retry_zero_fill", newBalance)
+	return fillCount
 }
 
 // emitBuyNO handles the buy-NO-to-open path. Buys NO contracts (long NO)
@@ -806,11 +915,39 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 	orderCtx, cancel := context.WithTimeout(ctx, time.Duration(e.cfg.OrderTimeoutS)*time.Second)
 	defer cancel()
 
-	// Submit ask to Kalshi. No pool deduction on sell — proceeds credit
-	// the pool after fill. Pre-fill we hold no capital.
-	priceStr := fmt.Sprintf("%.4f", o.MarketPrice)
-	countStr := fmt.Sprintf("%.2f", count)
+	// Submit IOC ask at signal price. On zero-fill, retry as market order.
 	clientOrderID := uuid.NewString()
+	priceStr := fmt.Sprintf("%.4f", o.MarketPrice)
+	_, zeroFill, submitted := e.submitSellToKalshi(orderCtx, o, count, priceStr, clientOrderID, "sell_ioc_zero_fill")
+	if !submitted {
+		return false
+	}
+	if zeroFill {
+		e.retrySellAsMarket(ctx, o, count)
+	}
+
+	return true
+}
+
+// submitSellToKalshi posts a sell ask to Kalshi and processes the response.
+// Handles fill detection, fill-price fetch, pool credit, DB update, position
+// close, and logging. Shared by emitSell's initial attempt and the market-order
+// retry.
+//
+// zeroFillReason is used as the cancel reason when IOC zero-fills.
+//
+// Returns (fillCount, zeroFill, submitted). submitted=false only on POST
+// failure — caller should return false. zeroFill=true when IOC canceled with
+// no fills — caller may retry as market order.
+func (e *KalshiOrderEmitter) submitSellToKalshi(
+	orderCtx context.Context,
+	o store.Order,
+	count float64,
+	priceStr string,
+	clientOrderID string,
+	zeroFillReason string,
+) (fillCount float64, zeroFill bool, submitted bool) {
+	countStr := fmt.Sprintf("%.2f", count)
 
 	req := createOrderV2Request{
 		Ticker:                  o.MarketTicker,
@@ -824,7 +961,7 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 	}
 
 	var resp createOrderV2Response
-	err = e.client.Post(orderCtx, "/portfolio/events/orders", req, &resp)
+	err := e.client.Post(orderCtx, "/portfolio/events/orders", req, &resp)
 	if err != nil {
 		e.log.Error("real: sell submission FAILED",
 			"order_id", o.ID, "client_order_id", clientOrderID,
@@ -835,10 +972,10 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 		if dbErr := e.db.MarkRealOrderFailedNoRefund(context.Background(), o.ID, "sell_submit_failed: "+err.Error()); dbErr != nil {
 			e.log.Error("real: failed to mark sell as failed", "order_id", o.ID, "error", dbErr)
 		}
-		return false
+		return 0, false, false
 	}
 
-	fillCount, err := strconv.ParseFloat(resp.FillCount, 64)
+	fillCount, err = strconv.ParseFloat(resp.FillCount, 64)
 	if err != nil {
 		e.log.Error("real: sell unparseable fill_count, marking unverified",
 			"order_id", o.ID, "server_order_id", resp.OrderID,
@@ -847,7 +984,7 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, 0, "unverified", "sell_unparseable_fill_count: "+resp.FillCount); uerr != nil {
 			e.log.Error("real: failed to mark sell unverified", "order_id", o.ID, "error", uerr)
 		}
-		return true
+		return 0, false, true
 	}
 	remainingCount, err := strconv.ParseFloat(resp.RemainingCount, 64)
 	if err != nil {
@@ -858,7 +995,7 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, 0, "unverified", "sell_unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
 			e.log.Error("real: failed to mark sell unverified", "order_id", o.ID, "error", uerr)
 		}
-		return true
+		return fillCount, false, true
 	}
 	status := "submitted"
 	cancelReason := ""
@@ -868,7 +1005,7 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 		status = "partial"
 	} else if remainingCount == 0 {
 		status = "canceled"
-		cancelReason = "sell_ioc_zero_fill"
+		cancelReason = zeroFillReason
 	}
 
 	// Fetch actual fill price (we sell YES → isNO=false). Used for pool
@@ -906,7 +1043,7 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 			exitPrice = o.MarketPrice
 		}
 		_, realizedPnL, remaining, perr := e.pos.ApplySell(
-			ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, exitPrice)
+			context.Background(), o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, exitPrice)
 		if perr != nil {
 			e.log.Error("real: ApplySell failed",
 				"market", o.MarketTicker, "strategy", o.Strategy,
@@ -929,7 +1066,76 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 		"count", countStr, "price", priceStr,
 		"environment", e.cfg.Environment)
 
-	return true
+	zeroFill = (status == "canceled" && cancelReason != "")
+	return fillCount, zeroFill, true
+}
+
+// retrySellAsMarket submits a second IOC ask at a marketable price after the
+// original sell IOC zero-filled. Sells never deduct from the pool — they
+// credit on fill — so the retry just needs a fresh order row and a low ask
+// price that crosses any bid.
+//
+// Asking at 0.01 fills at best bid — actual fill price reflects real
+// liquidity, not our ask. reconcileFillPrice handles the gap between the
+// signal credit and actual proceeds.
+//
+// Returns the fill count from the retry (0 if retry was skipped or failed).
+func (e *KalshiOrderEmitter) retrySellAsMarket(
+	ctx context.Context,
+	o store.Order,
+	count float64,
+) float64 {
+	// Fresh timeout — original orderCtx may be nearly exhausted.
+	orderCtx, cancel := context.WithTimeout(ctx, time.Duration(e.cfg.OrderTimeoutS)*time.Second)
+	defer cancel()
+
+	// Re-check open contracts — position unchanged on zero-fill, but guard
+	// against concurrent sells between the original attempt and retry.
+	pos, err := e.pos.GetOpenForStrategy(ctx, o.MarketTicker, o.Strategy, true)
+	if err != nil || pos == nil {
+		e.log.Warn("real: sell market retry skipped, no open position",
+			"market", o.MarketTicker, "strategy", o.Strategy, "error", err)
+		return 0
+	}
+	openContracts := pos.FilledBuyCount - pos.FilledSellCount
+	if openContracts <= 0 {
+		e.log.Warn("real: sell market retry skipped, position closed",
+			"market", o.MarketTicker, "strategy", o.Strategy)
+		return 0
+	}
+	if count > openContracts {
+		count = openContracts
+	}
+	if count < 1 {
+		count = 1
+	}
+
+	// Ask low enough to cross any bid. At 0.01 ask, matching engine fills
+	// at best bid price(s), not 0.01. Pool reconciled on actual fill.
+	retryPrice := 0.01
+
+	// Fresh order row for the retry — original stays as canceled.
+	o.ID = 0
+	o.OrderStatus = "pending"
+	o.SuggestedSize = count
+	o.MarketPrice = retryPrice // so credit/reconcile uses retry price
+	o.PositionID = &pos.ID
+	retryOrderID, err := e.db.InsertRealOrder(ctx, o)
+	if err != nil {
+		e.log.Error("real: sell market retry failed to persist order",
+			"market", o.MarketTicker, "error", err)
+		return 0
+	}
+	o.ID = retryOrderID
+
+	e.log.Info("real: retrying sell as market order",
+		"market", o.MarketTicker, "strategy", o.Strategy,
+		"count", count, "ask_price", retryPrice)
+
+	clientOrderID := uuid.NewString()
+	priceStr := fmt.Sprintf("%.4f", retryPrice)
+	fillCount, _, _ := e.submitSellToKalshi(orderCtx, o, count, priceStr, clientOrderID, "sell_market_retry_zero_fill")
+	return fillCount
 }
 
 // fetchFillPrice retrieves the actual per-contract fill price from Kalshi
