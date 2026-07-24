@@ -336,5 +336,10 @@ func DefaultFactories() map[string]StrategyFactory {
 		s.SetSharedMarkovModel(sharedMarkov)
 		return s
 	},
+	// Settlement sniper: buy winner YES after match ends, before market settles.
+	// Backtest infers match completion from OnPoint (sets won >= setsToWin).
+	"settlementsniper": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		return algorithms.NewSettlementSniperStrategy(em, log)
+	},
 	}
 }

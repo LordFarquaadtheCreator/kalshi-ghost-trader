@@ -63,6 +63,15 @@ type PreMatchGated interface {
 	PreMatchGated()
 }
 
+// MatchFinishedObserver is implemented by strategies that want explicit
+// match-completion notifications. Dispatched by the API-Tennis scraper
+// when EventStatus == "Finished". winner is 1 (home) or 2 (away).
+// In backtest mode, strategies must infer completion from OnPoint instead
+// (no stored status events).
+type MatchFinishedObserver interface {
+	OnMatchFinished(eventTicker string, winner int)
+}
+
 // TickWriterEmitter adapts store.TickWriter to the OrderEmitter interface.
 type TickWriterEmitter struct {
 	tw *store.TickWriter

@@ -45,11 +45,15 @@ type matchWorker struct {
 	done        chan struct{}
 	strategy    algorithms.Strategy
 	scoreObs    algorithms.ScoreObserver
+	finishedObs algorithms.MatchFinishedObserver
 	tickWriter  *store.TickWriter
 	log         *slog.Logger
 
 	// Track which points we've already processed to avoid duplicates
 	seenPoints map[string]bool
+
+	// Track whether we've already dispatched OnMatchFinished for this match
+	finishedDispatched bool
 }
 
 // New creates an API-Tennis scraper. apiKey and timezone are read from config.Cfg.
@@ -80,6 +84,9 @@ func (s *Scraper) StartPolling(eventTicker string) {
 	}
 	if obs, ok := s.strategy.(algorithms.ScoreObserver); ok {
 		w.scoreObs = obs
+	}
+	if obs, ok := s.strategy.(algorithms.MatchFinishedObserver); ok {
+		w.finishedObs = obs
 	}
 
 	s.workersMu.Lock()
@@ -173,7 +180,12 @@ func (s *Scraper) readLoop(ctx context.Context, conn *websocket.Conn) error {
 // dispatch matches a WSEvent to a Kalshi event and sends it to the
 // per-match worker channel. Non-blocking — drops if worker channel is full.
 func (s *Scraper) dispatch(ev WSEvent) {
-	if ev.EventKey == 0 || len(ev.PointByPoint) == 0 {
+	// Allow finished events through even without point-by-point data —
+	// the final "Finished" push may carry only a status change.
+	if ev.EventKey == 0 {
+		return
+	}
+	if len(ev.PointByPoint) == 0 && ev.EventStatus != "Finished" {
 		return
 	}
 
@@ -381,6 +393,10 @@ func (w *matchWorker) processEvent(ev WSEvent) {
 			}
 		}
 	}
+
+	// Dispatch match-finished notification after processing all points.
+	// EventStatus == "Finished" with EventWinner set means the match is over.
+	w.dispatchFinished(ev)
 }
 
 func atoiSafe(s string) int {
@@ -391,4 +407,53 @@ func atoiSafe(s string) int {
 		}
 	}
 	return n
+}
+
+// dispatchFinished sends OnMatchFinished to strategies when EventStatus
+// is "Finished". Deduped per worker — only fires once per match.
+// Winner is determined by matching EventWinner to EventFirstPlayer (home=1)
+// or EventSecondPlayer (away=2).
+func (w *matchWorker) dispatchFinished(ev WSEvent) {
+	if w.finishedObs == nil {
+		return
+	}
+	if ev.EventStatus != "Finished" || ev.EventWinner == nil {
+		return
+	}
+	if w.finishedDispatched {
+		return
+	}
+	w.finishedDispatched = true
+
+	winner := 0
+	winnerName := *ev.EventWinner
+	if winnerName == ev.EventFirstPlayer {
+		winner = 1
+	} else if winnerName == ev.EventSecondPlayer {
+		winner = 2
+	} else {
+		// Fuzzy fallback: match normalized last names.
+		homeLast := normalizeLastName(extractLastName(ev.EventFirstPlayer))
+		awayLast := normalizeLastName(extractLastName(ev.EventSecondPlayer))
+		wLast := normalizeLastName(extractLastName(winnerName))
+		if homeLast != "" && homeLast == wLast {
+			winner = 1
+		} else if awayLast != "" && awayLast == wLast {
+			winner = 2
+		}
+	}
+
+	if winner == 0 {
+		w.log.Warn("apitennis: could not determine winner from EventWinner",
+			"event", w.eventTicker,
+			"winner", winnerName,
+			"first", ev.EventFirstPlayer,
+			"second", ev.EventSecondPlayer)
+		return
+	}
+
+	w.finishedObs.OnMatchFinished(w.eventTicker, winner)
+	w.log.Info("apitennis: match finished dispatched",
+		"event", w.eventTicker, "winner", winner,
+		"winner_name", winnerName)
 }

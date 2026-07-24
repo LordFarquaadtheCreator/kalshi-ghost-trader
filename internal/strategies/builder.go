@@ -314,6 +314,9 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 		"close_timer": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			return sigpkg.NewCloseTimer(db, matchPoint, e, log)
 		},
+		"settlementsniper": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			return algorithms.NewSettlementSniperStrategy(e, log)
+		},
 	})
 
 	// R.8: Inject shared Markov model into all pServe=0.64 strategies.

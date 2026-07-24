@@ -176,6 +176,17 @@ func (m *MultiStrategyRuntime) OnPoint(eventTicker string, p store.Point) {
 	}
 }
 
+// OnMatchFinished fans out match-completion notifications to strategies
+// implementing MatchFinishedObserver. Dispatched by the API-Tennis scraper
+// when EventStatus == "Finished". winner is 1 (home) or 2 (away).
+func (m *MultiStrategyRuntime) OnMatchFinished(eventTicker string, winner int) {
+	for _, ns := range m.strategies {
+		if obs, ok := ns.Strat.(MatchFinishedObserver); ok {
+			obs.OnMatchFinished(eventTicker, winner)
+		}
+	}
+}
+
 // SetDB enables schedule refresh support. The DB is used by RefreshOccurrenceTS
 // to keep the scheduler's occurrence_ts fresh. Order gating is now handled by
 // the first-point guard in OnPrice — orders are blocked until OnPoint fires.
