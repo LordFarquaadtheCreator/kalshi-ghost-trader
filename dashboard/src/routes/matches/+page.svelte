@@ -2,11 +2,17 @@
   import { createPoll } from '$lib/poll.js';
   import { api } from '$lib/api.js';
   import { fmtTicker, seriesFromTicker, fmtTime, fmtPnL } from '$lib/utils.js';
+  import {
+    dailySeries, maxDrawdown, sharpeDaily, sortinoDaily, dailyAvgPnL,
+    profitFactor, mean, stdDev,
+  } from '$lib/stats.js';
   import PageHeader from '$lib/components/PageHeader.svelte';
-  import StatCard from '$lib/components/StatCard.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
+  import MetricsBar from '$lib/components/MetricsBar.svelte';
+  import Tabs from '$lib/components/Tabs.svelte';
   import { goto } from '$app/navigation';
+  import { exportCSV } from '$lib/csv.js';
 
   const trackedStore = createPoll(() => api.getTracked(), 2000, { data: null, error: null, connected: false });
   const countsStore = createPoll(() => api.getOrderCounts(), 5000, { data: null, error: null, connected: false });
@@ -113,11 +119,68 @@
     series: m.series || seriesFromTicker(m.event_ticker),
     settled: m.settled_ts ? fmtTime(m.settled_ts) : '—',
     pnl: m.net_pnl,
+    pnlPerOrder: m.order_count > 0 ? m.net_pnl / m.order_count : 0,
   })).sort((/** @type {any} */ a, /** @type {any} */ b) => (b.settled_ts || 0) - (a.settled_ts || 0)));
+
+  // --- Risk metrics from passed matches (each match = one "trade") ---
+  let passedMetrics = $derived.by(() => {
+    const matches = passedRows;
+    if (matches.length === 0) return null;
+    const pnls = matches.map((m) => m.net_pnl || 0);
+    const wins = pnls.filter((p) => p > 0).length;
+    const losses = pnls.filter((p) => p < 0).length;
+    const netPnl = pnls.reduce((a, b) => a + b, 0);
+    const totalOrders = matches.reduce((s, m) => s + (m.order_count || 0), 0);
+    const series = dailySeries(matches, (m) => m.settled_ts, (m) => m.net_pnl || 0);
+    return {
+      n: matches.length,
+      wins, losses,
+      winRate: matches.length > 0 ? (wins / matches.length) * 100 : 0,
+      netPnl,
+      totalOrders,
+      avgPerMatch: matches.length > 0 ? netPnl / matches.length : 0,
+      pnlPerOrder: totalOrders > 0 ? netPnl / totalOrders : 0,
+      pnlStd: stdDev(pnls),
+      dailyAvg: dailyAvgPnL(series),
+      sharpe: sharpeDaily(series),
+      sortino: sortinoDaily(series),
+      profitFactor: profitFactor(pnls),
+      maxDD: maxDrawdown(series),
+      days: series.length,
+    };
+  });
+
+  // --- Live/upcoming aggregate stats ---
+  let liveSimOrders = $derived(liveRows.reduce((s, r) => s + (r.sim_orders || 0), 0));
+  let liveRealOrders = $derived(liveRows.reduce((s, r) => s + (r.real_orders || 0), 0));
+  let upcomingSimOrders = $derived(nonLiveRows.reduce((s, r) => s + (r.sim_orders || 0), 0));
+  let upcomingRealOrders = $derived(nonLiveRows.reduce((s, r) => s + (r.real_orders || 0), 0));
+
+  // --- Format helpers ---
+  /** @param {number} v — dollars */
+  function fmtSignedDollars(v) {
+    if (!v) return '$0.00';
+    const sign = v < 0 ? '-' : '+';
+    return `${sign}$${Math.abs(v).toFixed(2)}`;
+  }
+  /** @param {number} v — ratio */
+  function fmtRatio(v) {
+    if (v === null || v === undefined || isNaN(v)) return '\u2014';
+    if (v === Infinity) return '\u221E';
+    return v.toFixed(2);
+  }
+  /** @param {number} v — percentage */
+  function fmtPctSigned(v) {
+    if (v === null || v === undefined || isNaN(v)) return '\u2014';
+    const sign = v > 0 ? '+' : '';
+    return `${sign}${v.toFixed(1)}%`;
+  }
 
   function handleRowClick(/** @type {any} */ row) {
     goto(`/matches/${encodeURIComponent(row.event_ticker)}`);
   }
+
+  let activeTab = $state('live');
 </script>
 
 <svelte:head>
@@ -127,20 +190,62 @@
 <div class="page-container">
   <PageHeader title="Tracked Matches" connected={$trackedStore.connected} error={$trackedStore.error || ''} />
 
-  <div class="stats-grid">
-    <StatCard label="Events" value={eventCount} />
-    <StatCard label="Markets" value={marketCount} />
-    <StatCard label="Net P&L" value={`$${netPnl.toFixed(2)}`} />
-    <StatCard label="Paper Orders" value={paperOrders} />
-    <StatCard label="Real Orders" value={realOrders} />
-  </div>
+  <MetricsBar
+    primary={[
+      { label: 'Live', value: liveRows.length },
+      { label: 'Upcoming', value: nonLiveRows.length },
+      { label: 'Passed', value: passedRows.length },
+      { label: 'Events', value: eventCount },
+      { label: 'Paper', value: paperOrders },
+      { label: 'Real', value: realOrders },
+    ]}
+    secondary={[
+      { label: 'Markets', value: marketCount },
+      { label: 'Live Sim', value: liveSimOrders },
+      { label: 'Live Real', value: liveRealOrders },
+      ...(passedMetrics ? [
+        { label: 'Passed P&L', value: fmtPnL(passedMetrics.netPnl), tone: passedMetrics.netPnl > 0 ? 'win' : passedMetrics.netPnl < 0 ? 'loss' : null },
+        { label: 'Win Rate', value: passedMetrics.winRate.toFixed(1) + '%' },
+        { label: 'Sharpe', value: fmtRatio(passedMetrics.sharpe) },
+        { label: 'Sortino', value: fmtRatio(passedMetrics.sortino) },
+        { label: 'PF', value: fmtRatio(passedMetrics.profitFactor) },
+        { label: 'Max DD', value: '$' + passedMetrics.maxDD.toFixed(2), tone: 'loss' },
+        { label: 'P&L/Order', value: fmtSignedDollars(passedMetrics.pnlPerOrder), tone: passedMetrics.pnlPerOrder > 0 ? 'win' : passedMetrics.pnlPerOrder < 0 ? 'loss' : null },
+        { label: 'Days', value: passedMetrics.days },
+      ] : []),
+    ]}
+  />
 
   {#if $trackedStore.connected && subs.length === 0}
     <EmptyState text="No matches currently tracked." />
   {:else if !$trackedStore.connected}
     <EmptyState text="Cannot reach ghost-trader on :6060. Is it running?" variant="error" />
   {:else}
-    <CollapsibleSection title="Live Matches" count={liveRows.length}>
+    <div class="match-toolbar">
+      <button class="export-btn" onclick={() => {
+        const headers = ['Event Ticker', 'Match', 'Series', 'Score', 'Sim Orders', 'Live Orders'];
+        const rowsData = rows.map((r) => [
+          r.event_ticker,
+          r.title,
+          r.series,
+          r.score,
+          r.sim_orders,
+          r.real_orders,
+        ]);
+        exportCSV(headers, rowsData, `tracked_matches_${Date.now()}.csv`);
+      }}>Export CSV</button>
+    </div>
+
+    <Tabs
+      tabs={[
+        { key: 'live', label: 'Live', count: liveRows.length },
+        { key: 'upcoming', label: 'Upcoming', count: nonLiveRows.length },
+        { key: 'passed', label: 'Passed', count: passedRows.length },
+      ]}
+      bind:active={activeTab}
+    />
+
+    {#if activeTab === 'live'}
       {#if liveRows.length > 0}
         <div class="table-wrap">
           <table class="data-table">
@@ -160,14 +265,19 @@
                 </tr>
               {/each}
             </tbody>
+            <tfoot>
+              <tr class="table-footer">
+                <td colspan="5"><strong>{liveRows.length} live</strong></td>
+                <td class="num"><strong>{liveSimOrders}</strong> sim</td>
+                <td class="num"><strong>{liveRealOrders}</strong> real</td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       {:else}
         <EmptyState text="No live matches." />
       {/if}
-    </CollapsibleSection>
-
-    <CollapsibleSection title="Upcoming Matches" count={nonLiveRows.length} defaultOpen={false}>
+    {:else if activeTab === 'upcoming'}
       {#if nonLiveRows.length > 0}
         <div class="table-wrap">
           <table class="data-table">
@@ -189,14 +299,20 @@
                 </tr>
               {/each}
             </tbody>
+            <tfoot>
+              <tr class="table-footer">
+                <td colspan="5"><strong>{nonLiveRows.length} upcoming</strong></td>
+                <td class="num"><strong>{upcomingSimOrders}</strong> sim</td>
+                <td class="num"><strong>{upcomingRealOrders}</strong> real</td>
+                <td></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       {:else}
         <EmptyState text="No upcoming matches." />
       {/if}
-    </CollapsibleSection>
-
-    <CollapsibleSection title="Passed Matches" count={passedRows.length} defaultOpen={false}>
+    {:else if activeTab === 'passed'}
       {#if passedRows.length > 0}
         <div class="table-wrap">
           <table class="data-table">
@@ -209,6 +325,7 @@
                 <th>Settled</th>
                 <th class="num">Sim Orders</th>
                 <th class="num">Net P&L</th>
+                <th class="num">P&L/Order</th>
               </tr>
             </thead>
             <tbody>
@@ -221,14 +338,41 @@
                   <td>{row.settled}</td>
                   <td class="num">{row.order_count}</td>
                   <td class="num {row.pnl >= 0 ? 'pnl-win' : 'pnl-loss'}">{fmtPnL(row.pnl)}</td>
+                  <td class="num {row.pnlPerOrder >= 0 ? 'pnl-win' : 'pnl-loss'}">{fmtSignedDollars(row.pnlPerOrder)}</td>
                 </tr>
               {/each}
             </tbody>
+            <tfoot>
+              <tr class="table-footer">
+                <td colspan="5"><strong>{passedRows.length} passed</strong> ({passedMetrics?.wins ?? 0}W / {passedMetrics?.losses ?? 0}L)</td>
+                <td class="num"><strong>{passedMetrics?.totalOrders ?? 0}</strong></td>
+                <td class="num"><strong class="pnl-{(passedMetrics?.netPnl ?? 0) >= 0 ? 'win' : 'loss'}">{fmtPnL(passedMetrics?.netPnl ?? 0)}</strong></td>
+                <td class="num"><strong class="pnl-{(passedMetrics?.pnlPerOrder ?? 0) >= 0 ? 'win' : 'loss'}">{fmtSignedDollars(passedMetrics?.pnlPerOrder ?? 0)}</strong></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       {:else}
         <EmptyState text="No passed matches." />
       {/if}
-    </CollapsibleSection>
+    {/if}
   {/if}
 </div>
+
+<style>
+  .win { color: var(--win); }
+  .loss { color: var(--loss); }
+  .table-footer { background: var(--surface-hover); border-top: 2px solid var(--border-strong); }
+  .table-footer td { font-size: 13px; padding: 10px 14px; }
+  .match-toolbar { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+  .export-btn {
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+    padding: 4px 12px;
+    border-radius: var(--radius-xs);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .export-btn:hover { color: var(--text); border-color: var(--accent); }
+</style>

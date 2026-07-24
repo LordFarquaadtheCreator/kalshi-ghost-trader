@@ -252,5 +252,32 @@ export const api = {
     return mutate(`${GHOST_TRADER_URL}/api/trigger-ranges`, 'PUT', { strategy, ranges });
   },
 
+  async getAppConfigHistory(/** @type {number} */ limit = 100) {
+    return cachedFetch(`${GHOST_TRADER_URL}/api/app-config/history?limit=${limit}`, 10_000);
+  },
+
+  async getLiquidityPoolHistory(/** @type {number} */ limit = 500) {
+    return cachedFetch(`${GHOST_TRADER_URL}/api/liquidity-pool/history?limit=${limit}`, 10_000);
+  },
+
+  /**
+   * @param {{ group_by?: string, is_real?: string, from_ts?: number, to_ts?: number }} params
+   */
+  async getOrderAttribution(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.group_by) qs.set('group_by', params.group_by);
+    if (params.is_real) qs.set('is_real', params.is_real);
+    if (params.from_ts) qs.set('from_ts', String(params.from_ts));
+    if (params.to_ts) qs.set('to_ts', String(params.to_ts));
+    return rawFetch(`${GHOST_TRADER_URL}/api/orders/attribution?${qs}`);
+  },
+
+  async getRealOrdersRange(/** @type {number} */ fromTS, /** @type {number} */ toTS) {
+    const qs = new URLSearchParams();
+    if (fromTS > 0) qs.set('from_ts', String(fromTS));
+    if (toTS > 0) qs.set('to_ts', String(toTS));
+    return rawFetch(`${GHOST_TRADER_URL}/api/real-orders?${qs}`);
+  },
+
   get pollInterval() { return pollInterval; },
 };

@@ -208,6 +208,110 @@ export function profitFactor(pnls) {
 }
 
 /**
+ * Group resolved orders by UTC day, sum PnL per day.
+ * @param {any[]} orders — orders with .TS (unix ms) and .ResolvedPNLCents
+ * @returns {{ day: string, pnl: number }[]}
+ */
+export function dailyPnLSeries(orders) {
+  /** @type {Record<string, number>} */
+  const byDay = {};
+  for (const o of orders) {
+    if (!o.ResolvedPNLCents || !o.TS) continue;
+    const d = new Date(o.TS).toISOString().slice(0, 10);
+    byDay[d] = (byDay[d] || 0) + o.ResolvedPNLCents;
+  }
+  return Object.entries(byDay)
+    .map(([day, pnl]) => ({ day, pnl }))
+    .sort((a, b) => a.day.localeCompare(b.day));
+}
+
+/**
+ * Generic daily P&L series — takes a getter for ts (unix ms) and pnl (any unit).
+ * @param {any[]} items
+ * @param {(item: any) => number} getTS
+ * @param {(item: any) => number} getPnL
+ * @returns {{ day: string, pnl: number }[]}
+ */
+export function dailySeries(items, getTS, getPnL) {
+  /** @type {Record<string, number>} */
+  const byDay = {};
+  for (const it of items) {
+    const ts = getTS(it);
+    const pnl = getPnL(it);
+    if (!ts || !pnl) continue;
+    const d = new Date(ts).toISOString().slice(0, 10);
+    byDay[d] = (byDay[d] || 0) + pnl;
+  }
+  return Object.entries(byDay)
+    .map(([day, pnl]) => ({ day, pnl }))
+    .sort((a, b) => a.day.localeCompare(b.day));
+}
+
+/**
+ * Max drawdown from a daily P&L series (in cents).
+ * Tracks cumulative P&L, finds worst peak-to-trough drop.
+ * @param {{ pnl: number }[]} series
+ * @returns {number}
+ */
+export function maxDrawdown(series) {
+  if (series.length === 0) return 0;
+  let peak = 0;
+  let cum = 0;
+  let maxDD = 0;
+  for (const s of series) {
+    cum += s.pnl;
+    if (cum > peak) peak = cum;
+    const dd = peak - cum;
+    if (dd > maxDD) maxDD = dd;
+  }
+  return maxDD;
+}
+
+/**
+ * Sharpe ratio of daily P&L series (per-trade sharpe is misleading).
+ * mean(daily) / std(daily). Annualized × sqrt(365) optional.
+ * @param {{ pnl: number }[]} series
+ * @param {boolean} [annualize]
+ * @returns {number}
+ */
+export function sharpeDaily(series, annualize = false) {
+  const pnls = series.map((s) => s.pnl);
+  if (pnls.length < 2) return 0;
+  const m = mean(pnls);
+  const sd = stdDev(pnls);
+  if (sd === 0) return 0;
+  const r = m / sd;
+  return annualize ? r * Math.sqrt(365) : r;
+}
+
+/**
+ * Sortino ratio of daily P&L series.
+ * @param {{ pnl: number }[]} series
+ * @returns {number}
+ */
+export function sortinoDaily(series) {
+  const pnls = series.map((s) => s.pnl);
+  if (pnls.length === 0) return 0;
+  const m = mean(pnls);
+  const downside = pnls.filter((p) => p < 0);
+  if (downside.length === 0) return m > 0 ? Infinity : 0;
+  const dd = Math.sqrt(downside.reduce((s, p) => s + p * p, 0) / pnls.length);
+  if (dd === 0) return 0;
+  return m / dd;
+}
+
+/**
+ * Daily average P&L (cents) — total PnL / number of distinct trading days.
+ * @param {{ pnl: number }[]} series
+ * @returns {number}
+ */
+export function dailyAvgPnL(series) {
+  if (series.length === 0) return 0;
+  const total = series.reduce((s, d) => s + d.pnl, 0);
+  return total / series.length;
+}
+
+/**
  * Compute all stats for a set of orders.
  * @param {any[]} orders — settled orders with .pnl, .price, .edge_cents, .won
  * @returns {Record<string, number>}

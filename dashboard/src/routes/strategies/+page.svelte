@@ -4,6 +4,7 @@
   import PageHeader from '$lib/components/PageHeader.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
+  import MetricsBar from '$lib/components/MetricsBar.svelte';
 
   let { data } = $props();
 
@@ -51,6 +52,17 @@
     }
     return entries;
   });
+
+  // --- Aggregate stats ---
+  let multiVariantGroups = $derived(groups.filter(([, v]) => v.length > 1).length);
+  let singleStrategies = $derived(groups.filter(([, v]) => v.length === 1).length);
+  let largestGroup = $derived.by(() => {
+    if (groups.length === 0) return null;
+    let best = groups[0];
+    for (const g of groups) if (g[1].length > best[1].length) best = g;
+    return best;
+  });
+  let avgVariants = $derived(groups.length > 0 ? (strategies.length / groups.length).toFixed(1) : '0');
 </script>
 
 <svelte:head><title>Strategies — Kalshi Ghost Trader</title></svelte:head>
@@ -65,16 +77,16 @@
   {:else if error}
     <EmptyState text={error} variant="error" />
   {:else}
-    <div class="summary-bar">
-      <div class="summary-stat">
-        <span class="label">Total</span>
-        <span class="value">{strategies.length}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="label">Base Strategies</span>
-        <span class="value">{groups.length}</span>
-      </div>
-    </div>
+    <MetricsBar
+      primary={[
+        { label: 'Total', value: strategies.length },
+        { label: 'Base', value: groups.length },
+        { label: 'Avg Variants', value: avgVariants },
+        { label: 'Multi-Variant', value: multiVariantGroups },
+        { label: 'Single', value: singleStrategies },
+        { label: 'Largest', value: largestGroup ? `${largestGroup[0]} (${largestGroup[1].length})` : '\u2014' },
+      ]}
+    />
 
     <CollapsibleSection title="Registered Strategies" count={strategies.length} defaultOpen={true}>
       <div class="strategy-groups">
@@ -94,12 +106,25 @@
           </div>
         {/each}
       </div>
+      <div class="groups-footer">
+        {strategies.length} strategies across {groups.length} base groups
+        — {multiVariantGroups} multi-variant, {singleStrategies} single
+      </div>
     </CollapsibleSection>
   {/if}
 </div>
 
 <style>
   .page-container { padding: 20px; }
+  .groups-footer {
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: var(--surface-hover);
+    border-top: 2px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text-muted);
+  }
   .refresh-btn {
     padding: 4px 12px;
     font-size: 12px;

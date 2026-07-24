@@ -8,6 +8,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
   import ChartLoading from '$lib/components/ChartLoading.svelte';
+  import MetricsBar from '$lib/components/MetricsBar.svelte';
   import { vibrantColor } from '$lib/utils.js';
 
   /** @type {any[]} */
@@ -112,6 +113,63 @@
       m[k].invested += b.invested;
     }
     return Object.values(m).sort((a, b) => a.lo - b.lo);
+  });
+
+  // --- Aggregate stats across selected strategies (from summaries) ---
+  let aggStats = $derived.by(() => {
+    const sel = [...selected];
+    if (sel.length === 0) return null;
+    let totalSignals = 0, wins = 0, netPnl = 0, invested = 0;
+    let bestSharpe = -Infinity, bestSharpeName = '';
+    let bestROI = -Infinity, bestROIName = '';
+    let bestPnL = -Infinity, bestPnLName = '';
+    let worstPnL = Infinity, worstPnLName = '';
+    let peakCount = 0;
+    for (const name of sel) {
+      const s = summaryMap[name]?.summary;
+      if (!s) continue;
+      totalSignals += s.total_signals || 0;
+      wins += s.wins || 0;
+      netPnl += s.net_pnl || 0;
+      invested += (s.total_signals || 0) * (s.avg_edge || 0) / 100; // approx
+      if ((s.sharpe || 0) > bestSharpe) { bestSharpe = s.sharpe; bestSharpeName = name; }
+      if ((s.roi || 0) > bestROI) { bestROI = s.roi; bestROIName = name; }
+      if ((s.net_pnl || 0) > bestPnL) { bestPnL = s.net_pnl; bestPnLName = name; }
+      if ((s.net_pnl || 0) < worstPnL) { worstPnL = s.net_pnl; worstPnLName = name; }
+    }
+    const peaks = peakBands;
+    for (const name of sel) peakCount += (peaks[name]?.length || 0);
+    return {
+      strategies: sel.length,
+      totalSignals, wins,
+      winRate: totalSignals > 0 ? (wins / totalSignals) * 100 : 0,
+      netPnl,
+      roi: invested > 0 ? (netPnl / invested) * 100 : 0,
+      bestSharpe: bestSharpeName ? { name: bestSharpeName, val: bestSharpe } : null,
+      bestROI: bestROIName ? { name: bestROIName, val: bestROI } : null,
+      bestPnL: bestPnLName ? { name: bestPnLName, val: bestPnL } : null,
+      worstPnL: worstPnLName ? { name: worstPnLName, val: worstPnL } : null,
+      peakCount,
+      bands: filteredBands.length,
+      days: allDays.length,
+    };
+  });
+
+  // --- Table footer totals (precomputed to avoid @const in <tr>) ---
+  let bandTotalsAgg = $derived.by(() => {
+    let n = 0, wins = 0, pnl = 0, invested = 0;
+    for (const b of bandTotals) { n += b.n; wins += b.wins; pnl += b.pnl; invested += b.invested; }
+    return { n, wins, pnl, invested, wr: n > 0 ? (wins / n * 100) : 0, roi: invested > 0 ? (pnl / invested * 100) : 0 };
+  });
+  let bestBandsAgg = $derived.by(() => {
+    let n = 0, wins = 0, pnl = 0;
+    for (const r of bestBands) { n += r.n; wins += r.wins; pnl += r.net_pnl; }
+    return { n, wins, pnl, wr: n > 0 ? (wins / n * 100) : 0 };
+  });
+  let filteredBandsAgg = $derived.by(() => {
+    let n = 0, wins = 0, pnl = 0, peaks = 0;
+    for (const r of filteredBands) { n += r.n; wins += r.wins; pnl += r.net_pnl; if (r.peak) peaks++; }
+    return { n, wins, pnl, peaks, wr: n > 0 ? (wins / n * 100) : 0 };
   });
 
   $effect(() => {
@@ -321,6 +379,9 @@
     if (bandChart) bandChart.destroy();
     if (nChart) nChart.destroy();
   });
+
+  let strategiesOpen = $state(false);
+  let filtersOpen = $state(false);
 </script>
 
 <svelte:head>
@@ -343,6 +404,86 @@
   {#if summaries.length === 0 && !loading}
     <EmptyState text="No simulation data yet. Cron computes insights daily." />
   {:else if summaries.length > 0}
+    {#if aggStats}
+      <MetricsBar
+        primary={[
+          { label: 'Net P&L', value: '$' + aggStats.netPnl.toFixed(2), tone: aggStats.netPnl > 0 ? 'win' : aggStats.netPnl < 0 ? 'loss' : null },
+          { label: 'Win Rate', value: aggStats.winRate.toFixed(1) + '%' },
+          { label: 'Signals', value: aggStats.totalSignals },
+          { label: 'Strategies', value: aggStats.strategies },
+          { label: 'Bands', value: aggStats.bands },
+          { label: 'Peaks', value: aggStats.peakCount, tone: 'win' },
+        ]}
+        secondary={[
+          { label: 'Wins', value: aggStats.wins, tone: 'win' },
+          { label: 'Days', value: aggStats.days },
+          { label: 'Best P&L', value: aggStats.bestPnL ? `${aggStats.bestPnL.name.slice(0, 8)} $${aggStats.bestPnL.val.toFixed(0)}` : '\u2014', tone: 'win' },
+          { label: 'Worst P&L', value: aggStats.worstPnL ? `${aggStats.worstPnL.name.slice(0, 8)} $${aggStats.worstPnL.val.toFixed(0)}` : '\u2014', tone: 'loss' },
+          { label: 'Best ROI', value: aggStats.bestROI ? `${aggStats.bestROI.name.slice(0, 8)} ${aggStats.bestROI.val.toFixed(1)}%` : '\u2014', tone: 'win' },
+          { label: 'Best Sharpe', value: aggStats.bestSharpe ? `${aggStats.bestSharpe.name.slice(0, 8)} ${aggStats.bestSharpe.val.toFixed(2)}` : '\u2014' },
+        ]}
+      />
+    {/if}
+
+    <!-- Filter toolbar (replaces sidebar) -->
+    <div class="filter-toolbar">
+      <div class="toolbar-row">
+        <button class="toolbar-btn" onclick={() => (strategiesOpen = !strategiesOpen)}>
+          Strategies ({selected.size}/{strategies.length})
+        </button>
+        <button class="toolbar-btn" onclick={() => (filtersOpen = !filtersOpen)}>
+          Filters
+        </button>
+        <button class="toolbar-btn" onclick={loadSimulation} disabled={loading}>
+          {loading ? 'Loading...' : 'Refresh'}
+        </button>
+        {#if runTS > 0}<span class="filter-count-note">insights: {new Date(runTS).toLocaleString()}</span>{/if}
+      </div>
+      {#if strategiesOpen}
+        <div class="toolbar-panel">
+          <button class="toggle-all" onclick={toggleAll}>
+            {selected.size === strategies.length ? 'Deselect All' : 'Select All'}
+          </button>
+          <div class="strategy-chips">
+            {#each strategies as name}
+              <button
+                class="chip"
+                class:active={selected.has(name)}
+                style="--btn-color: {colorFor(name)}"
+                onclick={() => toggle(name)}
+              >
+                <span class="dot" style="background: {colorFor(name)}"></span>
+                {name}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+      {#if filtersOpen}
+        <div class="toolbar-panel filter-inputs">
+          <label>Day
+            <select bind:value={selectedDay}>
+              <option value="all">All Days</option>
+              {#each allDays as d}
+                <option value={d}>{d}</option>
+              {/each}
+            </select>
+          </label>
+          <label>Chart Metric
+            <select bind:value={chartMetric}>
+              <option value="win_rate">Win Rate</option>
+              <option value="net_pnl">Net P&L</option>
+              <option value="roi">ROI</option>
+              <option value="sharpe">Sharpe</option>
+              <option value="avg_edge">Avg Edge</option>
+            </select>
+          </label>
+          <label>Min N <input type="number" bind:value={minN} min="1" max="100" step="1" /></label>
+          <label>Min Win Rate % <input type="number" bind:value={minWR} min="0" max="100" step="1" /></label>
+        </div>
+      {/if}
+    </div>
+
     <div class="layout">
       <div class="main-content">
         <!-- Summary cards -->
@@ -437,6 +578,16 @@
                 </tr>
               {/each}
             </tbody>
+            <tfoot>
+              <tr class="table-footer">
+                <td><strong>{bandTotals.length} bands</strong></td>
+                <td class="num"><strong>{bandTotalsAgg.n}</strong></td>
+                <td class="num"><strong>{bandTotalsAgg.wins}</strong></td>
+                <td class="num"><strong>{bandTotalsAgg.wr.toFixed(1)}%</strong></td>
+                <td class="num"><strong style="color: {bandTotalsAgg.pnl >= 0 ? 'var(--win)' : 'var(--loss)'}">{bandTotalsAgg.pnl >= 0 ? '+' : ''}{bandTotalsAgg.pnl.toFixed(2)}</strong></td>
+                <td class="num"><strong>{bandTotalsAgg.roi.toFixed(1)}%</strong></td>
+              </tr>
+            </tfoot>
           </table>
         </CollapsibleSection>
 
@@ -464,6 +615,16 @@
                   </tr>
                 {/each}
               </tbody>
+              <tfoot>
+                <tr class="table-footer">
+                  <td colspan="3"><strong>{bestBands.length} best bands</strong></td>
+                  <td class="num"><strong>{bestBandsAgg.n}</strong></td>
+                  <td class="num"><strong>{bestBandsAgg.wins}</strong></td>
+                  <td class="num"><strong>{bestBandsAgg.wr.toFixed(1)}%</strong></td>
+                  <td class="num"><strong style="color: {bestBandsAgg.pnl >= 0 ? 'var(--win)' : 'var(--loss)'}">{bestBandsAgg.pnl >= 0 ? '+' : ''}{bestBandsAgg.pnl.toFixed(2)}</strong></td>
+                  <td colspan="4"></td>
+                </tr>
+              </tfoot>
             </table>
           {/if}
         </CollapsibleSection>
@@ -491,96 +652,127 @@
                 </tr>
               {/each}
             </tbody>
+            <tfoot>
+              <tr class="table-footer">
+                <td colspan="3"><strong>{filteredBands.length} rows</strong></td>
+                <td class="num"><strong>{filteredBandsAgg.n}</strong></td>
+                <td class="num"><strong>{filteredBandsAgg.wins}</strong></td>
+                <td class="num"><strong>{filteredBandsAgg.wr.toFixed(1)}%</strong></td>
+                <td class="num"><strong style="color: {filteredBandsAgg.pnl >= 0 ? 'var(--win)' : 'var(--loss)'}">{filteredBandsAgg.pnl >= 0 ? '+' : ''}{filteredBandsAgg.pnl.toFixed(2)}</strong></td>
+                <td colspan="4"></td>
+                <td class="num"><strong>{filteredBandsAgg.peaks}</strong> peaks</td>
+              </tr>
+            </tfoot>
           </table>
         </CollapsibleSection>
+
+        {#if selected.size >= 2}
+          <CollapsibleSection title="Strategy Comparison (Diff)" count={selected.size} defaultOpen={false}>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    {#each [...selected] as name}
+                      <th class="num">{name}</th>
+                    {/each}
+                    <th class="num">Best</th>
+                    <th class="num">Worst</th>
+                    <th class="num">Spread</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each ['total_signals', 'wins', 'win_rate', 'net_pnl', 'roi', 'sharpe', 'profit_factor', 'max_drawdown', 'avg_edge'] as m}
+                    {@const labels = /** @type {Record<string, string>} */ ({ total_signals: 'Signals', wins: 'Wins', win_rate: 'Win Rate', net_pnl: 'Net P&L', roi: 'ROI', sharpe: 'Sharpe', profit_factor: 'Profit Factor', max_drawdown: 'Max DD', avg_edge: 'Avg Edge' })}
+                    {@const vals = [...selected].map((name) => summaryMap[name]?.summary?.[m] ?? null).filter((v) => v !== null)}
+                    {@const numericVals = vals.map((v) => typeof v === 'number' ? v : 0)}
+                    {@const best = numericVals.length > 0 ? Math.max(...numericVals) : 0}
+                    {@const worst = numericVals.length > 0 ? Math.min(...numericVals) : 0}
+                    <tr>
+                      <td>{labels[m]}</td>
+                      {#each [...selected] as name}
+                        {@const v = summaryMap[name]?.summary?.[m]}
+                        <td class="num">{v !== null && v !== undefined ? (m === 'win_rate' || m === 'roi' ? v.toFixed(1) + '%' : m === 'net_pnl' || m === 'max_drawdown' ? v.toFixed(2) : m === 'sharpe' || m === 'profit_factor' || m === 'avg_edge' ? v.toFixed(2) : v) : '\u2014'}</td>
+                      {/each}
+                      <td class="num" style="color: var(--win)">{best.toFixed(2)}</td>
+                      <td class="num" style="color: var(--loss)">{worst.toFixed(2)}</td>
+                      <td class="num">{(best - worst).toFixed(2)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </CollapsibleSection>
+        {/if}
       </div>
-
-      <!-- Filter sidebar -->
-      <aside class="filter-sidebar">
-        <div class="filter-group">
-          <h3>Strategies</h3>
-          <button class="toggle-all" onclick={toggleAll}>
-            {selected.size === strategies.length ? 'Deselect All' : 'Select All'}
-          </button>
-          <div class="strategy-list">
-            {#each strategies as name}
-              <button
-                class="toggle-btn"
-                class:active={selected.has(name)}
-                style="--btn-color: {colorFor(name)}"
-                onclick={() => toggle(name)}
-              >
-                <span class="dot" style="background: {colorFor(name)}"></span>
-                {name}
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <div class="filter-group">
-          <h3>Day</h3>
-          <select bind:value={selectedDay} class="day-select">
-            <option value="all">All Days</option>
-            {#each allDays as d}
-              <option value={d}>{d}</option>
-            {/each}
-          </select>
-        </div>
-
-        <div class="filter-group">
-          <h3>Chart Metric</h3>
-          <label class="filter-label">
-            <select bind:value={chartMetric}>
-              <option value="win_rate">Win Rate</option>
-              <option value="net_pnl">Net P&L</option>
-              <option value="roi">ROI</option>
-              <option value="sharpe">Sharpe</option>
-              <option value="avg_edge">Avg Edge</option>
-            </select>
-          </label>
-        </div>
-
-        <div class="filter-group">
-          <h3>Best Bands Filter</h3>
-          <label class="filter-label">Min N
-            <input type="number" bind:value={minN} min="1" max="100" step="1" />
-          </label>
-          <label class="filter-label">Min Win Rate %
-            <input type="number" bind:value={minWR} min="0" max="100" step="1" />
-          </label>
-        </div>
-
-        <div class="filter-group">
-          <h3>Data</h3>
-          <button class="run-btn" onclick={loadSimulation} disabled={loading}>
-            {loading ? 'Loading...' : 'Refresh'}
-          </button>
-        </div>
-      </aside>
     </div>
   {/if}
 </div>
 
 <style>
-  .error-banner { background: var(--loss-bg); color: var(--loss); padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 13px; }
-  .layout { display: flex; gap: 20px; align-items: flex-start; }
-  .main-content { flex: 1; min-width: 0; }
-  .filter-sidebar { width: 240px; flex-shrink: 0; position: sticky; top: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
-  .filter-group { margin-bottom: 20px; }
-  .filter-group:last-child { margin-bottom: 0; }
-  .filter-group h3 { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 10px 0; }
-  .strategy-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
-  .toggle-all { background: var(--surface-hover); border: 1px solid var(--border-strong); color: #94a3b8; padding: 6px 12px; border-radius: var(--radius-sm); font-size: 12px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: left; }
+  .filter-toolbar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .toolbar-row { display: flex; align-items: center; gap: 8px; padding: 8px 14px; flex-wrap: wrap; }
+  .toolbar-btn {
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+    padding: 5px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .toolbar-btn:hover { color: var(--text); border-color: var(--accent); }
+  .toolbar-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .toolbar-panel { border-top: 1px solid var(--border); padding: 12px 14px; background: var(--surface-hover); }
+  .strategy-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+    padding: 4px 10px;
+    border-radius: 14px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .chip.active { border-color: var(--btn-color); color: var(--text); }
+  .chip:hover { border-color: var(--btn-color); }
+  .toggle-all {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    cursor: pointer;
+  }
   .toggle-all:hover { background: var(--border-strong); }
-  .toggle-btn { background: var(--surface-hover); border: 1px solid var(--border-strong); color: var(--text-muted); padding: 6px 10px; border-radius: var(--radius-sm); font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.15s; text-align: left; }
-  .toggle-btn.active { border-color: var(--btn-color); color: var(--text); }
-  .toggle-btn:hover { border-color: var(--btn-color); }
-  .filter-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); margin-bottom: 10px; }
-  .filter-label input, .filter-label select, .day-select { background: var(--surface-hover); border: 1px solid var(--border-strong); color: var(--text); padding: 5px 10px; border-radius: var(--radius-xs); font-size: 13px; width: 100%; box-sizing: border-box; }
-  .run-btn { background: #1e40af; border: 1px solid #3b82f6; color: var(--text); padding: 6px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; cursor: pointer; width: 100%; }
-  .run-btn:hover { background: #2563eb; }
-  .run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .filter-inputs { display: flex; gap: 12px; flex-wrap: wrap; }
+  .filter-inputs label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-muted); }
+  .filter-inputs input, .filter-inputs select {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    padding: 5px 10px;
+    border-radius: var(--radius-xs);
+    font-size: 13px;
+    min-width: 120px;
+  }
+  .filter-count-note { color: var(--text-dim); font-size: 11px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+  .table-footer { background: var(--surface-hover); border-top: 2px solid var(--border-strong); }
+  .table-footer td { font-size: 13px; padding: 10px 14px; }
+  .error-banner { background: var(--loss-bg); color: var(--loss); padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 13px; }
+  .layout { display: block; }
+  .main-content { flex: 1; min-width: 0; }
   .chart-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
   .chart-section h2 { font-size: 14px; font-weight: 600; color: #cbd5e1; margin: 0 0 12px 0; }
   .chart-subtitle { font-size: 12px; color: var(--text-muted); font-weight: 400; }

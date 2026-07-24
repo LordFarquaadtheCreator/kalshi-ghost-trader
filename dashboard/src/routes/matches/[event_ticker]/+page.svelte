@@ -315,11 +315,12 @@
               <tr>
                 <th>Time</th>
                 <th>Player</th>
-                <th>Context</th>
-                <th>Price</th>
-                <th>Edge</th>
-                <th>Size</th>
+                <th>Market</th>
                 <th>Strategy</th>
+                <th class="num">Price</th>
+                <th class="num">Edge</th>
+                <th class="num">Size</th>
+                <th>Signal Context</th>
               </tr>
             </thead>
             <tbody>
@@ -327,11 +328,12 @@
                 <tr>
                   <td class="mono">{fmtTime(o.ts)}</td>
                   <td>{o.player_name || o.market_ticker}</td>
-                  <td>{o.context}</td>
-                  <td>{(o.market_price * 100).toFixed(0)}c</td>
-                  <td>{o.edge_cents}c</td>
-                  <td>{o.suggested_size}</td>
+                  <td class="mono small">{o.market_ticker}</td>
                   <td>{o.strategy}</td>
+                  <td class="num">{(o.market_price * 100).toFixed(0)}c</td>
+                  <td class="num" class:edge-good={o.edge_cents > 5} class:edge-low={o.edge_cents <= 2}>{o.edge_cents}c</td>
+                  <td class="num">{o.suggested_size?.toFixed(4)}</td>
+                  <td class="context-cell" title={o.context}>{o.context}</td>
                 </tr>
               {/each}
             </tbody>
@@ -360,4 +362,8 @@
   .market-ticker { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
   .market-stats { display: flex; gap: 12px; margin-top: 8px; }
   .market-stats .stat { font-size: 12px; color: #94a3b8; background: var(--surface-hover); padding: 3px 8px; border-radius: var(--radius-xs); }
+  .small { font-size: 10px; }
+  .edge-good { color: var(--win); font-weight: 600; }
+  .edge-low { color: var(--loss); }
+  .context-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-muted); }
 </style>

@@ -1,13 +1,36 @@
 <script>
   import { createPoll } from '$lib/poll.js';
   import { api } from '$lib/api.js';
+  import { onMount } from 'svelte';
   import PageHeader from '$lib/components/PageHeader.svelte';
   import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import MetricsBar from '$lib/components/MetricsBar.svelte';
 
   const configStore = createPoll(() => api.getAppConfig(), 30000, { data: null, error: null, connected: false });
   const strategyStore = createPoll(() => api.getStrategyConfig(), 30000, { data: null, error: null, connected: false });
   const triggerStore = createPoll(() => api.getTriggerRanges(), 30000, { data: null, error: null, connected: false });
+
+  /** @type {any[]} */
+  let configHistory = $state([]);
+  let historyLoading = $state(true);
+
+  async function loadHistory() {
+    historyLoading = true;
+    try {
+      const data = await api.getAppConfigHistory(50);
+      configHistory = data?.history ?? [];
+    } catch {
+      configHistory = [];
+    }
+    historyLoading = false;
+  }
+  onMount(loadHistory);
+
+  function fmtHistoryDate(/** @type {number} */ ts) {
+    if (!ts) return '\u2014';
+    return new Date(ts).toLocaleString();
+  }
 
   let configData = $derived($configStore.data);
   let strategyData = $derived($strategyStore.data);
@@ -21,6 +44,26 @@
   let strategies = $derived(strategyData?.strategies ?? []);
   /** @type {Record<string, any[]>} */
   let triggerRanges = $derived(triggerData?.ranges ?? {});
+
+  // --- Aggregate stats ---
+  let enabledCount = $derived(strategies.filter((s) => s.Enabled).length);
+  let disabledCount = $derived(strategies.length - enabledCount);
+  let totalBands = $derived.by(() => {
+    let n = 0;
+    for (const arr of Object.values(triggerRanges)) n += arr.length;
+    return n;
+  });
+  let activeBands = $derived.by(() => {
+    let n = 0;
+    for (const arr of Object.values(triggerRanges)) n += arr.filter((r) => r.enabled).length;
+    return n;
+  });
+  let strategiesWithBands = $derived.by(() => {
+    let n = 0;
+    for (const arr of Object.values(triggerRanges)) if (arr.length > 0) n++;
+    return n;
+  });
+  let strategiesWithLimits = $derived(strategies.filter((s) => s.PerMarketMaxOrders > 0).length);
 
   let editingKey = $state('');
   let editingValue = $state('');
@@ -136,6 +179,24 @@
 <div class="page-container">
   <PageHeader title="Configuration" {connected} {error} />
 
+  {#if strategies.length > 0}
+    <MetricsBar
+      primary={[
+        { label: 'Strategies', value: strategies.length },
+        { label: 'Enabled', value: enabledCount, tone: 'win' },
+        { label: 'Disabled', value: disabledCount, tone: 'loss' },
+        { label: 'Bands', value: totalBands },
+        { label: 'Active Bands', value: activeBands, tone: 'win' },
+        { label: 'Config Keys', value: configPairs.length },
+      ]}
+      secondary={[
+        { label: 'With Limits', value: strategiesWithLimits },
+        { label: 'With Bands', value: strategiesWithBands },
+        { label: 'Inactive Bands', value: totalBands - activeBands },
+      ]}
+    />
+  {/if}
+
   {#if toggleMsg}
     <div class="msg-bar">{toggleMsg}</div>
   {/if}
@@ -185,6 +246,14 @@
               </tr>
             {/each}
           </tbody>
+          <tfoot>
+            <tr class="table-footer">
+              <td><strong>{strategies.length} strategies</strong></td>
+              <td><strong>{enabledCount} enabled / {disabledCount} disabled</strong></td>
+              <td><strong>{strategiesWithLimits} with limits</strong></td>
+              <td colspan="2"></td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     {/if}
@@ -287,6 +356,12 @@
                               </tr>
                             {/each}
                           </tbody>
+                          <tfoot>
+                            <tr class="table-footer">
+                              <td colspan="3"><strong>{(triggerRanges[s.Strategy] ?? []).length} bands</strong> ({(triggerRanges[s.Strategy] ?? []).filter(r => r.enabled).length} active)</td>
+                              <td colspan="2"></td>
+                            </tr>
+                          </tfoot>
                         </table>
                       {/if}
                     </div>
@@ -295,6 +370,14 @@
               {/if}
             {/each}
           </tbody>
+          <tfoot>
+            <tr class="table-footer">
+              <td><strong>{strategies.length} strategies</strong></td>
+              <td></td>
+              <td><strong>{totalBands} bands ({activeBands} active)</strong></td>
+              <td></td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     {/if}
@@ -336,6 +419,45 @@
               </tr>
             {/each}
           </tbody>
+          <tfoot>
+            <tr class="table-footer">
+              <td><strong>{configPairs.length} config keys</strong></td>
+              <td colspan="2"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    {/if}
+  </CollapsibleSection>
+
+  <CollapsibleSection title="Config History" count={configHistory.length} defaultOpen={false}>
+    {#if historyLoading}
+      <EmptyState text="Loading..." />
+    {:else if configHistory.length === 0}
+      <EmptyState text="No config changes recorded." />
+    {:else}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Key</th>
+              <th>Action</th>
+              <th>Old Value</th>
+              <th>New Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each configHistory as h (h.ID)}
+              <tr>
+                <td class="mono">{fmtHistoryDate(h.ChangedTS)}</td>
+                <td class="mono">{h.Key}</td>
+                <td><span class="badge badge-{h.Action === 'delete' ? 'err' : 'ok'}">{h.Action}</span></td>
+                <td class="mono">{h.OldValue || '\u2014'}</td>
+                <td class="mono">{h.NewValue || '\u2014'}</td>
+              </tr>
+            {/each}
+          </tbody>
         </table>
       </div>
     {/if}
@@ -343,6 +465,8 @@
 </div>
 
 <style>
+  .table-footer { background: var(--surface-hover); border-top: 2px solid var(--border-strong); }
+  .table-footer td { font-size: 13px; padding: 10px 14px; }
   .msg-bar {
     background: var(--surface);
     border: 1px solid var(--border);

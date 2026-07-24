@@ -1,7 +1,8 @@
 <script>
   import LineChart from '$lib/components/LineChart.svelte';
-  import StatCard from '$lib/components/StatCard.svelte';
   import PageHeader from '$lib/components/PageHeader.svelte';
+  import CollapsibleSection from '$lib/components/CollapsibleSection.svelte';
+  import MetricsBar from '$lib/components/MetricsBar.svelte';
   import { systemStore as store } from '$lib/system-store.js';
   import { fmtBytes, fmtNum } from '$lib/utils.js';
 
@@ -33,6 +34,48 @@
   ];
   /** @type {any[]} */
   const stackSeries = [{ label: 'Stack (MB)', getValue: (/** @type {any} */ s) => Math.round((s.stack_inuse_bytes / 1048576) * 10) / 10, color: '#f472b0' }];
+
+  // --- Derived stats from rolling history ---
+  let cur = $derived($store.current);
+  let hist = $derived($store.history ?? []);
+
+  let heapStats = $derived.by(() => {
+    if (hist.length === 0) return null;
+    const vals = hist.map((s) => s.heap_alloc_bytes);
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+    return { min, max, avg };
+  });
+
+  let goroutineStats = $derived.by(() => {
+    if (hist.length === 0) return null;
+    const vals = hist.map((s) => s.goroutines);
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const cur = vals[vals.length - 1];
+    const first = vals[0];
+    const trend = cur - first;
+    return { min, max, cur, trend };
+  });
+
+  let gcRate = $derived.by(() => {
+    if (hist.length < 2) return null;
+    const first = hist[0].gc_num;
+    const last = hist[hist.length - 1].gc_num;
+    const span = hist.length; // seconds (1s poll)
+    return (last - first) / span;
+  });
+
+  let mallocFreeRatio = $derived.by(() => {
+    if (!cur || !cur.frees) return null;
+    return cur.mallocs / cur.frees;
+  });
+
+  let heapEfficiency = $derived.by(() => {
+    if (!cur || !cur.sys_bytes) return null;
+    return (cur.heap_alloc_bytes / cur.sys_bytes) * 100;
+  });
 </script>
 
 <svelte:head>
@@ -42,35 +85,65 @@
 <div class="page-container">
   <PageHeader title="System" connected={$store.connected} error={$store.error || ''} />
 
-  {#if $store.current}
-    <div class="stats-grid">
-      <StatCard label="Goroutines" value={$store.current.goroutines} />
-      <StatCard label="Heap" value={fmtBytes($store.current.heap_alloc_bytes)} />
-      <StatCard label="Heap Objects" value={fmtNum($store.current.heap_objects)} />
-      <StatCard label="Total Sys" value={fmtBytes($store.current.sys_bytes)} />
-      <StatCard label="GC Count" value={$store.current.gc_num} />
-      <StatCard label="GC Pause" value={`${($store.current.gc_pause_ns / 1e6).toFixed(2)} ms`} />
-      <StatCard label="Mallocs" value={fmtNum($store.current.mallocs)} />
-      <StatCard label="Frees" value={fmtNum($store.current.frees)} />
-      <StatCard label="CPUs" value={$store.current.num_cpu} />
-      <StatCard label="Next GC" value={fmtBytes($store.current.next_gc_bytes)} />
-    </div>
+  {#if cur}
+    <MetricsBar
+      primary={[
+        { label: 'Goroutines', value: cur.goroutines },
+        { label: 'Heap', value: fmtBytes(cur.heap_alloc_bytes) },
+        { label: 'GC Rate', value: gcRate !== null ? gcRate.toFixed(2) + '/s' : '\u2014' },
+        { label: 'Heap Eff', value: heapEfficiency !== null ? heapEfficiency.toFixed(1) + '%' : '\u2014' },
+        { label: 'CPUs', value: cur.num_cpu },
+        { label: 'Samples', value: hist.length },
+      ]}
+      secondary={[
+        { label: 'Heap Objects', value: fmtNum(cur.heap_objects) },
+        { label: 'Total Sys', value: fmtBytes(cur.sys_bytes) },
+        { label: 'Next GC', value: fmtBytes(cur.next_gc_bytes) },
+        { label: 'GC Count', value: cur.gc_num },
+        { label: 'GC Pause', value: (cur.gc_pause_ns / 1e6).toFixed(2) + ' ms' },
+        { label: 'Mallocs', value: fmtNum(cur.mallocs) },
+        { label: 'Frees', value: fmtNum(cur.frees) },
+        { label: 'M/F Ratio', value: mallocFreeRatio !== null ? mallocFreeRatio.toFixed(2) : '\u2014' },
+        { label: 'Heap Min', value: heapStats ? fmtBytes(heapStats.min) : '\u2014' },
+        { label: 'Heap Max', value: heapStats ? fmtBytes(heapStats.max) : '\u2014' },
+        { label: 'Heap Avg', value: heapStats ? fmtBytes(heapStats.avg) : '\u2014' },
+        { label: 'Go Min', value: goroutineStats ? goroutineStats.min : '\u2014' },
+        { label: 'Go Max', value: goroutineStats ? goroutineStats.max : '\u2014' },
+        { label: 'Go Trend', value: goroutineStats ? (goroutineStats.trend >= 0 ? '+' : '') + goroutineStats.trend : '\u2014', tone: (goroutineStats?.trend ?? 0) > 0 ? 'loss' : 'win' },
+      ]}
+    />
   {:else}
-    <div class="stats-grid">
-      <div class="stat-card" style="grid-column: 1 / -1; text-align: center; padding: 30px;">
-        <div class="stat-label">Waiting for data...</div>
-      </div>
-    </div>
+    <MetricsBar primary={[{ label: 'Status', value: 'Waiting for data...' }]} />
   {/if}
 
-  <div class="charts-grid">
-    <LineChart title="Heap Allocation (MB)" series={cpuSeries} {store} yUnit=" MB" />
-    <LineChart title="Memory Breakdown (MB)" series={rssSeries} {store} yUnit=" MB" />
-    <LineChart title="Goroutines" series={goroutineSeries} {store} />
-    <LineChart title="Heap Objects" series={heapObjSeries} {store} />
-    <LineChart title="GC Count" series={gcSeries} {store} />
-    <LineChart title="GC Pause Total (ms)" series={gcPauseSeries} {store} yUnit=" ms" />
-    <LineChart title="Mallocs vs Frees" series={mallocFreesSeries} {store} />
-    <LineChart title="Stack In-Use (MB)" series={stackSeries} {store} yUnit=" MB" />
-  </div>
+  <CollapsibleSection title="Memory" count={3} defaultOpen={true}>
+    <div class="charts-grid">
+      <LineChart title="Heap Allocation (MB)" series={cpuSeries} {store} yUnit=" MB" />
+      <LineChart title="Memory Breakdown (MB)" series={rssSeries} {store} yUnit=" MB" />
+      <LineChart title="Stack In-Use (MB)" series={stackSeries} {store} yUnit=" MB" />
+    </div>
+  </CollapsibleSection>
+
+  <CollapsibleSection title="Runtime" count={2} defaultOpen={true}>
+    <div class="charts-grid">
+      <LineChart title="Goroutines" series={goroutineSeries} {store} />
+      <LineChart title="Heap Objects" series={heapObjSeries} {store} />
+    </div>
+  </CollapsibleSection>
+
+  <CollapsibleSection title="GC & Allocations" count={3} defaultOpen={true}>
+    <div class="charts-grid">
+      <LineChart title="GC Count" series={gcSeries} {store} />
+      <LineChart title="GC Pause Total (ms)" series={gcPauseSeries} {store} yUnit=" ms" />
+      <LineChart title="Mallocs vs Frees" series={mallocFreesSeries} {store} />
+    </div>
+  </CollapsibleSection>
 </div>
+
+<style>
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 16px;
+  }
+</style>
