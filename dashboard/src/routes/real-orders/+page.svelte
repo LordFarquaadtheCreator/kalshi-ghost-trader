@@ -615,7 +615,7 @@
                 </td>
                 <td class="num">
                   {#if potentialProfit(o) !== null}
-                    <span class="win">+{fmtCents(/** @type {number} */ (potentialProfit(o)))}</span>
+                    <span>+{fmtCents(/** @type {number} */ (potentialProfit(o)))}</span>
                   {:else}
                     <span class="muted">—</span>
                   {/if}
@@ -830,7 +830,7 @@
         <div class="d-row"><span class="d-key">Before</span><span class="mono">{fmtCents(o.PoolBalanceBeforeCents)}</span></div>
         <div class="d-row"><span class="d-key">After</span><span class="mono">{fmtCents(o.PoolBalanceAfterCents)}</span></div>
         <div class="d-row"><span class="d-key">Unfilled Refund</span><span class="mono">{fmtCents(o.UnfilledRefundedCents)}</span></div>
-        {#if potentialProfit(o) !== null}<div class="d-row"><span class="d-key">Potential Profit</span><span class="mono win">+{fmtCents(/** @type {number} */ (potentialProfit(o)))}</span></div>{/if}
+        {#if potentialProfit(o) !== null}<div class="d-row"><span class="d-key">Potential Profit</span><span class="mono">+{fmtCents(/** @type {number} */ (potentialProfit(o)))}</span></div>{/if}
       </div>
 
       <div class="d-section">
