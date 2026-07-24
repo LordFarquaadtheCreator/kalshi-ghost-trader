@@ -52,62 +52,58 @@ func DefaultFadeLongshotConfig() FadeLongshotConfig {
 	}
 }
 
-// fadeScoreState tracks live score context for dynamic convProb.
+// fadeScoreState tracks live score context for dynamic convProb + pace estimation.
 type fadeScoreState struct {
 	homeSetWins  int
 	awaySetWins  int
 	homeGames    int
 	awayGames    int
+	setNumber    int
 	isMatchPoint bool
 	isSetPoint   bool
+	firstPointTS int64 // unix ms of first scored point (match start proxy)
+	pointsPlayed int   // running count of points received
 }
 
-// FadeLongshotStrategy buys the favorite (higher-priced YES) at a fixed
-// time before market close. Data shows favorites win 100% in sample
-// with +10c edge at T-10min.
+// FadeLongshotStrategy buys the favorite (higher-priced YES) when the match
+// is estimated to be within WindowSeconds of ending. Entry timing uses a
+// pace estimator (points played / elapsed time + score state) instead of
+// Kalshi's close_ts, which is a placeholder until match end.
 //
-// This strategy needs close_ts for each event, provided via
-// RegisterCloseTime. In live mode, close_ts comes from the markets table.
-// In backtest, the backtest engine provides it.
-//
-// Implements ScoreObserver to track live score context for dynamic
-// conversion probability. Does NOT implement PreMatchGated — the
-// close_ts window gating prevents premature firing.
+// Implements ScoreObserver for pace estimation + dynamic convProb.
+// Does NOT implement CloseTimeStrategy — uses the interleaved replay path
+// in backtest (ticks + points merged by timestamp).
 type FadeLongshotStrategy struct {
-	mu          sync.RWMutex
-	prices      map[string]float64
-	priceTimes  map[string]time.Time
-	markets     map[string][]string
-	closeTimes  map[string]int64
-	fired       map[string]bool
-	closeWarned map[string]bool // warn once per event when close_ts=0
-	scores      map[string]*fadeScoreState
-	series      map[string]string // event_ticker -> series_ticker
-	emitter     OrderEmitter
-	db          *store.DB // nil in backtest mode
-	log         *slog.Logger
-	cfg         FadeLongshotConfig
-	replayNow   *time.Time
+	mu         sync.RWMutex
+	prices     map[string]float64
+	priceTimes map[string]time.Time
+	markets    map[string][]string
+	fired      map[string]bool
+	scores     map[string]*fadeScoreState
+	series     map[string]string // event_ticker -> series_ticker
+	emitter    OrderEmitter
+	db         *store.DB // nil in backtest mode
+	log        *slog.Logger
+	cfg        FadeLongshotConfig
+	replayNow  *time.Time
 }
 
 func NewFadeLongshotStrategy(emitter OrderEmitter, log *slog.Logger, cfg FadeLongshotConfig) *FadeLongshotStrategy {
 	return &FadeLongshotStrategy{
-		prices:      make(map[string]float64),
-		priceTimes:  make(map[string]time.Time),
-		markets:     make(map[string][]string),
-		closeTimes:  make(map[string]int64),
-		fired:       make(map[string]bool),
-		closeWarned: make(map[string]bool),
-		scores:      make(map[string]*fadeScoreState),
-		series:      make(map[string]string),
-		emitter:     emitter,
-		log:         log,
-		cfg:         cfg,
+		prices:     make(map[string]float64),
+		priceTimes: make(map[string]time.Time),
+		markets:    make(map[string][]string),
+		fired:      make(map[string]bool),
+		scores:     make(map[string]*fadeScoreState),
+		series:     make(map[string]string),
+		emitter:    emitter,
+		log:        log,
+		cfg:        cfg,
 	}
 }
 
 // NewFadeLongshotStrategyWithDB creates a live-mode fadelongshot that
-// auto-loads close_ts from the markets table on RegisterMarkets.
+// auto-loads series from the markets table on RegisterMarkets.
 func NewFadeLongshotStrategyWithDB(emitter OrderEmitter, db *store.DB, log *slog.Logger, cfg FadeLongshotConfig) *FadeLongshotStrategy {
 	s := NewFadeLongshotStrategy(emitter, log, cfg)
 	s.db = db
@@ -119,9 +115,8 @@ func (s *FadeLongshotStrategy) RegisterMarkets(eventTicker string, marketTickers
 	s.markets[eventTicker] = marketTickers
 	s.mu.Unlock()
 
-	// Live mode: auto-load close_ts + series from DB
+	// Live mode: load series from DB for series-filtered variants
 	if s.db != nil {
-		s.loadCloseTime(eventTicker)
 		s.loadSeriesTicker(eventTicker)
 	}
 }
@@ -143,42 +138,9 @@ func (s *FadeLongshotStrategy) SetSeriesTicker(eventTicker, seriesTicker string)
 	s.mu.Unlock()
 }
 
-// loadCloseTime queries close_ts from the markets table. Called on
-// RegisterMarkets in live mode. In backtest, RegisterCloseTime is used instead.
-func (s *FadeLongshotStrategy) loadCloseTime(eventTicker string) {
-	mkts, err := s.db.GetMarketsByEvent(context.Background(), eventTicker)
-	if err != nil {
-		s.log.Error("fadelongshot: load close_ts", "event", eventTicker, "err", err)
-		return
-	}
-	for _, m := range mkts {
-		if m.CloseTS > 0 {
-			s.mu.Lock()
-			s.closeTimes[eventTicker] = m.CloseTS
-			delete(s.closeWarned, eventTicker)
-			s.mu.Unlock()
-			s.log.Info("fadelongshot: loaded close_ts", "event", eventTicker, "close_ts", m.CloseTS)
-			return
-		}
-	}
-	// No close_ts yet — warn once per event
-	s.mu.Lock()
-	if !s.closeWarned[eventTicker] {
-		s.closeWarned[eventTicker] = true
-		s.mu.Unlock()
-		s.log.Warn("fadelongshot: no close_ts for event", "event", eventTicker)
-		return
-	}
-	s.mu.Unlock()
-}
-
-// RegisterCloseTime sets the close timestamp for an event.
-// closeTs is unix milliseconds.
-func (s *FadeLongshotStrategy) RegisterCloseTime(eventTicker string, closeTs int64) {
-	s.mu.Lock()
-	s.closeTimes[eventTicker] = closeTs
-	s.mu.Unlock()
-}
+// RegisterCloseTime removed — pace estimator replaces close_ts for entry timing.
+// fadelongshot no longer implements CloseTimeStrategy; backtest uses the
+// interleaved replay path (ticks + points) instead.
 
 func (s *FadeLongshotStrategy) UnregisterMarkets(eventTicker string) {
 	s.mu.Lock()
@@ -187,9 +149,7 @@ func (s *FadeLongshotStrategy) UnregisterMarkets(eventTicker string) {
 		delete(s.priceTimes, mkt)
 	}
 	delete(s.markets, eventTicker)
-	delete(s.closeTimes, eventTicker)
 	delete(s.fired, eventTicker)
-	delete(s.closeWarned, eventTicker)
 	delete(s.scores, eventTicker)
 	delete(s.series, eventTicker)
 	s.mu.Unlock()
@@ -224,11 +184,16 @@ func (s *FadeLongshotStrategy) OnPoint(eventTicker string, p store.Point) {
 	ms.awaySetWins = p.AwaySetGames
 	ms.homeGames = p.HomeGames
 	ms.awayGames = p.AwayGames
+	ms.setNumber = p.SetNumber
 	ms.isMatchPoint = p.IsMatchPoint
 	ms.isSetPoint = p.IsSetPoint
+	ms.pointsPlayed++
+	if ms.firstPointTS == 0 && p.TS > 0 {
+		ms.firstPointTS = p.TS
+	}
 	s.mu.Unlock()
 
-	// Re-check entry after score update — convProb may have changed
+	// Re-check entry after score update — convProb or pace may have changed
 	s.checkEntryForEvent(eventTicker)
 }
 
@@ -298,6 +263,72 @@ func (s *FadeLongshotStrategy) dynamicConvProb(eventTicker string, favPrice floa
 	return prob
 }
 
+// estimateRemainingMin predicts minutes until match end from score state + pace.
+// Returns 999 (never fire) when score data is unavailable or match is too early.
+// Calibrated against 10 weeks of backtest data: at T-15min before close,
+// set 2 matches avg 97 pts / 71 min (1.36 pts/min), set 3 matches avg 189 pts /
+// 113 min (1.67 pts/min). Remaining-points table derived from games leader
+// in current set.
+// Caller must NOT hold s.mu.
+func (s *FadeLongshotStrategy) estimateRemainingMin(eventTicker string, now time.Time) float64 {
+	s.mu.RLock()
+	ms := s.scores[eventTicker]
+	s.mu.RUnlock()
+	return estimateRemainingMinLocked(ms, now)
+}
+
+// estimateRemainingMinLocked computes remaining minutes from a score state
+// snapshot. Safe to call while holding s.mu.
+func estimateRemainingMinLocked(ms *fadeScoreState, now time.Time) float64 {
+	if ms == nil || ms.firstPointTS == 0 {
+		return 999
+	}
+	elapsedMin := float64(now.UnixMilli()-ms.firstPointTS) / 60000.0
+	if elapsedMin < 1 {
+		return 999
+	}
+	pace := float64(ms.pointsPlayed) / elapsedMin
+	if pace <= 0 {
+		return 999
+	}
+	return remainingPoints(ms) / pace
+}
+
+// remainingPoints estimates points left until match end from score state.
+// Match point → 0 (imminent). Set 1 → 999 (too early, unpredictable).
+// Set 2/3 → scaled by games leader in current set.
+func remainingPoints(ms *fadeScoreState) float64 {
+	if ms.isMatchPoint {
+		return 0
+	}
+	if ms.setNumber <= 1 {
+		return 999
+	}
+	leaderGames := ms.homeGames
+	if ms.awayGames > leaderGames {
+		leaderGames = ms.awayGames
+	}
+	if ms.setNumber == 2 {
+		switch {
+		case leaderGames >= 5:
+			return 10
+		case leaderGames >= 3:
+			return 20
+		default:
+			return 35
+		}
+	}
+	// set 3+ (deciding set)
+	switch {
+	case leaderGames >= 5:
+		return 8
+	case leaderGames >= 3:
+		return 15
+	default:
+		return 25
+	}
+}
+
 func (s *FadeLongshotStrategy) checkEntry(marketTicker string) {
 	s.checkEntryAt(marketTicker, s.now())
 }
@@ -339,19 +370,13 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	closeTs, ok := s.closeTimes[eventTicker]
-	if !ok || closeTs == 0 {
-		s.mu.Unlock()
-		// Retry: close_ts may have arrived via lifecycle event after RegisterMarkets
-		if s.db != nil {
-			s.loadCloseTime(eventTicker)
-		}
-		return
-	}
-
-	entryWindow := int64(s.cfg.WindowSeconds) * 1000
-	entryTs := closeTs - entryWindow
-	if ts.UnixMilli() < entryTs {
+	// Pace estimator: fire when estimated remaining time <= WindowSeconds.
+	// Replaces close_ts dependency (Kalshi's initial close_ts is a placeholder
+	// updated only at match end via close_date_updated lifecycle event).
+	ms := s.scores[eventTicker]
+	remainingMin := estimateRemainingMinLocked(ms, ts)
+	windowMin := float64(s.cfg.WindowSeconds) / 60.0
+	if remainingMin > windowMin {
 		s.mu.Unlock()
 		return
 	}
@@ -376,20 +401,19 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		}
 	}
 
-	// UTC hour filter: skip events outside [UTCHourStart, UTCHourEnd)
+	// UTC hour filter: use current time (within ~15 min of actual close)
 	if s.cfg.UTCHourStart > 0 || s.cfg.UTCHourEnd > 0 {
-		closeUTC := time.UnixMilli(closeTs).UTC().Hour()
+		curUTC := ts.UTC().Hour()
 		start := s.cfg.UTCHourStart
 		end := s.cfg.UTCHourEnd
 		if end == 0 {
 			end = 24
 		}
-		// Handle wraparound (e.g. 18-4 = evening through early morning)
 		inWindow := false
 		if start <= end {
-			inWindow = closeUTC >= start && closeUTC < end
+			inWindow = curUTC >= start && curUTC < end
 		} else {
-			inWindow = closeUTC >= start || closeUTC < end
+			inWindow = curUTC >= start || curUTC < end
 		}
 		if !inWindow {
 			s.mu.Unlock()
@@ -454,13 +478,13 @@ func (s *FadeLongshotStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 	size := kellySized(convProb, favPrice)
 
 	payload, _ := json.Marshal(map[string]any{
-		"window_s":    s.cfg.WindowSeconds,
-		"close_ts":    closeTs,
-		"entry_ts":    ts.UnixMilli(),
-		"fav_price":   favPrice,
-		"other_price": otherPrice,
-		"conv_prob":   convProb,
-		"dynamic":     s.cfg.DynamicConvProb,
+		"window_s":     s.cfg.WindowSeconds,
+		"remaining_min": remainingMin,
+		"entry_ts":     ts.UnixMilli(),
+		"fav_price":    favPrice,
+		"other_price":  otherPrice,
+		"conv_prob":    convProb,
+		"dynamic":      s.cfg.DynamicConvProb,
 	})
 
 	o := store.Order{
