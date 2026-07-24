@@ -46,6 +46,13 @@ CLI + dashboard PnL (previously CLI had FIFO, engine had buy-only — bug).
 all reference it. Adding a strategy = adding one entry here + implementing
 `algorithms.Strategy` + `ReplayStrategy` (SetReplayTime + OnPriceAt).
 
+**Adding a strategy also requires a `strategy_config` seed migration** —
+add a new numbered `.sql` file in `internal/store/migrations/` inserting
+the strategy name into `strategy_config` (enabled=false, `ON CONFLICT DO
+NOTHING`). Dashboard `/config` reads from the DB table, not the registry;
+without a seed row the strategy won't appear in the config UI. See
+`internal/store/AGENTS.md` migration rules.
+
 Optional interfaces strategies can implement:
 - `CloseTimeStrategy` — needs close_ts (fadelongshot)
 - `SeriesSetter` — needs series_ticker (fadelongshot variants)
