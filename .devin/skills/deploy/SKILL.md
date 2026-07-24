@@ -8,7 +8,9 @@ description: Deploy kalshi-ghost-trader to the Linux Mint box. Use when the user
 **Always use `deploy/deploy.sh`. Never run individual SSH commands to build, upload, or restart services on mint.**
 
 ```bash
-./deploy/deploy.sh mint main
+./deploy/deploy.sh mint main              # both backend + dashboard (default)
+./deploy/deploy.sh mint main --backend    # backend only
+./deploy/deploy.sh mint main --dashboard  # dashboard only
 ```
 
 ## Prerequisites
@@ -20,13 +22,15 @@ description: Deploy kalshi-ghost-trader to the Linux Mint box. Use when the user
 
 ## What deploy.sh does
 
-1. Builds backend + backtest locally (linux/amd64) into `deploy/out/`
-2. scp's `ghost-trader` binary to remote repo root `/home/fahad/kalshi-ghost-trader/ghost-trader`
-3. scp's `backtest` binary to `/home/fahad/kalshi-ghost-trader/bin/backtest`
-4. Syncs `deploy/ghost-trader.service` to `/etc/systemd/system/` on remote (only if changed, then `daemon-reload`)
-5. `git fetch + checkout + reset --hard` remote to local HEAD
-6. rsyncs `dashboard/` source to remote (excludes node_modules, build, .svelte-kit)
-7. Restarts both services
+Flags: `--backend` (build + upload binaries, sync service file, restart backend), `--dashboard` (rsync dashboard source, restart dashboard). Omit both = deploy everything.
+
+1. Builds backend + backtest locally (linux/amd64) into `deploy/out/` — skipped with `--dashboard`
+2. scp's `ghost-trader` binary to remote repo root `/home/fahad/kalshi-ghost-trader/ghost-trader` — skipped with `--dashboard`
+3. scp's `backtest` binary to `/home/fahad/kalshi-ghost-trader/bin/backtest` — skipped with `--dashboard`
+4. Syncs `deploy/ghost-trader.service` to `/etc/systemd/system/` on remote (only if changed, then `daemon-reload`) — skipped with `--dashboard`
+5. `git fetch + checkout + reset --hard` remote to local HEAD — always runs
+6. rsyncs `dashboard/` source to remote (excludes node_modules, build, .svelte-kit) — skipped with `--backend`
+7. Restarts services selected by flags
 8. Health check: `curl 127.0.0.1:6060/metrics` (expect 200) + `curl 127.0.0.1:5173/` (expect 307 — Vite proxy redirect, healthy)
 
 ## Binary location
