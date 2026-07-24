@@ -15,7 +15,7 @@ for arg in "$@"; do
     --dashboard) DEPLOY_DASHBOARD=1 ;;
     --backend)   DEPLOY_BACKEND=1 ;;
     --*)         echo "==> ERROR: unknown flag '$arg' (expected --dashboard|--backend)" >&2; exit 1 ;;
-    *)           ;; # ignore positional args (e.g. legacy "main")
+    *)           ;; # ignore positional args
   esac
 done
 # Default: both
