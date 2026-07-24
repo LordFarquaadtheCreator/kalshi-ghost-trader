@@ -142,10 +142,33 @@
     if (page >= totalPages) page = totalPages - 1;
   });
 
-  // --- Open positions (submitted/filled/partial) ---
+  // --- Open positions (buys not yet fully closed by sells) ---
+  // Build position fill map from all orders: position_id -> {buy, sell}
+  // A buy is "open" only if its position's sell fill < buy fill.
   let openOrders = $derived.by(() => {
+    /** @type {Record<number, {buy: number, sell: number}>} */
+    const posFills = {};
+    for (const o of orders) {
+      if (!o.PositionID) continue;
+      const pid = o.PositionID;
+      if (!posFills[pid]) posFills[pid] = { buy: 0, sell: 0 };
+      if (o.Side === 'close') {
+        posFills[pid].sell += o.FillCount || 0;
+      } else {
+        posFills[pid].buy += o.FillCount || 0;
+      }
+    }
     return orders
-      .filter((/** @type {any} */ o) => ['submitted', 'filled', 'partial'].includes(o.OrderStatus))
+      .filter((/** @type {any} */ o) => {
+        if (!['submitted', 'filled', 'partial'].includes(o.OrderStatus)) return false;
+        // Sells are closing actions, not open positions
+        if (o.Side === 'close') return false;
+        // Buy with a position: check if position is fully closed
+        if (o.PositionID && posFills[o.PositionID] && posFills[o.PositionID].sell >= posFills[o.PositionID].buy) {
+          return false;
+        }
+        return true;
+      })
       .sort((a, b) => (b.TS || 0) - (a.TS || 0));
   });
   let exposureCents = $derived.by(() => {
