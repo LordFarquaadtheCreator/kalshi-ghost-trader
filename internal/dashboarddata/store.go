@@ -680,6 +680,9 @@ type PaperOrderFilters struct {
 	MaxPrice   float64
 	Match      string
 	Result     string // "yes", "no", "pending", ""
+	FromTS     int64  // unix millis, inclusive
+	ToTS       int64  // unix millis, inclusive
+	IsReal     *bool  // nil = both, true = real only, false = paper only
 }
 
 // WhereClause returns a SQL WHERE clause (without the leading keyword) and
@@ -710,6 +713,18 @@ func (f PaperOrderFilters) WhereClause() (string, []any) {
 		clauses = append(clauses, "result IS NOT NULL AND result <> '' AND result <> 'yes'")
 	case "pending":
 		clauses = append(clauses, "(result IS NULL OR result = '')")
+	}
+	if f.FromTS > 0 {
+		clauses = append(clauses, "ts >= ?")
+		args = append(args, f.FromTS)
+	}
+	if f.ToTS > 0 {
+		clauses = append(clauses, "ts <= ?")
+		args = append(args, f.ToTS)
+	}
+	if f.IsReal != nil {
+		clauses = append(clauses, "is_real = ?")
+		args = append(args, *f.IsReal)
 	}
 	if len(clauses) == 0 {
 		return "", nil
@@ -1001,4 +1016,126 @@ WHERE strategy <> '' ORDER BY strategy`).Scan(&out).Error
 	s.metaCache.strategies = out
 	s.metaCache.expiry = time.Now().Add(60 * time.Second)
 	return out, nil
+}
+
+// --- Liquidity pool history (reconstructed from order snapshots) ---
+
+// LiquidityPoolHistoryPoint is one point in the reconstructed pool balance timeline.
+type LiquidityPoolHistoryPoint struct {
+	TS             int64 `json:"ts"`
+	BalanceBefore  int64 `json:"balance_before_cents"`
+	BalanceAfter   int64 `json:"balance_after_cents"`
+	OrderID        int64 `json:"order_id"`
+	Strategy       string `json:"strategy"`
+	MatchTicker    string `json:"match_ticker"`
+}
+
+// GetLiquidityPoolHistory reconstructs the pool balance timeline from order
+// snapshots (pool_balance_before_cents / pool_balance_after_cents).
+func (s *LiveStore) GetLiquidityPoolHistory(ctx context.Context, limit int) ([]LiquidityPoolHistoryPoint, error) {
+	if limit < 1 {
+		limit = 500
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	var rows []LiquidityPoolHistoryPoint
+	err := s.db.WithContext(ctx).Raw(`
+SELECT ts, id, pool_balance_before_cents, pool_balance_after_cents,
+       strategy, match_ticker
+FROM orders
+WHERE is_real = true AND pool_balance_after_cents > 0
+ORDER BY ts DESC
+LIMIT ?`, limit).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("query liquidity pool history: %w", err)
+	}
+	return rows, nil
+}
+
+// --- Order attribution (P&L by strategy / match / series) ---
+
+// AttributionRow is one grouped row in the attribution response.
+type AttributionRow struct {
+	GroupKey    string  `json:"group_key" gorm:"column:group_key"`
+	TotalOrders int     `json:"total_orders" gorm:"column:total_orders"`
+	Resolved    int     `json:"resolved" gorm:"column:resolved"`
+	Wins        int     `json:"wins" gorm:"column:wins"`
+	Losses      int     `json:"losses" gorm:"column:losses"`
+	Pending     int     `json:"pending" gorm:"column:pending"`
+	NetPnL      float64 `json:"net_pnl" gorm:"column:net_pnl"`
+	TotalInvested float64 `json:"total_invested" gorm:"column:total_invested"`
+}
+
+// AttributionResponse is the full attribution response.
+type AttributionResponse struct {
+	GroupBy string           `json:"group_by"`
+	Rows    []AttributionRow `json:"rows"`
+	Total   AttributionRow   `json:"total"`
+}
+
+// GetOrderAttribution groups P&L by strategy, match, or series.
+func (s *LiveStore) GetOrderAttribution(ctx context.Context, groupBy string, f PaperOrderFilters) (*AttributionResponse, error) {
+	var groupExpr string
+	switch groupBy {
+	case "strategy":
+		groupExpr = "strategy"
+	case "match":
+		groupExpr = "match_ticker"
+	case "series":
+		// Series prefix extracted from event/match ticker (first token before '-')
+		groupExpr = "SPLIT_PART(match_ticker, '-', 1)"
+	default:
+		groupExpr = "strategy"
+	}
+
+	where, args := f.WhereClause()
+
+	baseSelect := `
+SELECT
+  ` + groupExpr + ` as group_key,
+  COUNT(*) as total_orders,
+  SUM(CASE WHEN result IS NOT NULL AND result <> '' THEN 1 ELSE 0 END) as resolved,
+  SUM(CASE WHEN result = 'yes' THEN 1 ELSE 0 END) as wins,
+  SUM(CASE WHEN result IS NOT NULL AND result <> '' AND result <> 'yes' THEN 1 ELSE 0 END) as losses,
+  SUM(CASE WHEN result IS NULL OR result = '' THEN 1 ELSE 0 END) as pending,
+  COALESCE(SUM(CASE WHEN result = 'yes' THEN suggested_size * (1.0 - market_price)
+                    WHEN result IS NOT NULL AND result <> '' THEN -suggested_size * market_price
+                    ELSE 0 END), 0) as net_pnl,
+  COALESCE(SUM(suggested_size * market_price), 0) as total_invested`
+
+	perGroupSQL := baseSelect + " FROM orders"
+	if where != "" {
+		perGroupSQL += " WHERE " + where
+	}
+	perGroupSQL += " GROUP BY " + groupExpr + " ORDER BY net_pnl DESC"
+
+	var rows []AttributionRow
+	if err := s.db.WithContext(ctx).Raw(perGroupSQL, args...).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("query attribution per-group: %w", err)
+	}
+
+	totalSQL := `
+SELECT
+  '' as group_key,
+  COUNT(*) as total_orders,
+  SUM(CASE WHEN result IS NOT NULL AND result <> '' THEN 1 ELSE 0 END) as resolved,
+  SUM(CASE WHEN result = 'yes' THEN 1 ELSE 0 END) as wins,
+  SUM(CASE WHEN result IS NOT NULL AND result <> '' AND result <> 'yes' THEN 1 ELSE 0 END) as losses,
+  SUM(CASE WHEN result IS NULL OR result = '' THEN 1 ELSE 0 END) as pending,
+  COALESCE(SUM(CASE WHEN result = 'yes' THEN suggested_size * (1.0 - market_price)
+                    WHEN result IS NOT NULL AND result <> '' THEN -suggested_size * market_price
+                    ELSE 0 END), 0) as net_pnl,
+  COALESCE(SUM(suggested_size * market_price), 0) as total_invested
+FROM orders`
+	if where != "" {
+		totalSQL += " WHERE " + where
+	}
+
+	var total AttributionRow
+	if err := s.db.WithContext(ctx).Raw(totalSQL, args...).Scan(&total).Error; err != nil {
+		return nil, fmt.Errorf("query attribution total: %w", err)
+	}
+
+	return &AttributionResponse{GroupBy: groupBy, Rows: rows, Total: total}, nil
 }

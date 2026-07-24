@@ -61,6 +61,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/strategy-config", corsHandler(s.strategyConfigHandler))
 	mux.HandleFunc("/api/trigger-ranges", corsHandler(s.triggerRangesHandler))
 	mux.HandleFunc("/api/app-config", corsHandler(s.appConfigHandler))
+	mux.HandleFunc("/api/app-config/history", corsHandler(s.appConfigHistoryHandler))
+	mux.HandleFunc("/api/liquidity-pool/history", corsHandler(s.liquidityPoolHistoryHandler))
+	mux.HandleFunc("/api/orders/attribution", corsHandler(s.orderAttributionHandler))
 	mux.Handle("/debug/pprof/", http.DefaultServeMux)
 	// 10s timeout for all API routes. /api/simulation reads pre-computed data
 	// (no recompute), so 10s is plenty. pprof endpoints are exempt (long captures).
@@ -407,7 +410,16 @@ func (s *Server) realOrdersHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=5")
 
-	orders, err := s.deps.DB.GetRealOrders(r.Context())
+	fromTS := parseTSParam(r, "from_ts")
+	toTS := parseTSParam(r, "to_ts")
+
+	var orders []store.Order
+	var err error
+	if fromTS > 0 || toTS > 0 {
+		orders, err = s.deps.DB.GetRealOrdersRange(r.Context(), fromTS, toTS)
+	} else {
+		orders, err = s.deps.DB.GetRealOrders(r.Context())
+	}
 	if err != nil {
 		s.deps.Log.Error("get real orders", "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -693,6 +705,12 @@ func parsePaperOrderFilters(r *http.Request) dashboarddata.PaperOrderFilters {
 	}
 	f.Match = q.Get("match")
 	f.Result = q.Get("result")
+	if v, err := strconv.ParseInt(q.Get("from_ts"), 10, 64); err == nil {
+		f.FromTS = v
+	}
+	if v, err := strconv.ParseInt(q.Get("to_ts"), 10, 64); err == nil {
+		f.ToTS = v
+	}
 	return f
 }
 
@@ -784,4 +802,110 @@ func (s *Server) paperOrdersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(resp)
+}
+
+// appConfigHistoryHandler returns recent app_config_history rows.
+func (s *Server) appConfigHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=10")
+
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+
+	var rows []store.RuntimeConfigHistory
+	err := s.deps.DB.GormDB().WithContext(ctx).
+		Order("changed_ts DESC").
+		Limit(limit).
+		Find(&rows).Error
+	if err != nil {
+		s.deps.Log.Error("app-config history: query", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"history": rows})
+}
+
+// liquidityPoolHistoryHandler reconstructs pool balance timeline from order snapshots.
+func (s *Server) liquidityPoolHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=10")
+
+	limit := 500
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 5000 {
+			limit = n
+		}
+	}
+
+	history, err := s.deps.LiveStore.GetLiquidityPoolHistory(ctx, limit)
+	if err != nil {
+		s.deps.Log.Error("liquidity-pool history: query", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"history": history})
+}
+
+// orderAttributionHandler returns P&L broken down by strategy, match, or series.
+func (s *Server) orderAttributionHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=10")
+
+	groupBy := r.URL.Query().Get("group_by")
+	if groupBy == "" {
+		groupBy = "strategy"
+	}
+	isReal := r.URL.Query().Get("is_real")
+	var isRealFilter *bool
+	switch isReal {
+	case "true":
+		t := true
+		isRealFilter = &t
+	case "false":
+		f := false
+		isRealFilter = &f
+	}
+
+	filters := dashboarddata.PaperOrderFilters{
+		FromTS: parseTSParam(r, "from_ts"),
+		ToTS:   parseTSParam(r, "to_ts"),
+		IsReal: isRealFilter,
+	}
+
+	result, err := s.deps.LiveStore.GetOrderAttribution(ctx, groupBy, filters)
+	if err != nil {
+		s.deps.Log.Error("order attribution: query", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(result)
+}
+
+// parseTSParam parses a unix-millis timestamp from a query param.
+func parseTSParam(r *http.Request, key string) int64 {
+	v := r.URL.Query().Get(key)
+	if v == "" {
+		return 0
+	}
+	ts, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return ts
 }

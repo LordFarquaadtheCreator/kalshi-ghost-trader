@@ -122,9 +122,24 @@ func appendContextReason(existing, reason string) string {
 }
 
 // GetRealOrders returns all real orders (is_real=1), ordered by timestamp.
+// Optional fromTS/toTS filter by order timestamp (unix millis, inclusive).
 func (d *DB) GetRealOrders(ctx context.Context) ([]Order, error) {
 	var orders []Order
 	err := d.db.WithContext(ctx).Where("is_real = ?", true).Order("ts DESC").Find(&orders).Error
+	return orders, err
+}
+
+// GetRealOrdersRange returns real orders within a timestamp range.
+func (d *DB) GetRealOrdersRange(ctx context.Context, fromTS, toTS int64) ([]Order, error) {
+	q := d.db.WithContext(ctx).Where("is_real = ?", true)
+	if fromTS > 0 {
+		q = q.Where("ts >= ?", fromTS)
+	}
+	if toTS > 0 {
+		q = q.Where("ts <= ?", toTS)
+	}
+	var orders []Order
+	err := q.Order("ts DESC").Find(&orders).Error
 	return orders, err
 }
 
