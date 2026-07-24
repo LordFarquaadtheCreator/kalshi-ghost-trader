@@ -40,18 +40,18 @@ function createSystemStore() {
 
     function schedule() {
       if (timer) clearInterval(timer);
-      const interval = document.hidden ? 0 : api.pollInterval(1000);
-      timer = interval === 0 ? null : setInterval(poll, interval);
+      // Keep polling even when tab hidden — system monitoring must run continuously.
+      // Backoff to 5s when hidden to reduce load, 1s when visible.
+      const interval = document.hidden ? 5000 : api.pollInterval(1000);
+      timer = setInterval(poll, interval);
     }
 
     poll();
     schedule();
 
     function onVisibility() {
-      if (!document.hidden) {
-        poll();
-        schedule();
-      }
+      poll();
+      schedule();
     }
 
     document.addEventListener('visibilitychange', onVisibility);

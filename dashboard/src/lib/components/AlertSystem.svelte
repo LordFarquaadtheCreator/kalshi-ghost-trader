@@ -29,12 +29,28 @@
     }
 
     if (systemMetrics) {
-      if (systemMetrics.goroutines > 500) {
-        alerts.push({ id: 'goroutine_leak', type: 'err', text: `Goroutine count high: ${systemMetrics.goroutines}` });
+      const numCPU = systemMetrics.num_cpu || 1;
+      const totalMem = systemMetrics.total_mem_bytes || 0;
+
+      // Goroutines: scale with CPU count. Base 200 per core.
+      const goroutineThreshold = 200 * numCPU;
+      if (systemMetrics.goroutines > goroutineThreshold) {
+        alerts.push({ id: 'goroutine_leak', type: 'err', text: `Goroutine count high: ${systemMetrics.goroutines} (threshold ${goroutineThreshold} for ${numCPU} CPUs)` });
       }
-      const heapMB = systemMetrics.heap_alloc_bytes / 1048576;
-      if (heapMB > 500) {
-        alerts.push({ id: 'heap_high', type: 'err', text: `Heap allocation high: ${heapMB.toFixed(0)} MB` });
+
+      // Heap: warn at 50% of total system RAM.
+      if (totalMem > 0) {
+        const heapPct = (systemMetrics.heap_alloc_bytes / totalMem) * 100;
+        if (heapPct > 50) {
+          const heapMB = systemMetrics.heap_alloc_bytes / 1048576;
+          const totalGB = totalMem / 1073741824;
+          alerts.push({ id: 'heap_high', type: 'err', text: `Heap at ${heapPct.toFixed(0)}% of RAM: ${heapMB.toFixed(0)} MB / ${totalGB.toFixed(0)} GB` });
+        }
+      }
+
+      // CPU: warn above 80% system-wide.
+      if (systemMetrics.cpu_usage_pct > 80) {
+        alerts.push({ id: 'cpu_high', type: 'err', text: `CPU usage high: ${systemMetrics.cpu_usage_pct.toFixed(0)}%` });
       }
     }
 

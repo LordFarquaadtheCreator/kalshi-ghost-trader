@@ -34,6 +34,8 @@
   ];
   /** @type {any[]} */
   const stackSeries = [{ label: 'Stack (MB)', getValue: (/** @type {any} */ s) => Math.round((s.stack_inuse_bytes / 1048576) * 10) / 10, color: '#f472b0' }];
+  /** @type {any[]} */
+  const cpuUsageSeries = [{ label: 'CPU Usage (%)', getValue: (/** @type {any} */ s) => Math.round((s.cpu_usage_pct || 0) * 10) / 10, color: '#fbbf24' }];
 
   // --- Derived stats from rolling history ---
   let cur = $derived($store.current);
@@ -76,6 +78,11 @@
     if (!cur || !cur.sys_bytes) return null;
     return (cur.heap_alloc_bytes / cur.sys_bytes) * 100;
   });
+
+  let heapPctOfRam = $derived.by(() => {
+    if (!cur || !cur.total_mem_bytes) return null;
+    return (cur.heap_alloc_bytes / cur.total_mem_bytes) * 100;
+  });
 </script>
 
 <svelte:head>
@@ -90,9 +97,11 @@
       primary={[
         { label: 'Goroutines', value: cur.goroutines },
         { label: 'Heap', value: fmtBytes(cur.heap_alloc_bytes) },
+        { label: 'Heap % RAM', value: heapPctOfRam !== null ? heapPctOfRam.toFixed(1) + '%' : '—' },
+        { label: 'CPU Usage', value: cur.cpu_usage_pct != null ? cur.cpu_usage_pct.toFixed(1) + '%' : '—' },
         { label: 'GC Rate', value: gcRate !== null ? gcRate.toFixed(2) + '/s' : '—' },
-        { label: 'Heap Eff', value: heapEfficiency !== null ? heapEfficiency.toFixed(1) + '%' : '—' },
         { label: 'CPUs', value: cur.num_cpu },
+        { label: 'Total RAM', value: cur.total_mem_bytes ? fmtBytes(cur.total_mem_bytes) : '—' },
         { label: 'Samples', value: hist.length },
       ]}
       secondary={[
@@ -124,10 +133,11 @@
     </div>
   </CollapsibleSection>
 
-  <CollapsibleSection title="Runtime" count={2} defaultOpen={true}>
+  <CollapsibleSection title="Runtime" count={3} defaultOpen={true}>
     <div class="charts-grid">
       <LineChart title="Goroutines" series={goroutineSeries} {store} />
       <LineChart title="Heap Objects" series={heapObjSeries} {store} />
+      <LineChart title="CPU Usage (%)" series={cpuUsageSeries} {store} yUnit=" %" />
     </div>
   </CollapsibleSection>
 

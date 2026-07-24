@@ -31,7 +31,8 @@ type Deps struct {
 }
 
 type Server struct {
-	deps Deps
+	deps   Deps
+	sysinfo sysInfo
 }
 
 func NewServer(deps Deps) *Server {
@@ -112,6 +113,8 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		"gc_pause_ns":       m.PauseTotalNs,
 		"gc_last_ns":        m.LastGC,
 		"next_gc_bytes":     m.NextGC,
+		"total_mem_bytes":   totalMemBytes(),
+		"cpu_usage_pct":     s.sysinfo.cpuUsagePct(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

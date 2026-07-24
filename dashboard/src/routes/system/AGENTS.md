@@ -10,13 +10,13 @@ Go runtime metrics for ghost-trader. Polling runs constantly via singleton store
 ## Data
 
 - `systemStore` → `api.getMetrics()` → `GET :6060/metrics` → Go runtime MemStats + custom fields
-- Fields: `goroutines`, `heap_alloc_bytes`, `heap_objects`, `sys_bytes`, `gc_num`, `gc_pause_ns`, `mallocs`, `frees`, `num_cpu`, `next_gc_bytes`, `stack_inuse_bytes`, `heap_sys_bytes`
+- Fields: `goroutines`, `heap_alloc_bytes`, `heap_objects`, `sys_bytes`, `gc_num`, `gc_pause_ns`, `mallocs`, `frees`, `num_cpu`, `next_gc_bytes`, `stack_inuse_bytes`, `heap_sys_bytes`, `total_mem_bytes`, `cpu_usage_pct`
 - 1s poll interval, 120 sample rolling window (2 min)
 
 ## UI
 
-- StatCards: goroutines, heap, heap objects, total sys, GC count, GC pause, mallocs, frees, CPUs, next GC
-- 8 LineCharts: heap allocation, memory breakdown, goroutines, heap objects, GC count, GC pause, mallocs vs frees, stack in-use
+- StatCards: goroutines, heap, heap % RAM, CPU usage, GC rate, CPUs, total RAM, samples
+- 9 LineCharts: heap allocation, memory breakdown, stack in-use, goroutines, heap objects, CPU usage, GC count, GC pause, mallocs vs frees
 
 ## Singleton Store
 
