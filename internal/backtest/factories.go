@@ -341,5 +341,9 @@ func DefaultFactories() map[string]StrategyFactory {
 	"settlementsniper": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
 		return algorithms.NewSettlementSniperStrategy(em, log)
 	},
+	// Ad-out latency edge: buy returner YES on ad-out, sell on next point.
+	"adout": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		return algorithms.NewAdOutStrategy(em, log, algorithms.DefaultAdOutConfig())
+	},
 	}
 }
