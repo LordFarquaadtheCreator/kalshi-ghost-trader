@@ -1,0 +1,14 @@
+[Unit]
+Description=Kalshi Ghost Trader Dashboard (Vite/SvelteKit)
+After=network.target
+
+[Service]
+Type=simple
+User=fahad
+WorkingDirectory=/home/fahad/kalshi-ghost-trader/dashboard
+ExecStart=/usr/bin/npx vite dev --host 0.0.0.0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

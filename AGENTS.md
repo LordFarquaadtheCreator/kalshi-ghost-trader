@@ -159,7 +159,7 @@ Linux Mint 24.04, x86_64. Passwordless sudo granted for `systemctl` + `journalct
 ### systemd services
 
 - `kalshi-ghost-trader.service` — backend binary, `Restart=always`, `APP_ENV=prod`
-- `kalshi-dashboard.service` — Vite dev server, `BindsTo` backend
+- `kalshi-dashboard.service` — Vite dev server, decoupled from backend (no `PartOf`/`BindsTo`)
 
 Unit files: `/etc/systemd/system/kalshi-{ghost-trader,dashboard}.service`
 Repo: `/home/fahad/kalshi-ghost-trader`

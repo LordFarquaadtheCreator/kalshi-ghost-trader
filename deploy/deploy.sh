@@ -52,8 +52,8 @@ if [ "$DEPLOY_BACKEND" -eq 1 ]; then
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$OUT/ghost-trader" .
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$OUT/backtest" ./cmd/backtest
 
-  echo "==> Copying service file..."
-  cp deploy/ghost-trader.service "$OUT/"
+  echo "==> Copying service files..."
+  cp deploy/ghost-trader.service deploy/kalshi-dashboard.service "$OUT/"
 fi
 
 echo "==> Syncing remote git repo to $LOCAL_HEAD..."
@@ -68,9 +68,10 @@ if [ "$DEPLOY_BACKEND" -eq 1 ]; then
   scp "$OUT/backtest" "$HOST:$REMOTE_DIR/bin/backtest"
   ssh "$HOST" "chmod +x $REMOTE_DIR/ghost-trader $REMOTE_DIR/bin/backtest"
 
-  echo "==> Syncing service file..."
+  echo "==> Syncing service files..."
   scp "$OUT/ghost-trader.service" "$HOST:/tmp/kalshi-ghost-trader.service"
-  ssh "$HOST" 'diff -q /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service 2>/dev/null || sudo -n bash -c "cp /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service && systemctl daemon-reload" && echo "service file synced"'
+  scp "$OUT/kalshi-dashboard.service" "$HOST:/tmp/kalshi-dashboard.service"
+  ssh "$HOST" 'diff -q /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service 2>/dev/null || sudo -n bash -c "cp /tmp/kalshi-ghost-trader.service /etc/systemd/system/kalshi-ghost-trader.service && systemctl daemon-reload" && diff -q /tmp/kalshi-dashboard.service /etc/systemd/system/kalshi-dashboard.service 2>/dev/null || sudo -n bash -c "cp /tmp/kalshi-dashboard.service /etc/systemd/system/kalshi-dashboard.service && systemctl daemon-reload" && echo "service files synced"'
 fi
 
 if [ "$DEPLOY_DASHBOARD" -eq 1 ]; then

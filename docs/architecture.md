@@ -32,7 +32,7 @@ dashboard for monitoring.
 | `ghost-trader` | Go | 6060 | WebSocket feeds, REST scans, tick storage, API-Tennis scraper, strategy execution, pprof/metrics |
 | `dashboard` | JS (SvelteKit) | 5173 | Tracked matches, orders, strategies, system metrics, charts |
 
-Both managed by systemd. Dashboard `BindsTo` backend.
+Both managed by systemd. Dashboard decoupled from backend (no `PartOf`/`BindsTo`) — survives backend restarts.
 
 ## Package Layout
 
@@ -99,7 +99,7 @@ ssh fahad@192.168.1.246                     # direct
 ### systemd services
 
 - `kalshi-ghost-trader.service` — backend binary, `Restart=always`
-- `kalshi-dashboard.service` — Vite dev server, `BindsTo` backend
+- `kalshi-dashboard.service` — Vite dev server, decoupled from backend (no `PartOf`/`BindsTo`)
 
 Unit files: `/etc/systemd/system/kalshi-{ghost-trader,dashboard}.service`
 
