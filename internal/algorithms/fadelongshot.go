@@ -44,7 +44,7 @@ type FadeLongshotConfig struct {
 func DefaultFadeLongshotConfig() FadeLongshotConfig {
 	return FadeLongshotConfig{
 		WindowSeconds:   900,
-		MinPrice:        0.50,
+		MinPrice:        0.97,
 		MaxPrice:        0.0,
 		BaseSize:        10.0,
 		Label:           "fadelongshot",
@@ -295,38 +295,16 @@ func estimateRemainingMinLocked(ms *fadeScoreState, now time.Time) float64 {
 }
 
 // remainingPoints estimates points left until match end from score state.
-// Match point → 0 (imminent). Set 1 → 999 (too early, unpredictable).
-// Set 2/3 → scaled by games leader in current set.
+// Match point → 0 (imminent). Everything else → 999.
+// Combined with MinPrice=0.97: fires only when favorite is at match point
+// AND priced >= 0.97. This is the closest live proxy to the original
+// T-15min timing — the match is one point from ending and the market
+// prices it at 97%+.
 func remainingPoints(ms *fadeScoreState) float64 {
 	if ms.isMatchPoint {
 		return 0
 	}
-	if ms.setNumber <= 1 {
-		return 999
-	}
-	leaderGames := ms.homeGames
-	if ms.awayGames > leaderGames {
-		leaderGames = ms.awayGames
-	}
-	if ms.setNumber == 2 {
-		switch {
-		case leaderGames >= 5:
-			return 10
-		case leaderGames >= 3:
-			return 20
-		default:
-			return 35
-		}
-	}
-	// set 3+ (deciding set)
-	switch {
-	case leaderGames >= 5:
-		return 8
-	case leaderGames >= 3:
-		return 15
-	default:
-		return 25
-	}
+	return 999
 }
 
 func (s *FadeLongshotStrategy) checkEntry(marketTicker string) {
