@@ -520,3 +520,70 @@ RETURNING balance_cents`,
 	o.UnfilledRefundedCents += remainingRefund
 	return remainingRefund, newBalance, nil
 }
+
+// GetTrackableRealOrders returns filled/partial buy/buy_no real orders whose
+// position is still open. Used by pnltracker to spawn per-order goroutines.
+// Excludes sells (realized at fill) and orders without fill_count.
+func (d *DB) GetTrackableRealOrders(ctx context.Context) ([]Order, error) {
+	var orders []Order
+	err := d.db.WithContext(ctx).Raw(`
+SELECT o.*
+FROM orders o
+JOIN positions p ON o.position_id = p.id
+WHERE o.is_real = true
+  AND o.action IN ('buy', 'buy_no')
+  AND o.fill_count > 0
+  AND o.order_status IN ('filled', 'partial')
+  AND p.status = ?`, PositionStatusOpen).
+		Scan(&orders).Error
+	return orders, err
+}
+
+// UpdateOrderUnrealizedPnL writes live mark-to-market PnL into resolved_pnl_cents
+// for an open order. Called by pnltracker every 30s. At settlement,
+// ResolveRealOrders overwrites with final realized PnL.
+func (d *DB) UpdateOrderUnrealizedPnL(ctx context.Context, orderID int64, pnlCents int64, ts int64) error {
+	return d.db.WithContext(ctx).Model(&Order{}).Where("id = ?", orderID).
+		Updates(map[string]any{
+			"resolved_pnl_cents": pnlCents,
+			"pnl_updated_ts":     ts,
+		}).Error
+}
+
+// LatestTickPrice holds the most recent YES and NO prices for a market.
+type LatestTickPrice struct {
+	YesPrice float64
+	NoPrice  float64
+}
+
+// GetLatestTickPrice returns the most recent ticker price for a market.
+// Returns gorm.ErrRecordNotFound if no ticks exist.
+func (d *DB) GetLatestTickPrice(ctx context.Context, marketTicker string) (*LatestTickPrice, error) {
+	var t Tick
+	err := d.db.WithContext(ctx).
+		Where("market_ticker = ? AND msg_type = ?", marketTicker, "ticker").
+		Order("ts DESC").
+		Limit(1).
+		First(&t).Error
+	if err != nil {
+		return nil, err
+	}
+	return &LatestTickPrice{YesPrice: t.Price, NoPrice: t.NoPrice}, nil
+}
+
+// GetPositionStatus returns the status of the position linked to an order.
+// Returns empty string if order has no position_id.
+func (d *DB) GetPositionStatus(ctx context.Context, orderID int64) (string, error) {
+	var o Order
+	if err := d.db.WithContext(ctx).Select("position_id").Where("id = ?", orderID).First(&o).Error; err != nil {
+		return "", err
+	}
+	if o.PositionID == nil {
+		return "", nil
+	}
+	var p Position
+	if err := d.db.WithContext(ctx).Select("status").Where("id = ?", *o.PositionID).First(&p).Error; err != nil {
+		return "", err
+	}
+	return p.Status, nil
+}

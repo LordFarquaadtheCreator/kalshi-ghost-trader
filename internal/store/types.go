@@ -173,6 +173,7 @@ type Order struct {
 	PairID                 string  `gorm:"column:pair_id"` // links arb legs (cross-arb); empty for single-leg orders
 	Result                 string  `gorm:"column:result"`
 	SettledTS              int64   `gorm:"column:settled_ts"`
+	PnLUpdatedTS           int64   `gorm:"column:pnl_updated_ts"`
 
 	// EmitTS stamps when the order was emitted by a strategy (unix ms).
 	// Not persisted — used for hop2 latency measurement (strategy-done → order-persisted).

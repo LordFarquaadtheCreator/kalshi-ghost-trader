@@ -39,6 +39,7 @@ import (
 	"github.com/farquaad/kalshi-ghost-trader/internal/kalshilivedata"
 	"github.com/farquaad/kalshi-ghost-trader/internal/orderbackfill"
 	"github.com/farquaad/kalshi-ghost-trader/internal/paperorderinsights"
+	"github.com/farquaad/kalshi-ghost-trader/internal/pnltracker"
 	"github.com/farquaad/kalshi-ghost-trader/internal/perf"
 	"github.com/farquaad/kalshi-ghost-trader/internal/positions"
 	"github.com/farquaad/kalshi-ghost-trader/internal/pricebands"
@@ -307,6 +308,13 @@ func main() {
 	obf := orderbackfill.New(restClient, db, log)
 	g.Go(func() error {
 		return obf.Run(ctx)
+	})
+
+	// 4e. PnL tracker — per-order goroutines computing live mark-to-market
+	// PnL every 30s for filled real orders with open positions.
+	pnlTracker := pnltracker.New(db, log)
+	g.Go(func() error {
+		return pnlTracker.Run(ctx)
 	})
 
 	// 4d. Schedule checker loop (refresh stale occurrence_ts from REST)
