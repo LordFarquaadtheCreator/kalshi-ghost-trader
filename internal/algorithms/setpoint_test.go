@@ -282,6 +282,7 @@ func TestSetPointMatchPointAggro(t *testing.T) {
 	cfg := SetPointConfig{
 		IncludeSetPoints: false,
 		IncludeReturning: true,
+		IncludeServing:   true,
 		PServe:           0.64,
 		MinMarketPrice:   0.05,
 		MinEdgeCents:     1,

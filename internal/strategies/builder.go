@@ -32,7 +32,7 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 	var cpExit *algorithms.ConvexPoolExitStrategy
 	var cpAdaptive *algorithms.ConvexPoolAdaptiveStrategy
 	var sw, swAggro, swNoAdj *algorithms.SetWinnerStrategy
-	var sp, spServe, spCheap, spSet1, spAggro *algorithms.SetPointStrategy
+	var sp, spServe, spCheap, spSet1, spAggro, spSet1Mid, spSet2, spSet2Ret, spSet12Mid *algorithms.SetPointStrategy
 
 	multi := algorithms.NewMultiStrategyFromFactories(emitter, log, map[string]algorithms.StrategyFactoryFn{
 		"matchpoint": func(e algorithms.OrderEmitter) algorithms.Strategy { return matchPoint },
@@ -40,6 +40,7 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 			spAggro = algorithms.NewSetPointStrategy(e, log, algorithms.SetPointConfig{
 				IncludeSetPoints: false,
 				IncludeReturning: true,
+				IncludeServing:   true,
 				PServe:           0.64,
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     5,
@@ -197,6 +198,41 @@ func Build(emitter algorithms.OrderEmitter, db *store.DB, log *slog.Logger) *alg
 			cfg.MaxSetNumber = 1
 			spSet1 = algorithms.NewSetPointStrategyWithDB(e, db, log, cfg)
 			return spSet1
+		},
+		"setpoint-set1-mid": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultSetPointConfig()
+			cfg.Label = "setpoint-set1-mid"
+			cfg.MaxSetNumber = 1
+			cfg.MinMarketPrice = 0.20
+			cfg.MaxMarketPrice = 0.60
+			spSet1Mid = algorithms.NewSetPointStrategyWithDB(e, db, log, cfg)
+			return spSet1Mid
+		},
+		"setpoint-set2": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultSetPointConfig()
+			cfg.Label = "setpoint-set2"
+			cfg.MinSetNumber = 2
+			cfg.MaxSetNumber = 2
+			spSet2 = algorithms.NewSetPointStrategyWithDB(e, db, log, cfg)
+			return spSet2
+		},
+		"setpoint-set2-ret": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultSetPointConfig()
+			cfg.Label = "setpoint-set2-ret"
+			cfg.MinSetNumber = 2
+			cfg.MaxSetNumber = 2
+			cfg.IncludeServing = false
+			spSet2Ret = algorithms.NewSetPointStrategyWithDB(e, db, log, cfg)
+			return spSet2Ret
+		},
+		"setpoint-set12-mid": func(e algorithms.OrderEmitter) algorithms.Strategy {
+			cfg := algorithms.DefaultSetPointConfig()
+			cfg.Label = "setpoint-set12-mid"
+			cfg.MaxSetNumber = 2
+			cfg.MinMarketPrice = 0.20
+			cfg.MaxMarketPrice = 0.60
+			spSet12Mid = algorithms.NewSetPointStrategyWithDB(e, db, log, cfg)
+			return spSet12Mid
 		},
 		"convexpool-wta": func(e algorithms.OrderEmitter) algorithms.Strategy {
 			cfg := algorithms.DefaultConvexPoolConfig()

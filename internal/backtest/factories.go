@@ -23,6 +23,7 @@ func DefaultFactories() map[string]StrategyFactory {
 			s := algorithms.NewSetPointStrategy(em, log, algorithms.SetPointConfig{
 				IncludeSetPoints: false,
 				IncludeReturning: true,
+				IncludeServing:   true,
 				PServe:           0.64,
 				MinMarketPrice:   0.05,
 				MinEdgeCents:     5,
@@ -260,6 +261,56 @@ func DefaultFactories() map[string]StrategyFactory {
 		cfg := algorithms.DefaultSetPointConfig()
 		cfg.Label = "setpoint-set1"
 		cfg.MaxSetNumber = 1
+		s := algorithms.NewSetPointStrategy(em, log, cfg)
+		s.SetSharedMarkovModel(sharedMarkov)
+		return s
+	},
+	// Per-set research: set 1 + mid price [0.20,0.60]. Live data shows
+	// set 1 is the winning bucket (+$2978) but <0.20 loses (-$96).
+	// Mid-price captures the sweet spot.
+	"setpoint-set1-mid": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultSetPointConfig()
+		cfg.Label = "setpoint-set1-mid"
+		cfg.MaxSetNumber = 1
+		cfg.MinMarketPrice = 0.20
+		cfg.MaxMarketPrice = 0.60
+		s := algorithms.NewSetPointStrategy(em, log, cfg)
+		s.SetSharedMarkovModel(sharedMarkov)
+		return s
+	},
+	// Per-set research: set 2 only. Live data shows set 2 overall is
+	// slightly negative (-$202) but has structural sub-edges (returning,
+	// mid-price). Backtest to see if the set 2 signal exists in replay.
+	"setpoint-set2": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultSetPointConfig()
+		cfg.Label = "setpoint-set2"
+		cfg.MinSetNumber = 2
+		cfg.MaxSetNumber = 2
+		s := algorithms.NewSetPointStrategy(em, log, cfg)
+		s.SetSharedMarkovModel(sharedMarkov)
+		return s
+	},
+	// Per-set research: set 2 + returning only. Live: n=88, 64.8% win,
+	// +19.3% edge vs BE, +$163. Serving in set 2 loses (-$365).
+	"setpoint-set2-ret": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultSetPointConfig()
+		cfg.Label = "setpoint-set2-ret"
+		cfg.MinSetNumber = 2
+		cfg.MaxSetNumber = 2
+		cfg.IncludeServing = false
+		s := algorithms.NewSetPointStrategy(em, log, cfg)
+		s.SetSharedMarkovModel(sharedMarkov)
+		return s
+	},
+	// Per-set research: sets 1-2 + mid price [0.20,0.60]. Combines the
+	// two winning per-set buckets while excluding <0.20 (loses in both
+	// sets) and 0.60-0.80 (loses badly in set 2, -$559).
+	"setpoint-set12-mid": func(em algorithms.OrderEmitter, log *slog.Logger) ReplayStrategy {
+		cfg := algorithms.DefaultSetPointConfig()
+		cfg.Label = "setpoint-set12-mid"
+		cfg.MaxSetNumber = 2
+		cfg.MinMarketPrice = 0.20
+		cfg.MaxMarketPrice = 0.60
 		s := algorithms.NewSetPointStrategy(em, log, cfg)
 		s.SetSharedMarkovModel(sharedMarkov)
 		return s

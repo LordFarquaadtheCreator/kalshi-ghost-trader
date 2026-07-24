@@ -43,6 +43,12 @@ type SetPointConfig struct {
 	// MaxSetNumber: if > 0, only fire on set points in sets <= this number
 	// (e.g. 1 = set 1 only). 0 = no filter.
 	MaxSetNumber int
+	// MinSetNumber: if > 0, only fire on set points in sets >= this number
+	// (e.g. 2 = set 2+). 0 = no filter. Combine with MaxSetNumber for a range.
+	MinSetNumber int
+	// IncludeServing: if false, skip set points where the set-point player is
+	// serving (returning-only mode). Default true via DefaultSetPointConfig.
+	IncludeServing bool
 	// SeriesFilter: if non-empty, only fire on events matching one of these
 	// series tickers. Empty = no filter (all series).
 	SeriesFilter []string
@@ -58,6 +64,7 @@ func DefaultSetPointConfig() SetPointConfig {
 	return SetPointConfig{
 		IncludeSetPoints: true,
 		IncludeReturning: true,
+		IncludeServing:   true,
 		PServe:           0.64,
 		MaxMarketPrice:   0.0,
 		MinMarketPrice:   0.05,
@@ -258,6 +265,10 @@ func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
 	if s.cfg.MaxSetNumber > 0 && p.SetNumber > s.cfg.MaxSetNumber {
 		return
 	}
+	// MinSetNumber filter: only fire on sets >= MinSetNumber
+	if s.cfg.MinSetNumber > 0 && p.SetNumber < s.cfg.MinSetNumber {
+		return
+	}
 
 	// Series filter
 	if !seriesMatches(s.series[eventTicker], s.cfg.SeriesFilter) {
@@ -271,6 +282,9 @@ func (s *SetPointStrategy) processPoint(eventTicker string, p store.Point) {
 
 	isServing := (sp.winner == 1 && p.Server == 1) || (sp.winner == 2 && p.Server == 2)
 	if !isServing && !s.cfg.IncludeReturning {
+		return
+	}
+	if isServing && !s.cfg.IncludeServing {
 		return
 	}
 
