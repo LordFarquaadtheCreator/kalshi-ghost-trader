@@ -52,8 +52,22 @@ func (d *DB) InsertRealOrder(ctx context.Context, o Order) (int64, error) {
 // for buy/buy_no partial fills and zero-fill cancels so pool stays accurate.
 // Sells (Action="sell") never deduct from pool — skip refund for sell cancels
 // to avoid inflating the pool with money never taken.
+//
+// fillPrice is the actual per-contract fill price from Kalshi (from
+// taker_fill_cost_dollars / fill_count). Pass 0 if not fetched (legacy path,
+// unverified status, or zero-fill). When fillPrice > 0 and fillCount > 0,
+// reconciles the liquidity pool for the difference between the actual fill
+// cost/proceeds and what was deducted/credited at signal-time market_price.
+//   - Buy/buy_no: signal deduction was contracts*market_price*100. Actual cost
+//     is fillCount*fillPrice*100. Diff = actual - already. Positive => deduct
+//     more; negative => refund.
+//   - Sell: signal credit was fillCount*market_price*100. Actual proceeds are
+//     fillCount*fillPrice*100. Diff = actual - already. Positive => credit
+//     more; negative => debit (clamped at pool balance, residual logged via
+//     context).
+//
 // reason is appended to Context when status is canceled — explains why.
-func (d *DB) UpdateRealOrder(ctx context.Context, orderID int64, kalshiOrderID string, fillCount float64, status string, reason string) error {
+func (d *DB) UpdateRealOrder(ctx context.Context, orderID int64, kalshiOrderID string, fillCount float64, fillPrice float64, status string, reason string) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var o Order
 		if err := tx.Where("id = ?", orderID).First(&o).Error; err != nil {
@@ -64,6 +78,9 @@ func (d *DB) UpdateRealOrder(ctx context.Context, orderID int64, kalshiOrderID s
 			"kalshi_order_id": kalshiOrderID,
 			"fill_count":      fillCount,
 			"order_status":    status,
+		}
+		if fillPrice > 0 {
+			updates["fill_price"] = fillPrice
 		}
 		if status == "canceled" && reason != "" {
 			updates["context"] = appendContextReason(o.Context, reason)
@@ -80,8 +97,99 @@ func (d *DB) UpdateRealOrder(ctx context.Context, orderID int64, kalshiOrderID s
 				updates["pool_balance_after_cents"] = newBalance
 			}
 		}
+		// Reconcile pool for fill-price vs signal-price difference on filled
+		// portion. Skipped for zero fills, cancels, and unverified status
+		// (no reliable fill price). Idempotent: only runs once per order
+		// because UpdateRealOrder is only called from the submit path; later
+		// status transitions go through UpdateRealOrderStatus which doesn't
+		// touch fill_price.
+		if fillPrice > 0 && fillCount > 0 && status != "canceled" && status != "unverified" {
+			if err := reconcileFillPrice(tx, &o, fillCount, fillPrice, updates); err != nil {
+				return err
+			}
+		}
 		return tx.Model(&Order{}).Where("id = ?", orderID).Updates(updates).Error
 	})
+}
+
+// reconcileFillPrice adjusts the liquidity pool for the gap between the
+// signal-time market_price (already deducted/credited by the emitter) and the
+// actual Kalshi fill price. Mutates `updates` to record before/after balance
+// when a pool adjustment is made. Idempotent: skips if order already has a
+// fill_price set (reconciliation already done).
+func reconcileFillPrice(tx *gorm.DB, o *Order, fillCount, fillPrice float64, updates map[string]any) error {
+	if o.FillPrice > 0 {
+		return nil // already reconciled
+	}
+	signalCents := int64(fillCount * o.MarketPrice * 100)
+	actualCents := int64(fillCount * fillPrice * 100)
+	diff := actualCents - signalCents
+	if diff == 0 {
+		return nil
+	}
+	var newBalance int64
+	if o.Action == "sell" {
+		// Sell: signal credit was fillCount*market_price*100. If actual
+		// proceeds higher, credit the diff. If lower, debit (clamped).
+		if diff > 0 {
+			if err := tx.Raw(`
+UPDATE liquidity_pool
+SET balance_cents = balance_cents + ?,
+    updated_ts = ?
+WHERE id = 1
+RETURNING balance_cents`, diff, nowMillis()).Scan(&newBalance).Error; err != nil {
+				return fmt.Errorf("reconcile sell credit: %w", err)
+			}
+		} else {
+			// Debit the over-credit. Clamp at pool balance — don't go negative.
+			debit := -diff
+			if err := tx.Raw(`
+UPDATE liquidity_pool
+SET balance_cents = GREATEST(balance_cents - ?, 0),
+    updated_ts = ?
+WHERE id = 1
+RETURNING balance_cents`, debit, nowMillis()).Scan(&newBalance).Error; err != nil {
+				return fmt.Errorf("reconcile sell debit: %w", err)
+			}
+			if newBalance == 0 {
+				// Pool exhausted by clamp — record residual so it's auditable.
+				updates["context"] = appendContextReason(o.Context,
+					fmt.Sprintf("sell_reconcile_clamped: debit=%d cents, pool hit 0", debit))
+			}
+		}
+	} else {
+		// Buy/buy_no: signal deduction was contracts*market_price*100. If
+		// actual cost higher, deduct more. If lower, refund the over-deduction.
+		if diff > 0 {
+			if err := tx.Raw(`
+UPDATE liquidity_pool
+SET balance_cents = GREATEST(balance_cents - ?, 0),
+    total_spent_cents = total_spent_cents + ?,
+    updated_ts = ?
+WHERE id = 1
+RETURNING balance_cents`, diff, diff, nowMillis()).Scan(&newBalance).Error; err != nil {
+				return fmt.Errorf("reconcile buy debit: %w", err)
+			}
+			if newBalance == 0 {
+				updates["context"] = appendContextReason(o.Context,
+					fmt.Sprintf("buy_reconcile_clamped: debit=%d cents, pool hit 0", diff))
+			}
+		} else {
+			refund := -diff
+			if err := tx.Raw(`
+UPDATE liquidity_pool
+SET balance_cents = balance_cents + ?,
+    total_spent_cents = GREATEST(total_spent_cents - ?, 0),
+    updated_ts = ?
+WHERE id = 1
+RETURNING balance_cents`, refund, refund, nowMillis()).Scan(&newBalance).Error; err != nil {
+				return fmt.Errorf("reconcile buy refund: %w", err)
+			}
+		}
+	}
+	updates["pool_balance_before_cents"] = newBalance - diff
+	updates["pool_balance_after_cents"] = newBalance
+	return nil
 }
 
 // MarkRealOrderFailed marks an order as failed and refunds the full deducted
@@ -216,14 +324,21 @@ func (d *DB) ResolveRealOrders(ctx context.Context, marketTicker, result string)
 				unfilledRefundCents = 0
 			}
 
+			// Use fill_price (actual Kalshi fill) for cost basis when present;
+			// fall back to market_price for legacy rows without fill_price.
+			costPrice := po.FillPrice
+			if costPrice == 0 {
+				costPrice = po.MarketPrice
+			}
+
 			// gross payout: $1 per contract if won, $0 if lost
 			var payoutCents int64
 			var pnlCents int64
 			if po.FillCount > 0 && orderWon {
 				payoutCents = int64(po.FillCount * 100)
-				pnlCents = payoutCents - int64(po.FillCount*po.MarketPrice*100)
+				pnlCents = payoutCents - int64(po.FillCount*costPrice*100)
 			} else if po.FillCount > 0 {
-				pnlCents = -int64(po.FillCount * po.MarketPrice * 100)
+				pnlCents = -int64(po.FillCount * costPrice * 100)
 			}
 			// zero fill: pnlCents = 0, full refund via unfilledRefundCents
 
@@ -307,8 +422,15 @@ func (d *DB) GetUnresolvedRealOrders(ctx context.Context) ([]UnresolvedRealOrder
 // UpdateRealOrderStatus updates the status and fill count of a real order
 // based on a fresh fetch from Kalshi. On canceled, refunds unfilled portion
 // for buy/buy_no orders. Sells never deduct — skip refund for sell cancels.
+//
+// fillPrice is the actual per-contract fill price from Kalshi (0 if not
+// fetched). When > 0 and fillCount > 0 and the order transitions to a
+// non-canceled terminal-ish status, reconciles the pool for the gap between
+// signal-time market_price and actual fill price. Idempotent on fill_price:
+// skips reconciliation if already set.
+//
 // reason is appended to Context when status is canceled — explains why.
-func (d *DB) UpdateRealOrderStatus(ctx context.Context, orderID int64, fillCount float64, status string, reason string) error {
+func (d *DB) UpdateRealOrderStatus(ctx context.Context, orderID int64, fillCount float64, fillPrice float64, status string, reason string) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var o Order
 		if err := tx.Where("id = ?", orderID).First(&o).Error; err != nil {
@@ -320,6 +442,9 @@ func (d *DB) UpdateRealOrderStatus(ctx context.Context, orderID int64, fillCount
 		updates := map[string]any{
 			"fill_count":   fillCount,
 			"order_status": status,
+		}
+		if fillPrice > 0 {
+			updates["fill_price"] = fillPrice
 		}
 		if status == "canceled" && reason != "" {
 			updates["context"] = appendContextReason(o.Context, reason)
@@ -334,6 +459,14 @@ func (d *DB) UpdateRealOrderStatus(ctx context.Context, orderID int64, fillCount
 			if refunded > 0 {
 				updates["pool_balance_before_cents"] = newBalance - refunded
 				updates["pool_balance_after_cents"] = newBalance
+			}
+		}
+		// Reconcile pool for fill-price gap on filled portion. Only fires
+		// when we have a fresh fill_price and the order isn't being canceled.
+		// Skips unverified (no reliable fill price) and already-reconciled rows.
+		if fillPrice > 0 && fillCount > 0 && status != "canceled" && status != "unverified" {
+			if err := reconcileFillPrice(tx, &o, fillCount, fillPrice, updates); err != nil {
+				return err
 			}
 		}
 		return tx.Model(&Order{}).Where("id = ?", orderID).Updates(updates).Error

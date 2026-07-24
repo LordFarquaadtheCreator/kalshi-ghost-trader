@@ -140,19 +140,29 @@ func backfillOrders(ctx context.Context, client *kalshiclient.Client, db *store.
 		}
 		fillCount := parseFP(od.FillCountFP)
 
+		// Derive fill price. Need the order's action to pick YES/NO side
+		// for the fallback path.
+		isNO := false
+		var o2 store.Order
+		if err := db.GormDB().WithContext(ctx).Where("id = ?", o.ID).First(&o2).Error; err == nil {
+			isNO = o2.Action == "buy_no"
+		}
+		fillPrice := od.FillPrice(isNO)
+
 		log.Info("order status change",
 			"order_id", o.KalshiOrderID,
 			"market", o.MarketTicker,
 			"old", o.OrderStatus,
 			"new", internalStatus,
 			"fill_count", fillCount,
+			"fill_price", fillPrice,
 			"dry_run", dryRun)
 
 		if dryRun {
 			updated++
 			continue
 		}
-		if err := db.UpdateRealOrderStatus(ctx, o.ID, fillCount, internalStatus, "backfill-orders: kalshi status="+od.Status); err != nil {
+		if err := db.UpdateRealOrderStatus(ctx, o.ID, fillCount, fillPrice, internalStatus, "backfill-orders: kalshi status="+od.Status); err != nil {
 			log.Error("update order failed", "order_id", o.KalshiOrderID, "err", err)
 			continue
 		}

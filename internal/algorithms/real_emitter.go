@@ -377,7 +377,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 			"order_id", o.ID, "server_order_id", resp.OrderID,
 			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
 			"error", err)
-		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, "unverified", "unparseable_fill_count: "+resp.FillCount); uerr != nil {
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, 0, "unverified", "unparseable_fill_count: "+resp.FillCount); uerr != nil {
 			e.log.Error("real: failed to mark order unverified", "order_id", o.ID, "error", uerr)
 		}
 		return true
@@ -388,7 +388,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 			"order_id", o.ID, "server_order_id", resp.OrderID,
 			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
 			"error", err)
-		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, "unverified", "unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, 0, "unverified", "unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
 			e.log.Error("real: failed to mark order unverified", "order_id", o.ID, "error", uerr)
 		}
 		return true
@@ -405,7 +405,16 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		cancelReason = "ioc_zero_fill"
 	}
 
-	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status, cancelReason); err != nil {
+	// Fetch actual fill price from Kalshi for filled/partial orders. Used
+	// for pool reconciliation (signal price vs actual cost) and position
+	// avg-entry. Zero-fill cancels and unverified orders skip this — no
+	// fill to price.
+	fillPrice := 0.0
+	if fillCount > 0 {
+		fillPrice = e.fetchFillPrice(orderCtx, resp.OrderID, false)
+	}
+
+	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, fillPrice, status, cancelReason); err != nil {
 		e.log.Error("real: failed to update order in DB",
 			"order_id", resp.OrderID, "error", err)
 	}
@@ -413,8 +422,13 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 	// Apply buy to position manager using actual fill count. Zero-fill
 	// cancels don't create a position. Partial fills create a smaller
 	// position than suggested — reflects actual exposure.
+	// Use fill_price for avg entry when available; fall back to market_price.
 	if fillCount > 0 {
-		posID, perr := e.pos.ApplyBuy(ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, o.MarketPrice)
+		entryPrice := fillPrice
+		if entryPrice <= 0 {
+			entryPrice = o.MarketPrice
+		}
+		posID, perr := e.pos.ApplyBuy(ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, entryPrice)
 		if perr != nil {
 			e.log.Error("real: ApplyBuy failed",
 				"market", o.MarketTicker, "strategy", o.Strategy,
@@ -432,6 +446,7 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 		"server_ts_ms", resp.TsMS,
 		"fill_count", resp.FillCount,
 		"remaining_count", resp.RemainingCount,
+		"fill_price", fillPrice,
 		"count", countStr, "price", priceStr,
 		"environment", e.cfg.Environment,
 		"pool_balance_cents", newBalance)
@@ -639,7 +654,7 @@ func (e *KalshiOrderEmitter) emitBuyNO(o store.Order) bool {
 	if err != nil {
 		e.log.Error("real: buy_no unparseable fill_count",
 			"order_id", o.ID, "fill_count_raw", resp.FillCount, "error", err)
-		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, "unverified", "buy_no_unparseable_fill_count: "+resp.FillCount); uerr != nil {
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, 0, "unverified", "buy_no_unparseable_fill_count: "+resp.FillCount); uerr != nil {
 			e.log.Error("real: buy_no failed to mark unverified", "error", uerr)
 		}
 		return true
@@ -648,7 +663,7 @@ func (e *KalshiOrderEmitter) emitBuyNO(o store.Order) bool {
 	if err != nil {
 		e.log.Error("real: buy_no unparseable remaining_count",
 			"order_id", o.ID, "remaining_count_raw", resp.RemainingCount, "error", err)
-		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, "unverified", "buy_no_unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, 0, "unverified", "buy_no_unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
 			e.log.Error("real: buy_no failed to mark unverified", "error", uerr)
 		}
 		return true
@@ -664,13 +679,23 @@ func (e *KalshiOrderEmitter) emitBuyNO(o store.Order) bool {
 		cancelReason = "buy_no_ioc_zero_fill"
 	}
 
-	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status, cancelReason); err != nil {
+	// Fetch actual fill price (NO side). Used for pool reconciliation + avg entry.
+	fillPrice := 0.0
+	if fillCount > 0 {
+		fillPrice = e.fetchFillPrice(orderCtx, resp.OrderID, true)
+	}
+
+	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, fillPrice, status, cancelReason); err != nil {
 		e.log.Error("real: buy_no failed to update order in DB",
 			"order_id", resp.OrderID, "error", err)
 	}
 
 	if fillCount > 0 {
-		posID, perr := e.pos.ApplyBuyNO(ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, o.MarketPrice)
+		entryPrice := fillPrice
+		if entryPrice <= 0 {
+			entryPrice = o.MarketPrice
+		}
+		posID, perr := e.pos.ApplyBuyNO(ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, entryPrice)
 		if perr != nil {
 			e.log.Error("real: buy_no ApplyBuyNO failed",
 				"market", o.MarketTicker, "strategy", o.Strategy,
@@ -687,6 +712,7 @@ func (e *KalshiOrderEmitter) emitBuyNO(o store.Order) bool {
 		"server_ts_ms", resp.TsMS,
 		"fill_count", resp.FillCount,
 		"remaining_count", resp.RemainingCount,
+		"fill_price", fillPrice,
 		"count", countStr, "price", priceStr,
 		"environment", e.cfg.Environment,
 		"pool_balance_cents", newBalance)
@@ -818,7 +844,7 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 			"order_id", o.ID, "server_order_id", resp.OrderID,
 			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
 			"error", err)
-		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, "unverified", "sell_unparseable_fill_count: "+resp.FillCount); uerr != nil {
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, 0, 0, "unverified", "sell_unparseable_fill_count: "+resp.FillCount); uerr != nil {
 			e.log.Error("real: failed to mark sell unverified", "order_id", o.ID, "error", uerr)
 		}
 		return true
@@ -829,7 +855,7 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 			"order_id", o.ID, "server_order_id", resp.OrderID,
 			"fill_count_raw", resp.FillCount, "remaining_count_raw", resp.RemainingCount,
 			"error", err)
-		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, "unverified", "sell_unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
+		if uerr := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, 0, "unverified", "sell_unparseable_remaining_count: "+resp.RemainingCount); uerr != nil {
 			e.log.Error("real: failed to mark sell unverified", "order_id", o.ID, "error", uerr)
 		}
 		return true
@@ -845,13 +871,16 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 		cancelReason = "sell_ioc_zero_fill"
 	}
 
-	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, status, cancelReason); err != nil {
-		e.log.Error("real: failed to update sell order in DB",
-			"order_id", resp.OrderID, "error", err)
+	// Fetch actual fill price (we sell YES → isNO=false). Used for pool
+	// reconciliation (signal credit vs actual proceeds) and avg exit.
+	fillPrice := 0.0
+	if fillCount > 0 {
+		fillPrice = e.fetchFillPrice(orderCtx, resp.OrderID, false)
 	}
 
-	// Credit pool with proceeds and close position on actual fill count.
-	// Zero-fill cancels don't credit or close.
+	// Credit pool with proceeds at signal price BEFORE UpdateRealOrder so
+	// reconcileFillPrice (inside UpdateRealOrder) can adjust for the gap
+	// between signal and actual fill price. Zero-fill cancels skip credit.
 	if fillCount > 0 {
 		proceedsCents := int64(fillCount * o.MarketPrice * 100)
 		newBalance, err := liquiditypool.Credit(orderCtx, e.db.GormDB(), proceedsCents)
@@ -863,9 +892,21 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 				"market", o.MarketTicker, "proceeds_cents", proceedsCents,
 				"pool_balance_cents", newBalance)
 		}
+	}
 
+	if err := e.db.UpdateRealOrder(context.Background(), o.ID, resp.OrderID, fillCount, fillPrice, status, cancelReason); err != nil {
+		e.log.Error("real: failed to update sell order in DB",
+			"order_id", resp.OrderID, "error", err)
+	}
+
+	// Close position on actual fill count. Zero-fill cancels don't close.
+	if fillCount > 0 {
+		exitPrice := fillPrice
+		if exitPrice <= 0 {
+			exitPrice = o.MarketPrice
+		}
 		_, realizedPnL, remaining, perr := e.pos.ApplySell(
-			ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, o.MarketPrice)
+			ctx, o.MatchTicker, o.MarketTicker, o.Strategy, true, fillCount, exitPrice)
 		if perr != nil {
 			e.log.Error("real: ApplySell failed",
 				"market", o.MarketTicker, "strategy", o.Strategy,
@@ -884,10 +925,39 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 		"server_ts_ms", resp.TsMS,
 		"fill_count", resp.FillCount,
 		"remaining_count", resp.RemainingCount,
+		"fill_price", fillPrice,
 		"count", countStr, "price", priceStr,
 		"environment", e.cfg.Environment)
 
 	return true
+}
+
+// fetchFillPrice retrieves the actual per-contract fill price from Kalshi
+// via GET /portfolio/orders/{order_id}. Called after a successful submit
+// when fillCount > 0. Returns 0 on error or when no reliable fill price can
+// be derived — caller proceeds with signal-time market_price and pool
+// reconciliation is skipped (no fill_price persisted).
+//
+// isNO selects the YES/NO side for the fallback path (see OrderData.FillPrice).
+func (e *KalshiOrderEmitter) fetchFillPrice(ctx context.Context, kalshiOrderID string, isNO bool) float64 {
+	if kalshiOrderID == "" {
+		return 0
+	}
+	od, err := e.client.GetOrder(ctx, kalshiOrderID)
+	if err != nil {
+		e.log.Warn("real: failed to fetch fill price, leaving fill_price=0",
+			"kalshi_order_id", kalshiOrderID, "error", err)
+		return 0
+	}
+	fp := od.FillPrice(isNO)
+	if fp <= 0 {
+		e.log.Warn("real: fill price unavailable from order data",
+			"kalshi_order_id", kalshiOrderID,
+			"fill_count_fp", od.FillCountFP,
+			"taker_fill_cost", od.TakerFillCostDollars,
+			"yes_price", od.YesPriceDollars)
+	}
+	return fp
 }
 
 var _ OrderEmitter = (*KalshiOrderEmitter)(nil)

@@ -153,6 +153,7 @@ type Order struct {
 	Context                string  `gorm:"column:context"`
 	ConvProb               float64 `gorm:"column:conv_prob"`
 	MarketPrice            float64 `gorm:"column:market_price"`
+	FillPrice              float64 `gorm:"column:fill_price"` // actual Kalshi fill price per contract; 0 = not yet fetched
 	EdgeCents              int     `gorm:"column:edge_cents"`
 	SuggestedSize          float64 `gorm:"column:suggested_size"`
 	SetNumber              int     `gorm:"column:set_number"`

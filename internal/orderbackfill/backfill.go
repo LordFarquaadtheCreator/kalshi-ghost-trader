@@ -95,7 +95,17 @@ func (b *Backfill) backfill(ctx context.Context) {
 
 		fillCount := parseFP(od.FillCountFP)
 
-		if err := b.db.UpdateRealOrderStatus(ctx, o.ID, fillCount, internalStatus, "backfill: kalshi status="+od.Status); err != nil {
+		// Derive fill price from the fetched order data. Action determines
+		// YES/NO side for the fallback path. Zero when no reliable fill
+		// price can be computed (zero fill, empty fields).
+		isNO := false
+		var o2 store.Order
+		if err := b.db.GormDB().WithContext(ctx).Where("id = ?", o.ID).First(&o2).Error; err == nil {
+			isNO = o2.Action == "buy_no"
+		}
+		fillPrice := od.FillPrice(isNO)
+
+		if err := b.db.UpdateRealOrderStatus(ctx, o.ID, fillCount, fillPrice, internalStatus, "backfill: kalshi status="+od.Status); err != nil {
 			b.log.Error("orderbackfill: update order failed",
 				"order_id", o.KalshiOrderID, "err", err)
 			continue
@@ -106,7 +116,8 @@ func (b *Backfill) backfill(ctx context.Context) {
 			"order_id", o.KalshiOrderID,
 			"old_status", o.OrderStatus,
 			"new_status", internalStatus,
-			"fill_count", fillCount)
+			"fill_count", fillCount,
+			"fill_price", fillPrice)
 	}
 
 	if updated > 0 {
