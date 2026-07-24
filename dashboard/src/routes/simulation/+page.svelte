@@ -417,10 +417,10 @@
         secondary={[
           { label: 'Wins', value: aggStats.wins, tone: 'win' },
           { label: 'Days', value: aggStats.days },
-          { label: 'Best P&L', value: aggStats.bestPnL ? `${aggStats.bestPnL.name.slice(0, 8)} $${aggStats.bestPnL.val.toFixed(0)}` : '\u2014', tone: 'win' },
-          { label: 'Worst P&L', value: aggStats.worstPnL ? `${aggStats.worstPnL.name.slice(0, 8)} $${aggStats.worstPnL.val.toFixed(0)}` : '\u2014', tone: 'loss' },
-          { label: 'Best ROI', value: aggStats.bestROI ? `${aggStats.bestROI.name.slice(0, 8)} ${aggStats.bestROI.val.toFixed(1)}%` : '\u2014', tone: 'win' },
-          { label: 'Best Sharpe', value: aggStats.bestSharpe ? `${aggStats.bestSharpe.name.slice(0, 8)} ${aggStats.bestSharpe.val.toFixed(2)}` : '\u2014' },
+          { label: 'Best P&L', value: aggStats.bestPnL ? `${aggStats.bestPnL.name.slice(0, 8)} $${aggStats.bestPnL.val.toFixed(0)}` : '—', tone: 'win' },
+          { label: 'Worst P&L', value: aggStats.worstPnL ? `${aggStats.worstPnL.name.slice(0, 8)} $${aggStats.worstPnL.val.toFixed(0)}` : '—', tone: 'loss' },
+          { label: 'Best ROI', value: aggStats.bestROI ? `${aggStats.bestROI.name.slice(0, 8)} ${aggStats.bestROI.val.toFixed(1)}%` : '—', tone: 'win' },
+          { label: 'Best Sharpe', value: aggStats.bestSharpe ? `${aggStats.bestSharpe.name.slice(0, 8)} ${aggStats.bestSharpe.val.toFixed(2)}` : '—' },
         ]}
       />
     {/if}
@@ -692,7 +692,7 @@
                       <td>{labels[m]}</td>
                       {#each [...selected] as name}
                         {@const v = summaryMap[name]?.summary?.[m]}
-                        <td class="num">{v !== null && v !== undefined ? (m === 'win_rate' || m === 'roi' ? v.toFixed(1) + '%' : m === 'net_pnl' || m === 'max_drawdown' ? v.toFixed(2) : m === 'sharpe' || m === 'profit_factor' || m === 'avg_edge' ? v.toFixed(2) : v) : '\u2014'}</td>
+                        <td class="num">{v !== null && v !== undefined ? (m === 'win_rate' || m === 'roi' ? v.toFixed(1) + '%' : m === 'net_pnl' || m === 'max_drawdown' ? v.toFixed(2) : m === 'sharpe' || m === 'profit_factor' || m === 'avg_edge' ? v.toFixed(2) : v) : '—'}</td>
                       {/each}
                       <td class="num" style="color: var(--win)">{best.toFixed(2)}</td>
                       <td class="num" style="color: var(--loss)">{worst.toFixed(2)}</td>

@@ -24,7 +24,7 @@
   onMount(load);
 
   function fmtDate(/** @type {number} */ ts) {
-    if (!ts) return '\u2014';
+    if (!ts) return '—';
     return new Date(ts).toLocaleString();
   }
 

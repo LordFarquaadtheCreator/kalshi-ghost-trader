@@ -60,7 +60,7 @@
   }
 
   function fmtPct(/** @type {number} */ v) {
-    if (v === null || v === undefined || isNaN(v)) return '\u2014';
+    if (v === null || v === undefined || isNaN(v)) return '—';
     return v.toFixed(1) + '%';
   }
 
@@ -151,7 +151,7 @@
       <MetricsBar
         primary={[
           { label: 'Net P&L', value: fmtPnL(total.net_pnl), tone: total.net_pnl > 0 ? 'win' : total.net_pnl < 0 ? 'loss' : null },
-          { label: 'Win Rate', value: total.resolved > 0 ? ((total.wins / total.resolved) * 100).toFixed(1) + '%' : '\u2014' },
+          { label: 'Win Rate', value: total.resolved > 0 ? ((total.wins / total.resolved) * 100).toFixed(1) + '%' : '—' },
           { label: 'Orders', value: total.total_orders },
           { label: 'Resolved', value: total.resolved },
           { label: 'Pending', value: total.pending },
@@ -192,7 +192,7 @@
                 <td class="num">{row.total_orders}</td>
                 <td class="num">{row.wins}</td>
                 <td class="num">{row.losses}</td>
-                <td class="num">{row.resolved > 0 ? ((row.wins / row.resolved) * 100).toFixed(1) + '%' : '\u2014'}</td>
+                <td class="num">{row.resolved > 0 ? ((row.wins / row.resolved) * 100).toFixed(1) + '%' : '—'}</td>
                 <td class="num {row.net_pnl >= 0 ? 'pnl-win' : 'pnl-loss'}">{fmtSigned(row.net_pnl)}</td>
                 <td class="num">${row.total_invested.toFixed(2)}</td>
                 <td class="num" style="color: {roi >= 0 ? 'var(--win)' : 'var(--loss)'}">{roi >= 0 ? '+' : ''}{roi.toFixed(1)}%</td>
@@ -205,7 +205,7 @@
               <td class="num"><strong>{total.total_orders}</strong></td>
               <td class="num"><strong>{total.wins}</strong></td>
               <td class="num"><strong>{total.losses}</strong></td>
-              <td class="num"><strong>{total.resolved > 0 ? ((total.wins / total.resolved) * 100).toFixed(1) + '%' : '\u2014'}</strong></td>
+              <td class="num"><strong>{total.resolved > 0 ? ((total.wins / total.resolved) * 100).toFixed(1) + '%' : '—'}</strong></td>
               <td class="num"><strong class="{total.net_pnl >= 0 ? 'pnl-win' : 'pnl-loss'}">{fmtSigned(total.net_pnl)}</strong></td>
               <td class="num"><strong>${total.total_invested.toFixed(2)}</strong></td>
               <td class="num"></td>
@@ -281,7 +281,7 @@
                   <td class="num">{row.total_orders}</td>
                   <td class="num">{row.wins}</td>
                   <td class="num">{row.losses}</td>
-                  <td class="num">{row.resolved > 0 ? ((row.wins / row.resolved) * 100).toFixed(1) + '%' : '\u2014'}</td>
+                  <td class="num">{row.resolved > 0 ? ((row.wins / row.resolved) * 100).toFixed(1) + '%' : '—'}</td>
                   <td class="num {row.net_pnl >= 0 ? 'pnl-win' : 'pnl-loss'}">{fmtSigned(row.net_pnl)}</td>
                   <td class="num" style="color: {roi >= 0 ? 'var(--win)' : 'var(--loss)'}">{roi >= 0 ? '+' : ''}{roi.toFixed(1)}%</td>
                 </tr>

@@ -90,8 +90,8 @@
       primary={[
         { label: 'Goroutines', value: cur.goroutines },
         { label: 'Heap', value: fmtBytes(cur.heap_alloc_bytes) },
-        { label: 'GC Rate', value: gcRate !== null ? gcRate.toFixed(2) + '/s' : '\u2014' },
-        { label: 'Heap Eff', value: heapEfficiency !== null ? heapEfficiency.toFixed(1) + '%' : '\u2014' },
+        { label: 'GC Rate', value: gcRate !== null ? gcRate.toFixed(2) + '/s' : '—' },
+        { label: 'Heap Eff', value: heapEfficiency !== null ? heapEfficiency.toFixed(1) + '%' : '—' },
         { label: 'CPUs', value: cur.num_cpu },
         { label: 'Samples', value: hist.length },
       ]}
@@ -103,13 +103,13 @@
         { label: 'GC Pause', value: (cur.gc_pause_ns / 1e6).toFixed(2) + ' ms' },
         { label: 'Mallocs', value: fmtNum(cur.mallocs) },
         { label: 'Frees', value: fmtNum(cur.frees) },
-        { label: 'M/F Ratio', value: mallocFreeRatio !== null ? mallocFreeRatio.toFixed(2) : '\u2014' },
-        { label: 'Heap Min', value: heapStats ? fmtBytes(heapStats.min) : '\u2014' },
-        { label: 'Heap Max', value: heapStats ? fmtBytes(heapStats.max) : '\u2014' },
-        { label: 'Heap Avg', value: heapStats ? fmtBytes(heapStats.avg) : '\u2014' },
-        { label: 'Go Min', value: goroutineStats ? goroutineStats.min : '\u2014' },
-        { label: 'Go Max', value: goroutineStats ? goroutineStats.max : '\u2014' },
-        { label: 'Go Trend', value: goroutineStats ? (goroutineStats.trend >= 0 ? '+' : '') + goroutineStats.trend : '\u2014', tone: (goroutineStats?.trend ?? 0) > 0 ? 'loss' : 'win' },
+        { label: 'M/F Ratio', value: mallocFreeRatio !== null ? mallocFreeRatio.toFixed(2) : '—' },
+        { label: 'Heap Min', value: heapStats ? fmtBytes(heapStats.min) : '—' },
+        { label: 'Heap Max', value: heapStats ? fmtBytes(heapStats.max) : '—' },
+        { label: 'Heap Avg', value: heapStats ? fmtBytes(heapStats.avg) : '—' },
+        { label: 'Go Min', value: goroutineStats ? goroutineStats.min : '—' },
+        { label: 'Go Max', value: goroutineStats ? goroutineStats.max : '—' },
+        { label: 'Go Trend', value: goroutineStats ? (goroutineStats.trend >= 0 ? '+' : '') + goroutineStats.trend : '—', tone: (goroutineStats?.trend ?? 0) > 0 ? 'loss' : 'win' },
       ]}
     />
   {:else}

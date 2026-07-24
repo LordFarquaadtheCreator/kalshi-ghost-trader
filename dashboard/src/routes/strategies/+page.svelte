@@ -84,7 +84,7 @@
         { label: 'Avg Variants', value: avgVariants },
         { label: 'Multi-Variant', value: multiVariantGroups },
         { label: 'Single', value: singleStrategies },
-        { label: 'Largest', value: largestGroup ? `${largestGroup[0]} (${largestGroup[1].length})` : '\u2014' },
+        { label: 'Largest', value: largestGroup ? `${largestGroup[0]} (${largestGroup[1].length})` : '—' },
       ]}
     />
 

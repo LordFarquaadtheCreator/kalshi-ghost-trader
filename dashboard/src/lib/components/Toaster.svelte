@@ -7,7 +7,7 @@
   {#each toasts as t (t.id)}
     <div class="toast toast-{t.type}" role="button" tabindex="-1" onclick={() => dismissToast(t.id)} onkeydown={(e) => e.key === 'Enter' && dismissToast(t.id)}>
       <span class="toast-icon">
-        {t.type === 'ok' ? '\u2713' : t.type === 'err' ? '\u2717' : '\u24D8'}
+        {t.type === 'ok' ? '✓' : t.type === 'err' ? '✗' : 'ⓘ'}
       </span>
       <span class="toast-text">{t.text}</span>
     </div>

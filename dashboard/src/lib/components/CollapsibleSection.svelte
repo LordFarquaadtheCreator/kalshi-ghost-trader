@@ -6,7 +6,7 @@
 
 <div class="collapsible-section">
   <button class="section-header" onclick={() => open = !open}>
-    <span class="collapse-icon">{open ? '\u25BC' : '\u25B6'}</span>
+    <span class="collapse-icon">{open ? '▼' : '▶'}</span>
     <span class="section-title">{title}</span>
     {#if count !== null}<span class="section-count">— {count}</span>{/if}
   </button>

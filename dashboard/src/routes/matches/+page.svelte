@@ -165,13 +165,13 @@
   }
   /** @param {number} v — ratio */
   function fmtRatio(v) {
-    if (v === null || v === undefined || isNaN(v)) return '\u2014';
-    if (v === Infinity) return '\u221E';
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    if (v === Infinity) return '∞';
     return v.toFixed(2);
   }
   /** @param {number} v — percentage */
   function fmtPctSigned(v) {
-    if (v === null || v === undefined || isNaN(v)) return '\u2014';
+    if (v === null || v === undefined || isNaN(v)) return '—';
     const sign = v > 0 ? '+' : '';
     return `${sign}${v.toFixed(1)}%`;
   }

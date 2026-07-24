@@ -430,7 +430,7 @@
             <td class="num">{r.profit_factor.toFixed(2)}</td>
             <td class="num">${r.max_drawdown.toFixed(2)}</td>
             <td class="num">{r.score.toFixed(3)}</td>
-            <td>{r.peak ? '\u2605' : ''}</td>
+            <td>{r.peak ? '★' : ''}</td>
           </tr>
         {/each}
       </tbody>

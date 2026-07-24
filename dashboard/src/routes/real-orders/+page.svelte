@@ -340,24 +340,24 @@
   }
   /** @param {any} m */
   function winRate(m) {
-    if (!m || !m.resolved) return '\u2014';
+    if (!m || !m.resolved) return '—';
     return `${((m.wins / m.resolved) * 100).toFixed(1)}%`;
   }
   /** @param {any} m */
   function roi(m) {
-    if (!m || !m.total_invested) return '\u2014';
+    if (!m || !m.total_invested) return '—';
     return `${((m.net_pnl_cents / 100 / m.total_invested) * 100).toFixed(1)}%`;
   }
   /** @param {number} v — percentage value */
   function fmtPct(v) {
-    if (v === null || v === undefined || isNaN(v)) return '\u2014';
+    if (v === null || v === undefined || isNaN(v)) return '—';
     const sign = v > 0 ? '+' : '';
     return `${sign}${v.toFixed(1)}%`;
   }
   /** @param {number} v — ratio (sharpe, sortino, profit factor) */
   function fmtRatio(v) {
-    if (v === null || v === undefined || isNaN(v)) return '\u2014';
-    if (v === Infinity) return '\u221E';
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    if (v === Infinity) return '∞';
     return v.toFixed(2);
   }
   /** @param {number} v — cents */
@@ -379,7 +379,7 @@
     if (a === 'buy') return 'BUY YES';
     if (a === 'buy_no') return 'BUY NO';
     if (a === 'sell') return 'SELL';
-    return a || '\u2014';
+    return a || '—';
   }
   function rowClass(/** @type {any} */ o) {
     if (o.OrderStatus === 'resolved' && o.ResolvedPNLCents > 0) return 'row-win';
@@ -455,7 +455,7 @@
     primary={[
       { label: 'Net P&L', value: fmtCents(summary.pnl), tone: summary.pnl > 0 ? 'win' : summary.pnl < 0 ? 'loss' : null },
       { label: 'ROI', value: fmtPct(summary.roi), tone: summary.roi > 0 ? 'win' : summary.roi < 0 ? 'loss' : null },
-      { label: 'Win Rate', value: summary.resolved > 0 ? summary.wr.toFixed(1) + '%' : '\u2014' },
+      { label: 'Win Rate', value: summary.resolved > 0 ? summary.wr.toFixed(1) + '%' : '—' },
       { label: 'Sharpe', value: fmtRatio(summary.sh) },
       { label: 'Total', value: summary.total },
       { label: 'Days', value: summary.days },
@@ -553,16 +553,16 @@
         <table class="data-table">
           <thead>
             <tr>
-              <th class="sortable" onclick={() => toggleSort('TS')}>Time {#if sortKey === 'TS'}{sortDir === 'asc' ? '\u25B2' : '\u25BC'}{/if}</th>
-              <th class="sortable" onclick={() => toggleSort('MatchTitle')}>Match {#if sortKey === 'MatchTitle'}{sortDir === 'asc' ? '\u25B2' : '\u25BC'}{/if}</th>
+              <th class="sortable" onclick={() => toggleSort('TS')}>Time {#if sortKey === 'TS'}{sortDir === 'asc' ? '▲' : '▼'}{/if}</th>
+              <th class="sortable" onclick={() => toggleSort('MatchTitle')}>Match {#if sortKey === 'MatchTitle'}{sortDir === 'asc' ? '▲' : '▼'}{/if}</th>
               <th>Player</th>
-              <th class="sortable" onclick={() => toggleSort('Strategy')}>Strategy {#if sortKey === 'Strategy'}{sortDir === 'asc' ? '\u25B2' : '\u25BC'}{/if}</th>
+              <th class="sortable" onclick={() => toggleSort('Strategy')}>Strategy {#if sortKey === 'Strategy'}{sortDir === 'asc' ? '▲' : '▼'}{/if}</th>
               <th>Side</th>
-              <th class="num sortable" onclick={() => toggleSort('SuggestedSize')}>Size@Price {#if sortKey === 'SuggestedSize'}{sortDir === 'asc' ? '\u25B2' : '\u25BC'}{/if}</th>
+              <th class="num sortable" onclick={() => toggleSort('SuggestedSize')}>Size@Price {#if sortKey === 'SuggestedSize'}{sortDir === 'asc' ? '▲' : '▼'}{/if}</th>
               <th class="num">Fill</th>
-              <th class="sortable" onclick={() => toggleSort('OrderStatus')}>Status {#if sortKey === 'OrderStatus'}{sortDir === 'asc' ? '\u25B2' : '\u25BC'}{/if}</th>
-              <th class="num sortable" onclick={() => toggleSort('ResolvedPNLCents')}>P&L {#if sortKey === 'ResolvedPNLCents'}{sortDir === 'asc' ? '\u25B2' : '\u25BC'}{/if}</th>
-              <th class="num sortable" onclick={() => toggleSort('_roi')}>ROI {#if sortKey === '_roi'}{sortDir === 'asc' ? '\u25B2' : '\u25BC'}{/if}</th>
+              <th class="sortable" onclick={() => toggleSort('OrderStatus')}>Status {#if sortKey === 'OrderStatus'}{sortDir === 'asc' ? '▲' : '▼'}{/if}</th>
+              <th class="num sortable" onclick={() => toggleSort('ResolvedPNLCents')}>P&L {#if sortKey === 'ResolvedPNLCents'}{sortDir === 'asc' ? '▲' : '▼'}{/if}</th>
+              <th class="num sortable" onclick={() => toggleSort('_roi')}>ROI {#if sortKey === '_roi'}{sortDir === 'asc' ? '▲' : '▼'}{/if}</th>
             </tr>
           </thead>
           <tbody>
@@ -575,7 +575,7 @@
                 <td>{o.Strategy}</td>
                 <td><span class="side-tag side-{o.Action}">{sideLabel(o.Action)}</span></td>
                 <td class="num">{o.SuggestedSize?.toFixed(2)} @ {(o.MarketPrice ?? 0).toFixed(3)}</td>
-                <td class="num">{o.FillCount ? o.FillCount.toFixed(2) : '\u2014'}</td>
+                <td class="num">{o.FillCount ? o.FillCount.toFixed(2) : '—'}</td>
                 <td><span class="badge badge-{statusVariant(o.OrderStatus)}">{o.OrderStatus || 'pending'}</span></td>
                 <td class="num">
                   {#if o.ResolvedPNLCents}
@@ -583,14 +583,14 @@
                       {fmtCents(o.ResolvedPNLCents)}
                     </span>
                   {:else}
-                    <span class="muted">\u2014</span>
+                    <span class="muted">—</span>
                   {/if}
                 </td>
                 <td class="num">
                   {#if oROI !== null}
                     <span class:win={oROI > 0} class:loss={oROI < 0}>{fmtPct(oROI)}</span>
                   {:else}
-                    <span class="muted">\u2014</span>
+                    <span class="muted">—</span>
                   {/if}
                 </td>
               </tr>
@@ -610,11 +610,11 @@
 
       {#if totalPages > 1}
         <div class="pager">
-          <button disabled={page === 0} onclick={() => (page = 0)}>\u00AB</button>
+          <button disabled={page === 0} onclick={() => (page = 0)}>«</button>
           <button disabled={page === 0} onclick={() => (page -= 1)}>Prev</button>
           <span class="pager-info">Page {page + 1} / {totalPages}</span>
           <button disabled={page >= totalPages - 1} onclick={() => (page += 1)}>Next</button>
-          <button disabled={page >= totalPages - 1} onclick={() => (page = totalPages - 1)}>\u00BB</button>
+          <button disabled={page >= totalPages - 1} onclick={() => (page = totalPages - 1)}>»</button>
         </div>
       {/if}
     {/if}
@@ -639,7 +639,7 @@
               <div class="sc-stat"><span>Resolved</span><b>{m.resolved}</b></div>
               <div class="sc-stat"><span>Wins</span><b class="win">{m.wins}</b></div>
               <div class="sc-stat"><span>Losses</span><b class="loss">{m.losses}</b></div>
-              <div class="sc-stat"><span>Win Rate</span><b>{m.resolved > 0 ? m.winRate.toFixed(1) + '%' : '\u2014'}</b></div>
+              <div class="sc-stat"><span>Win Rate</span><b>{m.resolved > 0 ? m.winRate.toFixed(1) + '%' : '—'}</b></div>
               <div class="sc-stat"><span>ROI</span><b class:win={m.roi > 0} class:loss={m.roi < 0}>{fmtPct(m.roi)}</b></div>
               <div class="sc-stat"><span>Invested</span><b>${(m.invested / 100).toFixed(2)}</b></div>
               <div class="sc-stat"><span>Net P&L</span><b class:win={m.netPnl > 0} class:loss={m.netPnl < 0}>{fmtCents(m.netPnl)}</b></div>
@@ -664,7 +664,7 @@
             <div class="sc-stat"><span>Resolved</span><b>{summary.resolved}</b></div>
             <div class="sc-stat"><span>Wins</span><b class="win">{summary.wins}</b></div>
             <div class="sc-stat"><span>Losses</span><b class="loss">{summary.losses}</b></div>
-            <div class="sc-stat"><span>Win Rate</span><b>{summary.resolved > 0 ? summary.wr.toFixed(1) + '%' : '\u2014'}</b></div>
+            <div class="sc-stat"><span>Win Rate</span><b>{summary.resolved > 0 ? summary.wr.toFixed(1) + '%' : '—'}</b></div>
             <div class="sc-stat"><span>ROI</span><b class:win={summary.roi > 0} class:loss={summary.roi < 0}>{fmtPct(summary.roi)}</b></div>
             <div class="sc-stat"><span>Invested</span><b>${(summary.investedCents / 100).toFixed(2)}</b></div>
             <div class="sc-stat"><span>Net P&L</span><b class:win={summary.pnl > 0} class:loss={summary.pnl < 0}>{fmtCents(summary.pnl)}</b></div>
@@ -730,7 +730,7 @@
                 <td>{o.Strategy}</td>
                 <td><span class="side-tag side-{o.Action}">{sideLabel(o.Action)}</span></td>
                 <td class="num">{o.SuggestedSize?.toFixed(2)}</td>
-                <td class="num">{o.FillCount ? o.FillCount.toFixed(2) : '\u2014'}</td>
+                <td class="num">{o.FillCount ? o.FillCount.toFixed(2) : '—'}</td>
                 <td class="num">{(o.MarketPrice ?? 0).toFixed(3)}</td>
                 <td class="num">{fmtCents(cost)}</td>
                 <td><span class="badge badge-{statusVariant(o.OrderStatus)}">{o.OrderStatus}</span></td>
@@ -774,23 +774,23 @@
         <div class="d-row"><span class="d-key">Match</span><span>{o.MatchTitle || fmtTicker(o.MatchTicker)}</span></div>
         <div class="d-row"><span class="d-key">Player</span><span>{o.PlayerName || o.MarketTicker}</span></div>
         <div class="d-row"><span class="d-key">Series</span><span class="series">{seriesFromTicker(o.MatchTicker)}</span></div>
-        <a class="d-link" href={`/matches/${encodeURIComponent(o.MatchTicker)}`}>View match \u2192</a>
+        <a class="d-link" href={`/matches/${encodeURIComponent(o.MatchTicker)}`}>View match →</a>
       </div>
 
       <div class="d-section">
         <h3>Execution</h3>
         <div class="d-row"><span class="d-key">Size</span><span class="mono">{o.SuggestedSize?.toFixed(4)}</span></div>
-        <div class="d-row"><span class="d-key">Fill</span><span class="mono">{o.FillCount ? o.FillCount.toFixed(4) : '\u2014'}</span></div>
+        <div class="d-row"><span class="d-key">Fill</span><span class="mono">{o.FillCount ? o.FillCount.toFixed(4) : '—'}</span></div>
         <div class="d-row"><span class="d-key">Price</span><span class="mono">{(o.MarketPrice ?? 0).toFixed(4)}</span></div>
         <div class="d-row"><span class="d-key">Edge</span><span class="mono">{o.EdgeCents ?? 0}¢</span></div>
-        <div class="d-row"><span class="d-key">Conv Prob</span><span class="mono">{o.ConvProb ? (o.ConvProb * 100).toFixed(1) + '%' : '\u2014'}</span></div>
-        <div class="d-row"><span class="d-key">Set</span><span class="mono">{o.SetNumber ?? '\u2014'}</span></div>
+        <div class="d-row"><span class="d-key">Conv Prob</span><span class="mono">{o.ConvProb ? (o.ConvProb * 100).toFixed(1) + '%' : '—'}</span></div>
+        <div class="d-row"><span class="d-key">Set</span><span class="mono">{o.SetNumber ?? '—'}</span></div>
       </div>
 
       <div class="d-section">
         <h3>Sizing</h3>
         <div class="d-row"><span class="d-key">Bankroll</span><span class="mono">${o.Bankroll?.toFixed(2)}</span></div>
-        <div class="d-row"><span class="d-key">Kelly Frac</span><span class="mono">{o.KellyFraction ? (o.KellyFraction * 100).toFixed(2) + '%' : '\u2014'}</span></div>
+        <div class="d-row"><span class="d-key">Kelly Frac</span><span class="mono">{o.KellyFraction ? (o.KellyFraction * 100).toFixed(2) + '%' : '—'}</span></div>
       </div>
 
       <div class="d-section">
@@ -802,10 +802,10 @@
 
       <div class="d-section">
         <h3>Reference</h3>
-        <div class="d-row"><span class="d-key">Order ID</span><span class="mono">{o.KalshiOrderID || '\u2014'}</span></div>
+        <div class="d-row"><span class="d-key">Order ID</span><span class="mono">{o.KalshiOrderID || '—'}</span></div>
         <div class="d-row"><span class="d-key">Internal ID</span><span class="mono">{o.ID}</span></div>
         <div class="d-row"><span class="d-key">Market</span><span class="mono">{o.MarketTicker}</span></div>
-        <div class="d-row"><span class="d-key">Pair ID</span><span class="mono">{o.PairID || '\u2014'}</span></div>
+        <div class="d-row"><span class="d-key">Pair ID</span><span class="mono">{o.PairID || '—'}</span></div>
         <div class="d-row"><span class="d-key">Time</span><span class="mono">{fmtDate(o.TS)}</span></div>
         {#if o.SettledTS}<div class="d-row"><span class="d-key">Settled</span><span class="mono">{fmtDate(o.SettledTS)}</span></div>{/if}
         {#if o.Result}<div class="d-row"><span class="d-key">Result</span><span>{o.Result}</span></div>{/if}
@@ -848,7 +848,7 @@
       <div class="pm-input-row">
         <input type="number" bind:value={resetDollars} placeholder="20.00" step="0.01" min="0" />
       </div>
-      <p class="pm-confirm-hint">Type the amount to confirm: <code>{resetDollars || '\u2014'}</code></p>
+      <p class="pm-confirm-hint">Type the amount to confirm: <code>{resetDollars || '—'}</code></p>
       <div class="pm-input-row">
         <input type="text" bind:value={resetConfirm} placeholder="re-type amount" autocomplete="off" />
         <button class="pm-btn pm-btn-warn" onclick={handleReset} disabled={poolBusy}>Reset</button>

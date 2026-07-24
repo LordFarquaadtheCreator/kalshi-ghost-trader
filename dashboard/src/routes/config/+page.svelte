@@ -28,7 +28,7 @@
   onMount(loadHistory);
 
   function fmtHistoryDate(/** @type {number} */ ts) {
-    if (!ts) return '\u2014';
+    if (!ts) return '—';
     return new Date(ts).toLocaleString();
   }
 
@@ -453,8 +453,8 @@
                 <td class="mono">{fmtHistoryDate(h.ChangedTS)}</td>
                 <td class="mono">{h.Key}</td>
                 <td><span class="badge badge-{h.Action === 'delete' ? 'err' : 'ok'}">{h.Action}</span></td>
-                <td class="mono">{h.OldValue || '\u2014'}</td>
-                <td class="mono">{h.NewValue || '\u2014'}</td>
+                <td class="mono">{h.OldValue || '—'}</td>
+                <td class="mono">{h.NewValue || '—'}</td>
               </tr>
             {/each}
           </tbody>

@@ -320,13 +320,13 @@
   }
   /** @param {number} v — ratio */
   function fmtRatio(v) {
-    if (v === null || v === undefined || isNaN(v)) return '\u2014';
-    if (v === Infinity) return '\u221E';
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    if (v === Infinity) return '∞';
     return v.toFixed(2);
   }
   /** @param {number} v — percentage */
   function fmtPctSigned(v) {
-    if (v === null || v === undefined || isNaN(v)) return '\u2014';
+    if (v === null || v === undefined || isNaN(v)) return '—';
     const sign = v > 0 ? '+' : '';
     return `${sign}${v.toFixed(1)}%`;
   }
@@ -567,7 +567,7 @@
                     {#if oROI !== null}
                       <span class:win={oROI > 0} class:loss={oROI < 0}>{fmtPctSigned(oROI)}</span>
                     {:else}
-                      <span class="muted">\u2014</span>
+                      <span class="muted">—</span>
                     {/if}
                   </td>
                 </tr>
