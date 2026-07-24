@@ -37,6 +37,8 @@
   // --- Orders ---
   /** @type {any[]} */
   let orders = $derived(ordersData?.orders ?? []);
+  /** @type {{ total: number, by_strategy: Record<string, number> }} */
+  let positionPnL = $derived(ordersData?.position_pnl ?? { total: 0, by_strategy: {} });
   let pool = $derived(poolData);
 
   // --- Tab state ---
@@ -205,7 +207,7 @@
       const pnls = resolved.map((o) => o.ResolvedPNLCents || 0);
       const w = pnls.filter((p) => p > 0).length;
       const l = pnls.filter((p) => p < 0).length;
-      const netPnl = pnls.reduce((a, b) => a + b, 0);
+      const netPnl = pnls.reduce((a, b) => a + b, 0) + (positionPnL.by_strategy[s] || 0);
       const inv = os.reduce((s2, o) => s2 + Math.round((o.FillCount || 0) * (o.MarketPrice || 0) * 100), 0);
       const series = dailyPnLSeries(os);
       out[s] = {
@@ -236,7 +238,7 @@
     const filled = orders.filter((o) => o.OrderStatus === 'filled' || o.OrderStatus === 'partial').length;
     const resolved = resolvedOrders.length;
     const failed = orders.filter((o) => o.OrderStatus === 'failed').length;
-    const pnl = settledPnls.reduce((a, b) => a + b, 0);
+    const pnl = settledPnls.reduce((a, b) => a + b, 0) + (positionPnL.total || 0);
     const wr = resolved > 0 ? (wins / resolved) * 100 : 0;
     const roi = investedCents > 0 ? (pnl / investedCents) * 100 : 0;
     const dAvg = dailyAvgPnL(dailySeries);
@@ -386,6 +388,17 @@
     if (o.OrderStatus === 'resolved' && o.ResolvedPNLCents < 0) return 'row-loss';
     if (o.OrderStatus === 'failed') return 'row-failed';
     return '';
+  }
+  // Potential profit if order fills and contract wins: (1 - price) * size * 100 cents.
+  // Uses FillCount if filled, SuggestedSize if not. Sells show — (closing, not opening).
+  function potentialProfit(/** @type {any} */ o) {
+    if (o.Side === 'close' || o.Action === 'sell') return null;
+    const size = o.FillCount > 0 ? o.FillCount : (o.SuggestedSize || 0);
+    if (!size || !o.MarketPrice) return null;
+    return Math.round((1 - o.MarketPrice) * size * 100);
+  }
+  function kalshiMarketURL(/** @type {any} */ o) {
+    return `https://kalshi.com/markets/${o.MarketTicker}`;
   }
 
   // Stale indicator
@@ -563,6 +576,8 @@
               <th class="sortable" onclick={() => toggleSort('OrderStatus')}>Status {#if sortKey === 'OrderStatus'}{sortDir === 'asc' ? '▲' : '▼'}{/if}</th>
               <th class="num sortable" onclick={() => toggleSort('ResolvedPNLCents')}>P&L {#if sortKey === 'ResolvedPNLCents'}{sortDir === 'asc' ? '▲' : '▼'}{/if}</th>
               <th class="num sortable" onclick={() => toggleSort('_roi')}>ROI {#if sortKey === '_roi'}{sortDir === 'asc' ? '▲' : '▼'}{/if}</th>
+              <th class="num">Potential</th>
+              <th>Kalshi</th>
             </tr>
           </thead>
           <tbody>
@@ -593,6 +608,16 @@
                     <span class="muted">—</span>
                   {/if}
                 </td>
+                <td class="num">
+                  {#if potentialProfit(o) !== null}
+                    <span class="win">+{fmtCents(/** @type {number} */ (potentialProfit(o)))}</span>
+                  {:else}
+                    <span class="muted">—</span>
+                  {/if}
+                </td>
+                <td>
+                  <a href={kalshiMarketURL(o)} target="_blank" rel="noopener noreferrer" class="kalshi-link" onclick={(e) => e.stopPropagation()}>Open ↗</a>
+                </td>
               </tr>
             {/each}
           </tbody>
@@ -603,6 +628,8 @@
               <td></td>
               <td class="num"><strong class:win={summary.pnl > 0} class:loss={summary.pnl < 0}>{fmtCents(summary.pnl)}</strong></td>
               <td class="num"><strong class:win={summary.roi > 0} class:loss={summary.roi < 0}>{fmtPct(summary.roi)}</strong></td>
+              <td></td>
+              <td></td>
             </tr>
           </tfoot>
         </table>
@@ -798,6 +825,7 @@
         <div class="d-row"><span class="d-key">Before</span><span class="mono">{fmtCents(o.PoolBalanceBeforeCents)}</span></div>
         <div class="d-row"><span class="d-key">After</span><span class="mono">{fmtCents(o.PoolBalanceAfterCents)}</span></div>
         <div class="d-row"><span class="d-key">Unfilled Refund</span><span class="mono">{fmtCents(o.UnfilledRefundedCents)}</span></div>
+        {#if potentialProfit(o) !== null}<div class="d-row"><span class="d-key">Potential Profit</span><span class="mono win">+{fmtCents(/** @type {number} */ (potentialProfit(o)))}</span></div>{/if}
       </div>
 
       <div class="d-section">
@@ -805,6 +833,7 @@
         <div class="d-row"><span class="d-key">Order ID</span><span class="mono">{o.KalshiOrderID || '—'}</span></div>
         <div class="d-row"><span class="d-key">Internal ID</span><span class="mono">{o.ID}</span></div>
         <div class="d-row"><span class="d-key">Market</span><span class="mono">{o.MarketTicker}</span></div>
+        <div class="d-row"><span class="d-key">Kalshi</span><a href={kalshiMarketURL(o)} target="_blank" rel="noopener noreferrer" class="kalshi-link">Open market ↗</a></div>
         <div class="d-row"><span class="d-key">Pair ID</span><span class="mono">{o.PairID || '—'}</span></div>
         <div class="d-row"><span class="d-key">Time</span><span class="mono">{fmtDate(o.TS)}</span></div>
         {#if o.SettledTS}<div class="d-row"><span class="d-key">Settled</span><span class="mono">{fmtDate(o.SettledTS)}</span></div>{/if}
@@ -1097,6 +1126,8 @@
   .d-key { color: var(--text-muted); }
   .d-link { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; }
   .d-link:hover { text-decoration: underline; }
+  .kalshi-link { color: var(--accent); text-decoration: none; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .kalshi-link:hover { text-decoration: underline; }
   .d-context {
     font-size: 12px;
     color: var(--text);

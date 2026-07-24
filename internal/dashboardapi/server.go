@@ -430,7 +430,16 @@ func (s *Server) realOrdersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{"orders": orders})
+	posPnL, err := s.deps.LiveStore.GetRealPositionPnL(r.Context())
+	if err != nil {
+		s.deps.Log.Error("get real position pnl", "err", err)
+		posPnL = &dashboarddata.PositionPnL{ByStrategy: map[string]int64{}}
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"orders":          orders,
+		"position_pnl":    posPnL,
+	})
 }
 
 func (s *Server) realOrderMetricsHandler(w http.ResponseWriter, r *http.Request) {

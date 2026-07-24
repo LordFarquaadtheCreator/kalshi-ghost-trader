@@ -931,7 +931,9 @@ type RealOrderMetricsResponse struct {
 
 // GetRealOrderStrategyMetrics computes per-strategy + total aggregates for
 // real orders. day is "YYYY-MM-DD" or empty for aggregate. Invested uses
-// fill_count (actual filled size) × market_price. PnL from resolved_pnl_cents.
+// fill_count (actual filled size) × market_price. PnL combines
+// orders.resolved_pnl_cents (legacy settlement PnL) + positions.realized_pnl_cents
+// (sell-to-close gains + settlement PnL for new position-aware orders).
 func (s *LiveStore) GetRealOrderStrategyMetrics(ctx context.Context, day string) (*RealOrderMetricsResponse, error) {
 	dayFilter := ""
 	var args []any
@@ -969,6 +971,37 @@ GROUP BY strategy ORDER BY strategy`
 	}
 	total.Strategy = ""
 
+	// Add position realized PnL (sell-to-close gains + settlement PnL for
+	// position-aware orders). Legacy orders have no position row, so no
+	// double-counting with orders.resolved_pnl_cents.
+	posDayFilter := ""
+	var posArgs []any
+	if day != "" {
+		posDayFilter = " AND DATE(to_timestamp(closed_ts/1000)) = ?"
+		posArgs = append(posArgs, day)
+	}
+
+	posPerStrategySQL := `SELECT strategy, COALESCE(SUM(realized_pnl_cents), 0) as pos_pnl
+FROM positions WHERE is_real = true` + posDayFilter + `
+GROUP BY strategy`
+	var posRows []struct {
+		Strategy string `gorm:"column:strategy"`
+		PosPnL   int64  `gorm:"column:pos_pnl"`
+	}
+	if err := s.db.WithContext(ctx).Raw(posPerStrategySQL, posArgs...).Scan(&posRows).Error; err != nil {
+		return nil, fmt.Errorf("query position realized pnl per-strategy: %w", err)
+	}
+	posPnLByStrategy := make(map[string]int64)
+	var totalPosPnL int64
+	for _, r := range posRows {
+		posPnLByStrategy[r.Strategy] = r.PosPnL
+		totalPosPnL += r.PosPnL
+	}
+	for i := range rows {
+		rows[i].NetPNLCents += posPnLByStrategy[rows[i].Strategy]
+	}
+	total.NetPNLCents += totalPosPnL
+
 	days, err := s.GetRealOrderDays(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("query real order days: %w", err)
@@ -989,6 +1022,36 @@ ORDER BY day DESC`).Scan(&days).Error
 		return nil, fmt.Errorf("query real order days: %w", err)
 	}
 	return days, nil
+}
+
+// PositionPnL is per-strategy + total realized PnL from the positions table.
+// Used to augment dashboard PnL with sell-to-close gains not captured in
+// orders.resolved_pnl_cents.
+type PositionPnL struct {
+	Total        int64            `json:"total"`
+	ByStrategy   map[string]int64 `json:"by_strategy"`
+}
+
+// GetRealPositionPnL returns realized PnL from positions where is_real = true,
+// broken down by strategy + total.
+func (s *LiveStore) GetRealPositionPnL(ctx context.Context) (*PositionPnL, error) {
+	var rows []struct {
+		Strategy string `gorm:"column:strategy"`
+		PnL      int64  `gorm:"column:pos_pnl"`
+	}
+	err := s.db.WithContext(ctx).Raw(`
+SELECT strategy, COALESCE(SUM(realized_pnl_cents), 0) as pos_pnl
+FROM positions WHERE is_real = true
+GROUP BY strategy`).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("query real position pnl: %w", err)
+	}
+	out := &PositionPnL{ByStrategy: make(map[string]int64)}
+	for _, r := range rows {
+		out.ByStrategy[r.Strategy] = r.PnL
+		out.Total += r.PnL
+	}
+	return out, nil
 }
 
 // metaCache holds the strategy list for the /meta endpoint with a 60s TTL.
