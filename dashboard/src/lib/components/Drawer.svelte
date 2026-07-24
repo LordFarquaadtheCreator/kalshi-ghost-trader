@@ -13,7 +13,7 @@
   <aside class="drawer">
     <header class="drawer-header">
       <h2 class="drawer-title">{title}</h2>
-      <button class="drawer-close" onclick={() => onClose?.()} aria-label="Close">\u00D7</button>
+      <button class="drawer-close" onclick={() => onClose?.()} aria-label="Close">&times;</button>
     </header>
     <div class="drawer-body">
       {@render children?.()}

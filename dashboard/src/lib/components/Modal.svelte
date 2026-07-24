@@ -13,7 +13,7 @@
     <div class="modal" role="dialog" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
       <header class="modal-header">
         <h2 class="modal-title">{title}</h2>
-        <button class="modal-close" onclick={() => onClose?.()} aria-label="Close">\u00D7</button>
+        <button class="modal-close" onclick={() => onClose?.()} aria-label="Close">&times;</button>
       </header>
       <div class="modal-body">
         {@render children?.()}

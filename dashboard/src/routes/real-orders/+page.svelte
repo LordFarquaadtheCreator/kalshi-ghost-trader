@@ -676,7 +676,7 @@
       <div class="exposure-bar">
         <span class="exposure-label">Total Open Exposure</span>
         <span class="exposure-value">{fmtCents(exposureCents)}</span>
-        <span class="exposure-stat"><span class="exposure-label">Avg Entry</span><b>{(avgEntry * 100).toFixed(1)}\u00A2</b></span>
+        <span class="exposure-stat"><span class="exposure-label">Avg Entry</span><b>{(avgEntry * 100).toFixed(1)}¢</b></span>
         <span class="exposure-stat"><span class="exposure-label">Total Fill</span><b>{totalFill.toFixed(2)}</b></span>
         <span class="exposure-stat"><span class="exposure-label">Strategies</span><b>{Object.keys(byStrategy).length}</b></span>
         <span class="exposure-count">{openOrders.length} position{openOrders.length === 1 ? '' : 's'}</span>
@@ -719,7 +719,7 @@
               <td colspan="5"><strong>{openOrders.length} open positions</strong></td>
               <td class="num"></td>
               <td class="num"><strong>{totalFill.toFixed(2)}</strong></td>
-              <td class="num"><strong>{(avgEntry * 100).toFixed(1)}\u00A2</strong></td>
+              <td class="num"><strong>{(avgEntry * 100).toFixed(1)}¢</strong></td>
               <td class="num"><strong>{fmtCents(exposureCents)}</strong></td>
               <td></td>
             </tr>
@@ -759,7 +759,7 @@
         <div class="d-row"><span class="d-key">Size</span><span class="mono">{o.SuggestedSize?.toFixed(4)}</span></div>
         <div class="d-row"><span class="d-key">Fill</span><span class="mono">{o.FillCount ? o.FillCount.toFixed(4) : '\u2014'}</span></div>
         <div class="d-row"><span class="d-key">Price</span><span class="mono">{(o.MarketPrice ?? 0).toFixed(4)}</span></div>
-        <div class="d-row"><span class="d-key">Edge</span><span class="mono">{o.EdgeCents ?? 0}\u00A2</span></div>
+        <div class="d-row"><span class="d-key">Edge</span><span class="mono">{o.EdgeCents ?? 0}¢</span></div>
         <div class="d-row"><span class="d-key">Conv Prob</span><span class="mono">{o.ConvProb ? (o.ConvProb * 100).toFixed(1) + '%' : '\u2014'}</span></div>
         <div class="d-row"><span class="d-key">Set</span><span class="mono">{o.SetNumber ?? '\u2014'}</span></div>
       </div>
