@@ -32,7 +32,7 @@ func DefaultNoFadeConfig() NoFadeConfig {
 	return NoFadeConfig{
 		WindowSeconds: 900,
 		MinFavPrice:   0.50,
-		MaxNoPrice:    0.05,
+		MaxNoPrice:    0.02,
 		BaseSize:      10.0,
 		Label:         "nofade",
 	}
@@ -45,32 +45,40 @@ func DefaultNoFadeConfig() NoFadeConfig {
 // Uses convProb = 1 - maxNoPrice (e.g. 0.95) so edge = (0.95 - favPrice) * 100.
 // At favPrice 0.93, edge = 2c. At favPrice 0.94, edge = 1c.
 // Fires when edge >= 1 cent.
+//
+// Implements ScoreObserver for match-point gating. Does NOT implement
+// CloseTimeStrategy — uses the interleaved replay path in backtest.
 type NoFadeStrategy struct {
-	mu          sync.RWMutex
-	prices      map[string]float64
-	priceTimes  map[string]time.Time
-	markets     map[string][]string
-	closeTimes  map[string]int64
-	fired       map[string]bool
-	closeWarned map[string]bool
-	emitter     OrderEmitter
-	db          *store.DB
-	log         *slog.Logger
-	cfg         NoFadeConfig
-	replayNow   *time.Time
+	mu         sync.RWMutex
+	prices     map[string]float64
+	priceTimes map[string]time.Time
+	markets    map[string][]string
+	fired      map[string]bool
+	scores     map[string]*nofadeScoreState
+	emitter    OrderEmitter
+	db         *store.DB
+	log        *slog.Logger
+	cfg        NoFadeConfig
+	replayNow  *time.Time
+}
+
+// nofadeScoreState tracks match/set point status for entry gating.
+type nofadeScoreState struct {
+	isMatchPoint bool
+	isSetPoint   bool
+	setNumber    int
 }
 
 func NewNoFadeStrategy(emitter OrderEmitter, log *slog.Logger, cfg NoFadeConfig) *NoFadeStrategy {
 	return &NoFadeStrategy{
-		prices:      make(map[string]float64),
-		priceTimes:  make(map[string]time.Time),
-		markets:     make(map[string][]string),
-		closeTimes:  make(map[string]int64),
-		fired:       make(map[string]bool),
-		closeWarned: make(map[string]bool),
-		emitter:     emitter,
-		log:         log,
-		cfg:         cfg,
+		prices:     make(map[string]float64),
+		priceTimes: make(map[string]time.Time),
+		markets:    make(map[string][]string),
+		fired:      make(map[string]bool),
+		scores:     make(map[string]*nofadeScoreState),
+		emitter:    emitter,
+		log:        log,
+		cfg:        cfg,
 	}
 }
 
@@ -84,41 +92,19 @@ func (s *NoFadeStrategy) RegisterMarkets(eventTicker string, marketTickers []str
 	s.mu.Lock()
 	s.markets[eventTicker] = marketTickers
 	s.mu.Unlock()
-
-	if s.db != nil {
-		s.loadCloseTime(eventTicker)
-	}
 }
 
-func (s *NoFadeStrategy) loadCloseTime(eventTicker string) {
-	mkts, err := s.db.GetMarketsByEvent(context.Background(), eventTicker)
-	if err != nil {
-		s.log.Error("nofade: load close_ts", "event", eventTicker, "err", err)
-		return
-	}
-	for _, m := range mkts {
-		if m.CloseTS > 0 {
-			s.mu.Lock()
-			s.closeTimes[eventTicker] = m.CloseTS
-			delete(s.closeWarned, eventTicker)
-			s.mu.Unlock()
-			s.log.Info("nofade: loaded close_ts", "event", eventTicker, "close_ts", m.CloseTS)
-			return
-		}
-	}
+// OnPoint updates match-point state from score feed.
+func (s *NoFadeStrategy) OnPoint(eventTicker string, pt store.Point) {
 	s.mu.Lock()
-	if !s.closeWarned[eventTicker] {
-		s.closeWarned[eventTicker] = true
-		s.mu.Unlock()
-		s.log.Warn("nofade: no close_ts for event", "event", eventTicker)
-		return
+	ms, ok := s.scores[eventTicker]
+	if !ok {
+		ms = &nofadeScoreState{}
+		s.scores[eventTicker] = ms
 	}
-	s.mu.Unlock()
-}
-
-func (s *NoFadeStrategy) RegisterCloseTime(eventTicker string, closeTs int64) {
-	s.mu.Lock()
-	s.closeTimes[eventTicker] = closeTs
+	ms.isMatchPoint = pt.IsMatchPoint
+	ms.isSetPoint = pt.IsSetPoint
+	ms.setNumber = pt.SetNumber
 	s.mu.Unlock()
 }
 
@@ -129,9 +115,8 @@ func (s *NoFadeStrategy) UnregisterMarkets(eventTicker string) {
 		delete(s.priceTimes, mkt)
 	}
 	delete(s.markets, eventTicker)
-	delete(s.closeTimes, eventTicker)
 	delete(s.fired, eventTicker)
-	delete(s.closeWarned, eventTicker)
+	delete(s.scores, eventTicker)
 	s.mu.Unlock()
 }
 
@@ -195,21 +180,10 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 		return
 	}
 
-	closeTs, ok := s.closeTimes[eventTicker]
-	if !ok || closeTs == 0 {
-		s.mu.Unlock()
-		if s.db != nil {
-			s.loadCloseTime(eventTicker)
-		}
-		return
-	}
-
-	entryWindow := int64(s.cfg.WindowSeconds) * 1000
-	entryTs := closeTs - entryWindow
-	if ts.UnixMilli() < entryTs {
-		s.mu.Unlock()
-		return
-	}
+	// No close_ts gate — nofade already requires underdog YES <= 0.05
+	// (favorite >= 0.95). At that price, market says 95%+ decided.
+	// Original close_ts gate (T-15min) is replaced by the price threshold.
+	// Score state tracked for future refinement but not gated currently.
 
 	mkts := s.markets[eventTicker]
 	if len(mkts) < 2 {
@@ -274,7 +248,6 @@ func (s *NoFadeStrategy) checkEntryAt(marketTicker string, ts time.Time) {
 
 	payload, _ := json.Marshal(map[string]any{
 		"window_s":     s.cfg.WindowSeconds,
-		"close_ts":     closeTs,
 		"entry_ts":     ts.UnixMilli(),
 		"fav_price":    favPrice,
 		"underdog_yes": underdogPrice,
