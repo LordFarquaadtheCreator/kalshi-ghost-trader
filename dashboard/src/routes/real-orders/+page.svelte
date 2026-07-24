@@ -398,7 +398,18 @@
     return Math.round((1 - o.MarketPrice) * size * 100);
   }
   function kalshiMarketURL(/** @type {any} */ o) {
-    return `https://kalshi.com/markets/${o.MarketTicker}`;
+    // URL format: https://kalshi.com/markets/{series_lower}/{event_ticker_lower}
+    // Kalshi auto-redirects to the full slug URL. Series = event ticker prefix
+    // before the date segment (e.g. KXITFWMATCH-26JUL24IVAGHI -> KXITFWMATCH).
+    const eventTicker = o.MatchTicker || '';
+    const parts = eventTicker.split('-');
+    // Series = all parts before the date (DDMMMYY). Date is always 7 chars
+    // like "26JUL24". Join everything before it.
+    let series = eventTicker;
+    if (parts.length >= 2 && /^\d{1,2}[A-Z]{3}\d{2}$/.test(parts[1])) {
+      series = parts[0];
+    }
+    return `https://kalshi.com/markets/${series.toLowerCase()}/${eventTicker.toLowerCase()}`;
   }
 
   // Stale indicator
