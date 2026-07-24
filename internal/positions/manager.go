@@ -68,8 +68,15 @@ func (m *Manager) ApplyBuy(
 	if fillCount <= 0 {
 		return 0, fmt.Errorf("positions: buy fill_count must be positive, got %f", fillCount)
 	}
-	if price < 0 || price > 1 {
-		return 0, fmt.Errorf("positions: buy price out of range [0,1]: %f", price)
+	// All-in price (fill + fees) can exceed 1.0 for NO orders when fees
+	// push total cost above the $1 max payout. Clamp to 1.0 for position
+	// avg-entry math — settlement pays $1 max, so cost basis above $1 is
+	// a guaranteed loss that gets capped in the P&L anyway.
+	if price < 0 {
+		return 0, fmt.Errorf("positions: buy price negative: %f", price)
+	}
+	if price > 1 {
+		price = 1
 	}
 
 	err = m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -162,8 +169,13 @@ func (m *Manager) ApplySell(
 	if fillCount <= 0 {
 		return 0, 0, 0, fmt.Errorf("positions: sell fill_count must be positive, got %f", fillCount)
 	}
-	if price < 0 || price > 1 {
-		return 0, 0, 0, fmt.Errorf("positions: sell price out of range [0,1]: %f", price)
+	// All-in exit price (fill - fees) can exceed 1.0 or go negative in
+	// edge cases with high fees. Clamp to [0,1] for position math.
+	if price < 0 {
+		price = 0
+	}
+	if price > 1 {
+		price = 1
 	}
 
 	err = m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

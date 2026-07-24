@@ -38,25 +38,31 @@ func (c *Client) GetOrder(ctx context.Context, orderID string) (*OrderData, erro
 	return &resp.Order, nil
 }
 
-// FillPrice returns the actual per-contract fill price from a fetched OrderData.
-// Uses |taker_fill_cost_dollars| / fill_count when both are present and
-// non-zero (most accurate — reflects the actual matched price including any
-// partial fills at multiple levels). Falls back to yes_price_dollars (for YES
-// orders) or 1 - yes_price_dollars (for NO orders, derived from the YES price)
-// when taker_fill_cost is missing or zero. Returns 0 when no reliable fill
-// price can be derived (zero fill, empty fields, parse errors).
+// FillPrice returns the all-in per-contract fill price from a fetched
+// OrderData: (|taker_fill_cost_dollars| + |taker_fees_dollars|) / fill_count.
+// This is what we actually paid per contract (fill + fees). Used as the cost
+// basis for pool reconciliation and P&L.
+//
+// Falls back to yes_price_dollars (for YES orders) or 1 - yes_price_dollars
+// (for NO orders) when taker_fill_cost is missing or zero. Returns 0 when no
+// reliable fill price can be derived (zero fill, empty fields, parse errors).
 //
 // isNO selects the fallback side: true for buy_no / sell-NO orders, false for
 // buy_yes / sell-YES. The taker_fill_cost path is side-agnostic — it's the
 // absolute cost/proceeds per fill regardless of YES/NO direction.
+//
+// Note: all-in price can exceed 1.0 for NO orders when fees push the total
+// above the NO contract's $1 max payout. We don't clamp — the math needs the
+// real cost. Callers that need a [0,1] price (e.g. position avg entry) should
+// clamp separately if required.
 func (od *OrderData) FillPrice(isNO bool) float64 {
 	fc, _ := strconv.ParseFloat(od.FillCountFP, 64)
 	if fc > 0 {
-		if cost, _ := strconv.ParseFloat(od.TakerFillCostDollars, 64); cost != 0 {
-			fp := math.Abs(cost) / fc
-			if fp > 0 && fp <= 1 {
-				return fp
-			}
+		cost, _ := strconv.ParseFloat(od.TakerFillCostDollars, 64)
+		fees, _ := strconv.ParseFloat(od.TakerFeesDollars, 64)
+		total := math.Abs(cost) + math.Abs(fees)
+		if total > 0 {
+			return total / fc
 		}
 	}
 	// Fallback: derive from yes_price_dollars. NO price = 1 - yes_price.
