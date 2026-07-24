@@ -19,6 +19,27 @@
   let topupDollars = $state('');
   let poolMsg = $state(null); // { type: 'ok' | 'err', text: string }
 
+  /** @type {any} */
+  let metricsData = $state(null);
+  let metricsDay = $state(''); // empty = aggregate
+  let metricsLoading = $state(false);
+
+  /** @param {string} day */
+  async function loadMetrics(day) {
+    metricsLoading = true;
+    try {
+      metricsData = await api.getRealOrderMetrics(day);
+    } catch (e) {
+      metricsData = null;
+    } finally {
+      metricsLoading = false;
+    }
+  }
+
+  $effect(() => {
+    loadMetrics(metricsDay);
+  });
+
   /** @type {any[]} */
   let orders = $derived(ordersData?.orders ?? []);
   let pool = $derived(poolData);
@@ -47,6 +68,18 @@
   function fmtTime(ts) {
     if (!ts) return '';
     return new Date(ts).toLocaleTimeString();
+  }
+
+  /** @param {any} m */
+  function winRate(m) {
+    if (!m || !m.resolved) return '—';
+    return `${((m.wins / m.resolved) * 100).toFixed(1)}%`;
+  }
+
+  /** @param {any} m */
+  function roi(m) {
+    if (!m || !m.total_invested) return '—';
+    return `${((m.net_pnl_cents / 100 / m.total_invested) * 100).toFixed(1)}%`;
   }
 
   /** @param {string} s */
@@ -174,6 +207,88 @@
     <span class="filter-count">{filteredOrders.length} orders</span>
   </div>
 
+  {#if metricsData}
+    <CollapsibleSection title="Per-Strategy Metrics" count={metricsData.strategies?.length ?? 0} defaultOpen={true}>
+      <div class="metrics-filters">
+        <select bind:value={metricsDay}>
+          <option value="">Aggregate (all days)</option>
+          {#each (metricsData.days ?? []) as d}
+            <option value={d}>{d}</option>
+          {/each}
+        </select>
+        {#if metricsLoading}<span class="filter-count">loading…</span>{/if}
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th class="num">Orders</th>
+              <th class="num">Filled</th>
+              <th class="num">Resolved</th>
+              <th class="num">Wins</th>
+              <th class="num">Losses</th>
+              <th class="num">Pending</th>
+              <th class="num">Canceled</th>
+              <th class="num">Win Rate</th>
+              <th class="num">Invested</th>
+              <th class="num">Net P&L</th>
+              <th class="num">ROI</th>
+              <th class="num">Avg Price</th>
+              <th class="num">Avg Edge</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each (metricsData.strategies ?? []) as m (m.strategy)}
+              <tr>
+                <td>{m.strategy}</td>
+                <td class="num">{m.total_orders}</td>
+                <td class="num">{m.filled}</td>
+                <td class="num">{m.resolved}</td>
+                <td class="num">{m.wins}</td>
+                <td class="num">{m.losses}</td>
+                <td class="num">{m.pending}</td>
+                <td class="num">{m.canceled}</td>
+                <td class="num">{winRate(m)}</td>
+                <td class="num">${m.total_invested?.toFixed(2)}</td>
+                <td class="num">
+                  <span class:win={m.net_pnl_cents > 0} class:loss={m.net_pnl_cents < 0}>
+                    {fmtCents(m.net_pnl_cents)}
+                  </span>
+                </td>
+                <td class="num">{roi(m)}</td>
+                <td class="num">{m.avg_price?.toFixed(3)}</td>
+                <td class="num">{m.avg_edge?.toFixed(1)}¢</td>
+              </tr>
+            {/each}
+            {#if metricsData.total}
+              <tr class="total-row">
+                <td><strong>Total</strong></td>
+                <td class="num"><strong>{metricsData.total.total_orders}</strong></td>
+                <td class="num"><strong>{metricsData.total.filled}</strong></td>
+                <td class="num"><strong>{metricsData.total.resolved}</strong></td>
+                <td class="num"><strong>{metricsData.total.wins}</strong></td>
+                <td class="num"><strong>{metricsData.total.losses}</strong></td>
+                <td class="num"><strong>{metricsData.total.pending}</strong></td>
+                <td class="num"><strong>{metricsData.total.canceled}</strong></td>
+                <td class="num"><strong>{winRate(metricsData.total)}</strong></td>
+                <td class="num"><strong>${metricsData.total.total_invested?.toFixed(2)}</strong></td>
+                <td class="num">
+                  <strong class:win={metricsData.total.net_pnl_cents > 0} class:loss={metricsData.total.net_pnl_cents < 0}>
+                    {fmtCents(metricsData.total.net_pnl_cents)}
+                  </strong>
+                </td>
+                <td class="num"><strong>{roi(metricsData.total)}</strong></td>
+                <td class="num"><strong>{metricsData.total.avg_price?.toFixed(3)}</strong></td>
+                <td class="num"><strong>{metricsData.total.avg_edge?.toFixed(1)}¢</strong></td>
+              </tr>
+            {/if}
+          </tbody>
+        </table>
+      </div>
+    </CollapsibleSection>
+  {/if}
+
   {#if filteredOrders.length === 0}
     <EmptyState text="No real orders yet" />
   {:else}
@@ -274,4 +389,23 @@
   .pool-msg { font-size: 0.9em; }
   .pool-msg.ok { color: var(--win); }
   .pool-msg.err { color: var(--loss); }
+
+  .metrics-filters {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .metrics-filters select {
+    padding: 4px 8px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font: inherit;
+  }
+  .total-row {
+    border-top: 2px solid var(--border-strong);
+    background: var(--surface);
+  }
 </style>

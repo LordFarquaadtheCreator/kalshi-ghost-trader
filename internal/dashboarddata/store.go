@@ -890,6 +890,92 @@ LIMIT 500`
 	return orders, nil
 }
 
+// RealOrderStrategyMetrics is one row in the per-strategy real order GROUP BY.
+type RealOrderStrategyMetrics struct {
+	Strategy      string  `json:"strategy" gorm:"column:strategy"`
+	TotalOrders   int     `json:"total_orders" gorm:"column:total_orders"`
+	Filled        int     `json:"filled" gorm:"column:filled"`
+	Resolved      int     `json:"resolved" gorm:"column:resolved"`
+	Wins          int     `json:"wins" gorm:"column:wins"`
+	Losses        int     `json:"losses" gorm:"column:losses"`
+	Pending       int     `json:"pending" gorm:"column:pending"`
+	Canceled      int     `json:"canceled" gorm:"column:canceled"`
+	TotalInvested float64 `json:"total_invested" gorm:"column:total_invested"`
+	NetPNLCents   int64   `json:"net_pnl_cents" gorm:"column:net_pnl_cents"`
+	AvgPrice      float64 `json:"avg_price" gorm:"column:avg_price"`
+	AvgEdge       float64 `json:"avg_edge" gorm:"column:avg_edge"`
+}
+
+// RealOrderMetricsResponse is the full metrics response: per-strategy rows
+// plus a total row (strategy = "") and available days for the filter.
+type RealOrderMetricsResponse struct {
+	Strategies []RealOrderStrategyMetrics `json:"strategies"`
+	Total      RealOrderStrategyMetrics   `json:"total"`
+	Days       []string                   `json:"days"`
+}
+
+// GetRealOrderStrategyMetrics computes per-strategy + total aggregates for
+// real orders. day is "YYYY-MM-DD" or empty for aggregate. Invested uses
+// fill_count (actual filled size) × market_price. PnL from resolved_pnl_cents.
+func (s *LiveStore) GetRealOrderStrategyMetrics(ctx context.Context, day string) (*RealOrderMetricsResponse, error) {
+	dayFilter := ""
+	var args []any
+	if day != "" {
+		dayFilter = " AND DATE(to_timestamp(ts/1000)) = ?"
+		args = append(args, day)
+	}
+
+	baseSelect := `
+SELECT
+  COUNT(*) as total_orders,
+  SUM(CASE WHEN fill_count > 0 THEN 1 ELSE 0 END) as filled,
+  SUM(CASE WHEN result IS NOT NULL AND result <> '' THEN 1 ELSE 0 END) as resolved,
+  SUM(CASE WHEN result = 'yes' THEN 1 ELSE 0 END) as wins,
+  SUM(CASE WHEN result IS NOT NULL AND result <> '' AND result <> 'yes' THEN 1 ELSE 0 END) as losses,
+  SUM(CASE WHEN (result IS NULL OR result = '') AND order_status <> 'canceled' THEN 1 ELSE 0 END) as pending,
+  SUM(CASE WHEN order_status = 'canceled' THEN 1 ELSE 0 END) as canceled,
+  COALESCE(SUM(fill_count * market_price), 0) as total_invested,
+  COALESCE(SUM(resolved_pnl_cents), 0) as net_pnl_cents,
+  COALESCE(AVG(market_price), 0) as avg_price,
+  COALESCE(AVG(edge_cents), 0) as avg_edge`
+
+	perStrategySQL := baseSelect + `, strategy FROM orders WHERE is_real = true` + dayFilter + `
+GROUP BY strategy ORDER BY strategy`
+
+	var rows []RealOrderStrategyMetrics
+	if err := s.db.WithContext(ctx).Raw(perStrategySQL, args...).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("query real order metrics per-strategy: %w", err)
+	}
+
+	totalSQL := baseSelect + ` FROM orders WHERE is_real = true` + dayFilter
+	var total RealOrderStrategyMetrics
+	if err := s.db.WithContext(ctx).Raw(totalSQL, args...).Scan(&total).Error; err != nil {
+		return nil, fmt.Errorf("query real order metrics total: %w", err)
+	}
+	total.Strategy = ""
+
+	days, err := s.GetRealOrderDays(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("query real order days: %w", err)
+	}
+
+	return &RealOrderMetricsResponse{Strategies: rows, Total: total, Days: days}, nil
+}
+
+// GetRealOrderDays returns distinct YYYY-MM-DD dates that have real orders,
+// newest first. Used to populate the day filter dropdown.
+func (s *LiveStore) GetRealOrderDays(ctx context.Context) ([]string, error) {
+	var days []string
+	err := s.db.WithContext(ctx).Raw(`
+SELECT DISTINCT DATE(to_timestamp(ts/1000))::text as day
+FROM orders WHERE is_real = true
+ORDER BY day DESC`).Scan(&days).Error
+	if err != nil {
+		return nil, fmt.Errorf("query real order days: %w", err)
+	}
+	return days, nil
+}
+
 // metaCache holds the strategy list for the /meta endpoint with a 60s TTL.
 type metaCache struct {
 	mu         sync.Mutex

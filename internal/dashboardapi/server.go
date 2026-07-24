@@ -54,6 +54,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/pending-order-counts", corsHandler(s.pendingOrderCountsHandler))
 	mux.HandleFunc("/api/passed-matches", corsHandler(s.passedMatchesHandler))
 	mux.HandleFunc("/api/real-orders", corsHandler(s.realOrdersHandler))
+	mux.HandleFunc("/api/real-orders/metrics", corsHandler(s.realOrderMetricsHandler))
 	mux.HandleFunc("/api/liquidity-pool", corsHandler(s.liquidityPoolHandler))
 	mux.HandleFunc("/api/liquidity-pool/reset", corsHandler(s.liquidityPoolResetHandler))
 	mux.HandleFunc("/api/liquidity-pool/topup", corsHandler(s.liquidityPoolTopUpHandler))
@@ -415,6 +416,25 @@ func (s *Server) realOrdersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{"orders": orders})
+}
+
+func (s *Server) realOrderMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=10")
+
+	day := r.URL.Query().Get("day")
+	metrics, err := s.deps.LiveStore.GetRealOrderStrategyMetrics(ctx, day)
+	if err != nil {
+		s.deps.Log.Error("get real order metrics", "err", err, "day", day)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(metrics)
 }
 
 func (s *Server) liquidityPoolHandler(w http.ResponseWriter, r *http.Request) {

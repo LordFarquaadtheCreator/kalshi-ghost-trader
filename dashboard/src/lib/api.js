@@ -202,6 +202,12 @@ export const api = {
     return cachedFetch(`${GHOST_TRADER_URL}/api/real-orders`, TTL.orders);
   },
 
+  /** @param {string} [day] - YYYY-MM-DD or empty for aggregate */
+  async getRealOrderMetrics(day) {
+    const qs = day ? `?day=${encodeURIComponent(day)}` : '';
+    return rawFetch(`${GHOST_TRADER_URL}/api/real-orders/metrics${qs}`);
+  },
+
   async getLiquidityPool() {
     return cachedFetch(`${GHOST_TRADER_URL}/api/liquidity-pool`, TTL.orders);
   },
