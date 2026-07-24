@@ -325,7 +325,8 @@ func (e *KalshiOrderEmitter) emitBuy(o store.Order) bool {
 	if err != nil {
 		e.log.Error("real: failed to deduct liquidity pool",
 			"market", o.MarketTicker, "spend_cents", spendCents, "error", err)
-		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID, "pool_deduct_failed: "+err.Error()); dbErr != nil {
+		// No refund — Deduct failed, pool was never debited.
+		if dbErr := e.db.MarkRealOrderFailedNoRefund(context.Background(), o.ID, "pool_deduct_failed: "+err.Error()); dbErr != nil {
 			e.log.Error("real: failed to mark order as failed after pool deduction error", "error", dbErr)
 		}
 		return false
@@ -597,7 +598,8 @@ func (e *KalshiOrderEmitter) emitBuyNO(o store.Order) bool {
 	if err != nil {
 		e.log.Error("real: buy_no failed to deduct pool",
 			"market", o.MarketTicker, "spend_cents", spendCents, "error", err)
-		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID, "buy_no_pool_deduct_failed: "+err.Error()); dbErr != nil {
+		// No refund — Deduct failed, pool was never debited.
+		if dbErr := e.db.MarkRealOrderFailedNoRefund(context.Background(), o.ID, "buy_no_pool_deduct_failed: "+err.Error()); dbErr != nil {
 			e.log.Error("real: buy_no failed to mark order failed", "error", dbErr)
 		}
 		return false
@@ -803,7 +805,8 @@ func (e *KalshiOrderEmitter) emitSell(o store.Order) bool {
 			"market", o.MarketTicker, "strategy", o.Strategy,
 			"side", "ask", "count", countStr, "price", priceStr,
 			"error", err)
-		if dbErr := e.db.MarkRealOrderFailed(context.Background(), o.ID, "sell_submit_failed: "+err.Error()); dbErr != nil {
+		// No refund — sells never deduct from pool (they credit on fill).
+		if dbErr := e.db.MarkRealOrderFailedNoRefund(context.Background(), o.ID, "sell_submit_failed: "+err.Error()); dbErr != nil {
 			e.log.Error("real: failed to mark sell as failed", "order_id", o.ID, "error", dbErr)
 		}
 		return false
